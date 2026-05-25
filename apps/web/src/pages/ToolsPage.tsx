@@ -6,7 +6,7 @@ import { MessageSquareIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { useToolsQuery } from "@/hooks/use-app-queries";
 import { useDeleteToolMutation } from "@/hooks/use-resource-mutations";
 import { formatError } from "@/lib/client";
-import type { PageId } from "@/lib/navigation";
+import { useAppNavigation } from "@/hooks/use-app-navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
 
@@ -23,11 +23,8 @@ function isDeletableTool(tool: ToolSummary): boolean {
   return !PROTECTED_TOOL_IDS.has(tool.id);
 }
 
-interface ToolsPageProps {
-  onNavigate: (page: PageId) => void;
-}
-
-export function ToolsPage({ onNavigate }: ToolsPageProps) {
+export function ToolsPage() {
+  const { navigateToPage } = useAppNavigation();
   const queryClient = useQueryClient();
   const { data: tools = [], isLoading, error, isFetching } = useToolsQuery();
   const deleteToolMutation = useDeleteToolMutation();
@@ -80,7 +77,7 @@ export function ToolsPage({ onNavigate }: ToolsPageProps) {
         <Button
           type="button"
           className="mt-5 w-full"
-          onClick={() => onNavigate("chat")}
+          onClick={() => navigateToPage("chat")}
         >
           <MessageSquareIcon />
           Open Chat

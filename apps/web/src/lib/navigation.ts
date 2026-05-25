@@ -57,3 +57,36 @@ export const SETTINGS_NAV_ITEM: NavItem = {
   label: "Settings",
   description: "Provider API key and model",
 };
+
+export const PAGE_PATHS: Record<PageId, string> = {
+  status: "/status",
+  chat: "/chat",
+  history: "/history",
+  profiles: "/profiles",
+  tools: "/tools",
+  soul: "/soul",
+  automations: "/automations",
+  settings: "/settings",
+};
+
+export function pathForPage(pageId: PageId): string {
+  return PAGE_PATHS[pageId];
+}
+
+export function pageIdFromPath(pathname: string): PageId | null {
+  if (pathname === "/chat" || pathname.startsWith("/chat/")) {
+    return "chat";
+  }
+
+  for (const [pageId, path] of Object.entries(PAGE_PATHS) as [PageId, string][]) {
+    if (pageId === "chat") {
+      continue;
+    }
+
+    if (pathname === path) {
+      return pageId;
+    }
+  }
+
+  return null;
+}

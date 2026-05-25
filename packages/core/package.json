@@ -12,5 +12,8 @@
   "scripts": {
     "build": "bun build ./src/index.ts --outdir dist",
     "test": "bun test"
+  },
+  "dependencies": {
+    "nanoid": "^5.1.11"
   }
 }

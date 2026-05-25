@@ -5,6 +5,27 @@ export interface RequestedChatSession {
   sessionId: string;
 }
 
+export function buildChatBasePath(): string {
+  return "/chat";
+}
+
+export function buildChatPath(profileId: string, sessionId: string): string {
+  return `/chat/${encodeURIComponent(profileId)}/${encodeURIComponent(sessionId)}`;
+}
+
+export function parseChatRouteParams(params: {
+  profileId?: string;
+  sessionId?: string;
+}): RequestedChatSession | null {
+  const { profileId, sessionId } = params;
+
+  if (!profileId || !sessionId) {
+    return null;
+  }
+
+  return { profileId, sessionId };
+}
+
 export interface ChatListItem {
   id: string;
   role: "user" | "assistant" | "tool";

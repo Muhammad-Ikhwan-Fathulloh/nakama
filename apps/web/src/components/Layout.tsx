@@ -1,19 +1,17 @@
-import type { ReactNode } from "react";
+import { Outlet, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useAppContext } from "@/context/app-context";
+import { useAppNavigation } from "@/hooks/use-app-navigation";
 import { usePrefetchAppData } from "@/hooks/use-app-queries";
 import { usePrefetchTimezones } from "@/hooks/use-timezones";
-import { NAV_ITEMS, SETTINGS_NAV_ITEM, type PageId } from "@/lib/navigation";
+import { NAV_ITEMS, pageIdFromPath, SETTINGS_NAV_ITEM } from "@/lib/navigation";
 import { filterModelsByProvider, formatProviderLabel } from "@/lib/models";
 
-interface LayoutProps {
-  page: PageId;
-  onNavigate: (page: PageId) => void;
-  children: ReactNode;
-}
-
-export function Layout({ page, onNavigate, children }: LayoutProps) {
+export function Layout() {
+  const location = useLocation();
+  const { navigateToPage } = useAppNavigation();
+  const page = pageIdFromPath(location.pathname) ?? "chat";
   const { health, models, loading, error, refresh, setModel } = useAppContext();
   const prefetchTimezones = usePrefetchTimezones();
   const prefetchAppData = usePrefetchAppData();
@@ -52,7 +50,7 @@ export function Layout({ page, onNavigate, children }: LayoutProps) {
                 type="button"
                 title={item.description}
                 aria-current={active ? "page" : undefined}
-                onClick={() => onNavigate(item.id)}
+                onClick={() => navigateToPage(item.id)}
                 onMouseEnter={item.id === "automations" ? prefetchSettingsData : undefined}
                 onFocus={item.id === "automations" ? prefetchSettingsData : undefined}
                 data-active={active || undefined}
@@ -69,7 +67,7 @@ export function Layout({ page, onNavigate, children }: LayoutProps) {
             type="button"
             title={SETTINGS_NAV_ITEM.description}
             aria-current={page === "settings" ? "page" : undefined}
-            onClick={() => onNavigate("settings")}
+            onClick={() => navigateToPage("settings")}
             onMouseEnter={prefetchSettingsData}
             onFocus={prefetchSettingsData}
             data-active={page === "settings" || undefined}
@@ -118,7 +116,7 @@ export function Layout({ page, onNavigate, children }: LayoutProps) {
               ) : (
                 <button
                   type="button"
-                  onClick={() => onNavigate("settings")}
+                  onClick={() => navigateToPage("settings")}
                   className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-900 transition hover:bg-amber-100 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950/60"
                 >
                   No provider — configure
@@ -145,7 +143,7 @@ export function Layout({ page, onNavigate, children }: LayoutProps) {
               : "min-h-0 flex-1 overflow-y-auto p-6"
           }
         >
-          {children}
+          <Outlet />
         </main>
       </div>
     </div>

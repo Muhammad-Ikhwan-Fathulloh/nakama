@@ -1,6 +1,7 @@
 import type { ProfileSummary } from "@tinyclaw/core/contract";
 import type { ChatStatus } from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Conversation,
   ConversationContent,
@@ -32,26 +33,21 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAppContext } from "@/context/app-context";
+import { useAppNavigation } from "@/hooks/use-app-navigation";
 import { cn } from "@/lib/utils";
 import { ArrowUpIcon, ChevronRightIcon, EllipsisIcon } from "lucide-react";
 import { client, formatError } from "@/lib/client";
 import { filterModelsByProvider } from "@/lib/models";
 import {
+  buildChatBasePath,
+  buildChatPath,
   chatMessagesToListItems,
+  parseChatRouteParams,
   sessionStorageKey,
   type ChatListItem,
-  type RequestedChatSession,
 } from "@/lib/chat-history";
 import { Spinner } from "@/components/ui/spinner";
 import type { RemoteChatSession } from "@tinyclaw/client";
-
-import type { PageId } from "@/lib/navigation";
-
-interface ChatPageProps {
-  requestedSession?: RequestedChatSession | null;
-  onRequestedSessionHandled?: () => void;
-  onNavigate: (page: PageId) => void;
-}
 
 function formatBashToolResult(result: unknown): string | null {
   if (typeof result !== "object" || result === null) {
@@ -170,11 +166,12 @@ function deriveChatStatus(
   return "ready";
 }
 
-export function ChatPage({
-  requestedSession = null,
-  onRequestedSessionHandled,
-  onNavigate,
-}: ChatPageProps) {
+export function ChatPage() {
+  const params = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { navigateToPage } = useAppNavigation();
+  const routeSession = useMemo(() => parseChatRouteParams(params), [params]);
   const { health, models, loading, setModel } = useAppContext();
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [profileId, setProfileId] = useState("");
@@ -183,6 +180,7 @@ export function ChatPage({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const skipNextProfileSessionRef = useRef(false);
+  const loadedRouteRef = useRef<string | null>(null);
 
   const chatStatus = useMemo(
     () => deriveChatStatus(busy, error, messages),
@@ -211,7 +209,7 @@ export function ChatPage({
       const response = await client.listProfiles();
       setProfiles(response.profiles);
 
-      if (!profileId && response.profiles.length > 0) {
+      if (!profileId && !routeSession && response.profiles.length > 0) {
         const defaultProfile =
           response.profiles.find((profile) => profile.id === "profile_default") ??
           response.profiles[0]!;
@@ -220,7 +218,7 @@ export function ChatPage({
     } catch (err) {
       setError(formatError(err));
     }
-  }, [profileId]);
+  }, [profileId, routeSession]);
 
   const startSession = useCallback(async (nextProfileId: string, options?: { forceNew?: boolean }) => {
     setBusy(true);
@@ -292,23 +290,46 @@ export function ChatPage({
       return;
     }
 
+    if (routeSession) {
+      return;
+    }
+
     if (skipNextProfileSessionRef.current) {
       skipNextProfileSessionRef.current = false;
       return;
     }
 
     void startSession(profileId);
-  }, [profileId, startSession]);
+  }, [profileId, routeSession, startSession]);
 
   useEffect(() => {
-    if (!requestedSession) {
+    if (!routeSession) {
       return;
     }
 
-    void resumeSession(requestedSession.profileId, requestedSession.sessionId).finally(() => {
-      onRequestedSessionHandled?.();
-    });
-  }, [requestedSession, resumeSession, onRequestedSessionHandled]);
+    const routeKey = `${routeSession.profileId}:${routeSession.sessionId}`;
+
+    if (loadedRouteRef.current === routeKey) {
+      return;
+    }
+
+    loadedRouteRef.current = routeKey;
+    skipNextProfileSessionRef.current = true;
+    void resumeSession(routeSession.profileId, routeSession.sessionId);
+  }, [routeSession, resumeSession]);
+
+  useEffect(() => {
+    if (!session || !profileId) {
+      return;
+    }
+
+    const targetPath = buildChatPath(profileId, session.id);
+    loadedRouteRef.current = `${profileId}:${session.id}`;
+
+    if (location.pathname !== targetPath) {
+      navigate(targetPath, { replace: true });
+    }
+  }, [session, profileId, location.pathname, navigate]);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -498,7 +519,7 @@ export function ChatPage({
               <button
                 type="button"
                 className="underline underline-offset-2 hover:text-amber-100"
-                onClick={() => onNavigate("settings")}
+                onClick={() => navigateToPage("settings")}
               >
                 Configure in Settings
               </button>
@@ -537,7 +558,15 @@ export function ChatPage({
                       <DropdownMenuItem
                         key={profile.id}
                         disabled={busy || profile.id === profileId}
-                        onClick={() => setProfileId(profile.id)}
+                        onClick={() => {
+                          if (profile.id === profileId) {
+                            return;
+                          }
+
+                          loadedRouteRef.current = null;
+                          navigate(buildChatBasePath(), { replace: true });
+                          setProfileId(profile.id);
+                        }}
                       >
                         {profile.name}
                         {profile.isSuper ? " (super)" : ""}

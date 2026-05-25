@@ -37,17 +37,12 @@ import { formatError } from "@/lib/client";
 import {
   formatSessionRelativeTime,
   formatSessionTimestamp,
-  type RequestedChatSession,
 } from "@/lib/chat-history";
 import { cn } from "@/lib/utils";
-import type { PageId } from "@/lib/navigation";
+import { useAppNavigation } from "@/hooks/use-app-navigation";
 
-interface HistoryPageProps {
-  onNavigate: (page: PageId) => void;
-  onOpenSession: (session: RequestedChatSession) => void;
-}
-
-export function HistoryPage({ onNavigate, onOpenSession }: HistoryPageProps) {
+export function HistoryPage() {
+  const { navigateToPage, navigateToChat } = useAppNavigation();
   const { data: profiles = [], error: profilesError } = useProfilesQuery();
   const [profileId, setProfileId] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -121,11 +116,10 @@ export function HistoryPage({ onNavigate, onOpenSession }: HistoryPageProps) {
   }
 
   function handleOpen(session: SessionSummary) {
-    onOpenSession({
+    navigateToChat({
       profileId: session.profileId,
       sessionId: session.id,
     });
-    onNavigate("chat");
   }
 
   return (
@@ -168,7 +162,7 @@ export function HistoryPage({ onNavigate, onOpenSession }: HistoryPageProps) {
             </Select>
           </div>
 
-          <Button type="button" className="w-full" onClick={() => onNavigate("chat")}>
+          <Button type="button" className="w-full" onClick={() => navigateToPage("chat")}>
             <MessageSquareIcon aria-hidden />
             Back to Chat
           </Button>
@@ -255,7 +249,7 @@ export function HistoryPage({ onNavigate, onOpenSession }: HistoryPageProps) {
             ) : filteredSessions.length === 0 ? (
               <HistoryEmptyState
                 hasSessions={sessions.length > 0}
-                onStartChat={() => onNavigate("chat")}
+                onStartChat={() => navigateToPage("chat")}
               />
             ) : (
               <div className="divide-y divide-border">

@@ -25,7 +25,7 @@ import type {
   UserProviderConfig,
   type ProviderClient,
 } from "@tinyclaw/core";
-import { createId, inferProviderFromApiKey, loadUserTimezone, readEnvValue, saveUserConfig, saveUserTimezone } from "@tinyclaw/core";
+import { createId, createSessionId, inferProviderFromApiKey, loadUserTimezone, readEnvValue, saveUserConfig, saveUserTimezone } from "@tinyclaw/core";
 import {
   DEFAULT_PROFILE_ID,
   SUPER_BOT_PROFILE_ID,
@@ -148,7 +148,7 @@ export class AgentService {
     channel: AgentChannel,
     profileId = DEFAULT_PROFILE_ID,
   ): Promise<string> {
-    const sessionId = createId("session");
+    const sessionId = createSessionId();
 
     await this.db.upsertSession({
       id: sessionId,

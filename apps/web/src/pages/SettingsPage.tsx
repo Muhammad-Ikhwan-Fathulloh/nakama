@@ -40,7 +40,7 @@ import {
   inferProviderFromApiKey,
   type InferredProvider,
 } from "@/lib/infer-provider";
-import type { PageId } from "@/lib/navigation";
+import { useAppNavigation } from "@/hooks/use-app-navigation";
 import {
   apiKeyHint,
   apiKeyPlaceholder,
@@ -54,11 +54,8 @@ import {
 import { getBrowserTimezone } from "@/lib/timezones";
 import { cn } from "@/lib/utils";
 
-interface SettingsPageProps {
-  onNavigate: (page: PageId) => void;
-}
-
-export function SettingsPage({ onNavigate }: SettingsPageProps) {
+export function SettingsPage() {
+  const { navigateToPage } = useAppNavigation();
   const { health, models, configureProvider, setModel } = useAppContext();
   const { data: catalogResponse, isLoading: catalogLoading, error: catalogQueryError } =
     useModelsQuery();
@@ -529,7 +526,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
           <div className="min-w-0 flex-1 space-y-3">
             <p className="text-sm text-emerald-100">{successMessage}</p>
             {showGoToChat ? (
-              <Button type="button" onClick={() => onNavigate("chat")}>
+              <Button type="button" onClick={() => navigateToPage("chat")}>
                 Go to Chat
                 <ArrowRightIcon className="size-4" />
               </Button>
