@@ -10,7 +10,6 @@ import {
   useConfigureProviderMutation,
   useHealthQuery,
   useModelsQuery,
-  useRefreshAppData,
   useSetModelMutation,
 } from "@/hooks/use-app-queries";
 import { formatError } from "@/lib/client";
@@ -20,7 +19,6 @@ interface AppContextValue {
   models: ReturnType<typeof useModelsQuery>["data"] | null;
   loading: boolean;
   error: string | null;
-  refresh: () => Promise<void>;
   setModel: (modelId: string) => Promise<void>;
   configureProvider: (apiKey: string, model?: string) => Promise<ConfigureProviderResponse>;
 }
@@ -31,13 +29,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const healthQuery = useHealthQuery();
   const providerConfigured = healthQuery.data?.providerConfigured === true;
   const modelsQuery = useModelsQuery({ enabled: providerConfigured });
-  const refreshAppData = useRefreshAppData();
   const configureProviderMutation = useConfigureProviderMutation();
   const setModelMutation = useSetModelMutation();
-
-  const refresh = useCallback(async () => {
-    await refreshAppData();
-  }, [refreshAppData]);
 
   const setModel = useCallback(
     async (modelId: string) => {
@@ -74,7 +67,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       models: modelsQuery.data ?? null,
       loading,
       error,
-      refresh,
       setModel,
       configureProvider,
     }),
@@ -83,7 +75,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       modelsQuery.data,
       loading,
       error,
-      refresh,
       setModel,
       configureProvider,
     ],

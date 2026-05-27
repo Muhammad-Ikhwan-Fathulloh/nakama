@@ -117,17 +117,6 @@ export function useSetModelMutation() {
   });
 }
 
-export function useRefreshAppData() {
-  const queryClient = useQueryClient();
-
-  return useCallback(async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.health }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.models }),
-    ]);
-  }, [queryClient]);
-}
-
 export function usePrefetchAppData() {
   const queryClient = useQueryClient();
 

@@ -1,17 +1,16 @@
 import { Outlet, useLocation } from "react-router-dom";
-import { Button } from "@/components/ui/button";
+import { ConnectionBar } from "@/components/ConnectionBar";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useAppContext } from "@/context/app-context";
 import { useAppNavigation } from "@/hooks/use-app-navigation";
 import { usePrefetchAppData } from "@/hooks/use-app-queries";
 import { NAV_ITEMS, pageIdFromPath, SETTINGS_NAV_ITEM } from "@/lib/navigation";
-import { filterModelsByProvider, formatProviderLabel } from "@/lib/models";
 
 export function Layout() {
   const location = useLocation();
   const { navigateToPage } = useAppNavigation();
   const page = pageIdFromPath(location.pathname) ?? "chat";
-  const { health, models, loading, error, refresh, setModel } = useAppContext();
+  const { error } = useAppContext();
   const prefetchAppData = usePrefetchAppData();
   const activeNav =
     page === "settings"
@@ -76,51 +75,12 @@ export function Layout() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {page !== "chat" && page !== "status" ? (
           <header className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-b border-border bg-card px-6 py-4">
-            <div>
+            <div className="space-y-0.5">
               <h1 className="type-page-title">{activeNav?.label}</h1>
-              <p className="type-body">{activeNav?.description}</p>
+              <p className="type-body max-w-xl">{activeNav?.description}</p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <StatusPill
-                label={loading ? "Checking…" : health?.ok ? "Online" : "Offline"}
-                tone={health?.ok ? "ok" : "bad"}
-              />
-
-              {health?.providerConfigured ? (
-                <>
-                  <StatusPill
-                    label={formatProviderLabel(models?.provider)}
-                    tone="neutral"
-                  />
-                  <select
-                    className="h-8 min-w-48 rounded-md border border-input bg-input px-2.5 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                    value={models?.currentModel ?? ""}
-                    disabled={!models?.models.length}
-                    onChange={(event) => void setModel(event.target.value)}
-                  >
-                    {!models?.currentModel ? <option value="">No model</option> : null}
-                    {filterModelsByProvider(models?.models ?? [], models?.provider).map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.name}
-                      </option>
-                    ))}
-                  </select>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => navigateToPage("settings")}
-                  className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-900 transition hover:bg-amber-100 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950/60"
-                >
-                  No provider — configure
-                </button>
-              )}
-
-              <Button type="button" variant="outline" size="sm" onClick={() => void refresh()}>
-                Refresh
-              </Button>
-            </div>
+            <ConnectionBar />
           </header>
         ) : null}
 
@@ -144,25 +104,3 @@ export function Layout() {
   );
 }
 
-function StatusPill({
-  label,
-  tone,
-}: {
-  label: string;
-  tone: "ok" | "bad" | "warn" | "neutral";
-}) {
-  const toneClass =
-    tone === "ok"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-200"
-      : tone === "bad"
-        ? "border-red-200 bg-red-50 text-red-800 dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-200"
-        : tone === "warn"
-          ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200"
-          : "border-border bg-muted text-muted-foreground";
-
-  return (
-    <span className={`rounded-full border px-3 py-1 text-xs font-medium ${toneClass}`}>
-      {label}
-    </span>
-  );
-}
