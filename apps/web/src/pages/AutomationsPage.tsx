@@ -8,17 +8,17 @@ import {
   BotIcon,
   CalendarClockIcon,
   HandIcon,
+  MessageSquareIcon,
   PencilIcon,
   PlayIcon,
   RefreshCwIcon,
   SearchIcon,
-  Trash2Icon,
+  XIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { TimezoneSelect } from "@/components/TimezoneSelect";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -44,15 +44,19 @@ import {
   useRunAutomationMutation,
   useUpdateAutomationMutation,
 } from "@/hooks/use-automations";
+import { useAppNavigation } from "@/hooks/use-app-navigation";
 import { formatError } from "@/lib/client";
 import { formatFutureRelativeTime, formatSessionRelativeTime, formatSessionTimestamp } from "@/lib/chat-history";
 import { cn } from "@/lib/utils";
 
+const sectionClass = "rounded-md border border-border bg-card";
+
 export function AutomationsPage() {
+  const { navigateToPage } = useAppNavigation();
   const {
     data: automations = [],
     isLoading: initialLoading,
-    isFetching: refreshing,
+    isFetching: automationsRefreshing,
     error: automationsError,
     refetch: refetchAutomations,
   } = useAutomationsQuery();
@@ -72,11 +76,15 @@ export function AutomationsPage() {
   const [editDraft, setEditDraft] = useState<StoredAutomation | null>(null);
 
   const busy = updateMutation.isPending || deleteMutation.isPending;
+  const trimmedSearch = searchQuery.trim();
+  const isSearching = trimmedSearch.length > 0;
+  const loading = initialLoading && automations.length === 0;
+  const refreshing = automationsRefreshing || (runsLoading && Boolean(selectedId));
 
   const selected = automations.find((automation) => automation.id === selectedId) ?? null;
 
   const filteredAutomations = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
+    const query = trimmedSearch.toLowerCase();
     if (!query) {
       return automations;
     }
@@ -178,178 +186,331 @@ export function AutomationsPage() {
     setEditDraft({ ...editDraft, ...patch });
   }
 
+  async function refresh() {
+    setError(null);
+    await Promise.all([
+      refetchAutomations(),
+      selectedId ? refetchRuns() : Promise.resolve(),
+    ]);
+  }
+
+  const runScheduleHint = selected
+    ? selected.nextRunAt
+      ? `Next run ${formatFutureRelativeTime(selected.nextRunAt)}`
+      : selected.lastRunAt
+        ? `Last run ${formatSessionRelativeTime(selected.lastRunAt)}`
+        : "Not run yet"
+    : "";
+
+  const selectedSubtitle = selected
+    ? [formatTrigger(selected.trigger), selected.enabled ? "enabled" : "disabled", runScheduleHint]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+
   return (
-    <div>
-      {error ? (
-        <p className="mb-6 text-sm text-destructive" role="alert">
-          {error}
-        </p>
-      ) : null}
+    <>
+      <div className="space-y-4">
+        {error ? (
+          <p
+            className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+            role="alert"
+          >
+            {error}
+          </p>
+        ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <Card className="h-fit">
-          <CardHeader className="gap-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-start gap-3">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40">
-                  <BotIcon className="size-5 text-foreground" aria-hidden />
-                </div>
-                <div>
-                  <CardTitle>Saved</CardTitle>
-                  <CardDescription className="mt-1">
-                    {automations.length} automation{automations.length === 1 ? "" : "s"}
-                  </CardDescription>
-                </div>
-              </div>
-
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                disabled={refreshing || busy}
-                aria-label="Refresh automations"
-                onClick={() => void refetchAutomations()}
+        <section className={cn(sectionClass, "overflow-hidden")}>
+          <div className="flex flex-col gap-3 border-b border-border p-4 lg:hidden">
+            <div className="flex flex-wrap items-center gap-3">
+              <Select
+                value={selectedId ?? undefined}
+                disabled={busy || refreshing || automations.length === 0}
+                onValueChange={(value) => {
+                  if (value) {
+                    setSelectedId(String(value));
+                  }
+                }}
               >
-                {refreshing ? <Spinner className="size-4" /> : <RefreshCwIcon className="size-4" />}
-              </Button>
+                <SelectTrigger className="min-w-0 flex-1" aria-label="Selected automation">
+                  <SelectValue placeholder="Select automation" />
+                </SelectTrigger>
+                <SelectContent>
+                  {filteredAutomations.map((automation) => (
+                    <SelectItem key={automation.id} value={automation.id}>
+                      {automation.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={busy || refreshing}
+                  aria-label="Refresh automations"
+                  onClick={() => void refresh()}
+                >
+                  {refreshing ? (
+                    <Spinner className="size-4" />
+                  ) : (
+                    <RefreshCwIcon className="size-4" aria-hidden />
+                  )}
+                </Button>
+                <Button type="button" size="sm" onClick={() => navigateToPage("chat")}>
+                  <MessageSquareIcon className="size-4" aria-hidden />
+                  Chat
+                </Button>
+              </div>
             </div>
 
-            <div className="relative">
-              <SearchIcon
-                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden
-              />
-              <Input
+            {automations.length > 0 ? (
+              <AutomationSearch
                 value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search automations…"
-                disabled={initialLoading || automations.length === 0}
-                className="pl-9"
-                aria-label="Search automations"
+                disabled={initialLoading || busy}
+                isSearching={isSearching}
+                onChange={setSearchQuery}
+                onClear={() => setSearchQuery("")}
               />
-            </div>
-          </CardHeader>
+            ) : null}
+          </div>
 
-          <CardContent className="p-0">
-            {initialLoading ? (
-              <AutomationListSkeleton />
-            ) : automations.length === 0 ? (
-              <AutomationsEmptyState />
-            ) : filteredAutomations.length === 0 ? (
-              <div className="px-4 py-10 text-center">
-                <SearchIcon className="mx-auto size-5 text-muted-foreground" aria-hidden />
-                <p className="mt-3 text-sm font-medium text-foreground">No matching automations</p>
-                <p className="mt-1 text-sm text-muted-foreground">Try a different search term.</p>
-              </div>
-            ) : (
-              <ul className="divide-y divide-border px-2 pb-2">
-                {filteredAutomations.map((automation) => (
-                  <li key={automation.id}>
-                    <AutomationListItem
-                      automation={automation}
-                      selected={selectedId === automation.id}
-                      onSelect={() => setSelectedId(automation.id)}
-                    />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+          <div className="grid gap-0 lg:grid-cols-[240px_minmax(0,1fr)]">
+            <aside className="hidden min-w-0 border-b border-border lg:block lg:border-r lg:border-b-0">
+              <div className="space-y-4 border-b border-border p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40">
+                      <BotIcon className="size-5 text-foreground" aria-hidden />
+                    </div>
+                    <div>
+                      <h2 className="text-sm font-semibold tracking-tight text-foreground">Saved</h2>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {automations.length} automation{automations.length === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                  </div>
 
-        <main>
-          {selected ? (
-            <div className="rounded-lg border border-border">
-              <div className="flex flex-wrap items-start justify-between gap-4 px-6 py-5">
-                <div className="min-w-0 space-y-1">
-                  <h2 className="text-base font-medium text-foreground">{selected.name}</h2>
-                  <p className="text-sm text-muted-foreground">{selected.description}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {selected.nextRunAt
-                      ? `Next run ${formatFutureRelativeTime(selected.nextRunAt)}`
-                      : selected.lastRunAt
-                        ? `Last run ${formatSessionRelativeTime(selected.lastRunAt)}`
-                        : "Not run yet"}
-                  </p>
-                </div>
-
-                <div className="flex shrink-0 items-center gap-1">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon-sm"
-                    disabled={busy || runningId !== null}
-                    aria-label="Run now"
-                    onClick={() => void handleRun(selected.id)}
-                  >
-                    {runningId === selected.id ? (
-                      <Spinner className="size-4" />
-                    ) : (
-                      <PlayIcon className="size-4" />
-                    )}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon-sm"
-                    disabled={busy}
-                    aria-label="Edit automation"
-                    onClick={() => openEdit(selected)}
-                  >
-                    <PencilIcon className="size-4" />
-                  </Button>
                   <Button
                     type="button"
                     variant="ghost"
                     size="icon-sm"
-                    disabled={busy}
-                    aria-label="Delete automation"
-                    className="text-muted-foreground hover:text-destructive"
-                    onClick={() => setDeleteTarget(selected)}
+                    disabled={busy || automationsRefreshing}
+                    aria-label="Refresh automations"
+                    onClick={() => void refresh()}
                   >
-                    <Trash2Icon className="size-4" />
-                  </Button>
-                </div>
-              </div>
-
-              <section className="border-t border-border px-6 py-6">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-medium text-foreground">Run history</h3>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    disabled={runsLoading || busy}
-                    aria-label="Refresh run history"
-                    onClick={() => void refetchRuns()}
-                  >
-                    {runsLoading ? (
+                    {automationsRefreshing ? (
                       <Spinner className="size-4" />
                     ) : (
-                      <RefreshCwIcon className="size-4" />
+                      <RefreshCwIcon className="size-4" aria-hidden />
                     )}
                   </Button>
                 </div>
 
-                {runsLoading ? (
-                  <ListSkeleton rows={2} />
-                ) : runs.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No runs yet.</p>
+                <AutomationSearch
+                  value={searchQuery}
+                  disabled={initialLoading || automations.length === 0 || busy}
+                  isSearching={isSearching}
+                  onChange={setSearchQuery}
+                  onClear={() => setSearchQuery("")}
+                />
+              </div>
+
+              <div className="p-2">
+                {initialLoading ? (
+                  <AutomationListSkeleton />
+                ) : automations.length === 0 ? (
+                  <AutomationsEmptyState />
+                ) : filteredAutomations.length === 0 ? (
+                  <div className="px-2 py-10 text-center">
+                    <SearchIcon className="mx-auto size-5 text-muted-foreground" aria-hidden />
+                    <p className="mt-3 text-sm font-medium text-foreground">No matching automations</p>
+                    <p className="mt-1 text-sm text-muted-foreground">Try a different search term.</p>
+                  </div>
                 ) : (
                   <ul className="divide-y divide-border">
-                    {runs.map((run) => (
-                      <RunHistoryItem key={run.id} run={run} />
+                    {filteredAutomations.map((automation) => (
+                      <li key={automation.id}>
+                        <AutomationListItem
+                          automation={automation}
+                          selected={selectedId === automation.id}
+                          onSelect={() => setSelectedId(automation.id)}
+                        />
+                      </li>
                     ))}
                   </ul>
                 )}
-              </section>
+              </div>
+            </aside>
+
+            <div className="min-w-0 p-4 sm:p-5">
+              {loading ? (
+                <div className="flex min-h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
+                  <Spinner className="size-4" />
+                  Loading automations…
+                </div>
+              ) : automations.length === 0 ? (
+                <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-center">
+                  <AutomationsEmptyState />
+                  <Button type="button" size="sm" onClick={() => navigateToPage("chat")}>
+                    Open Chat
+                  </Button>
+                </div>
+              ) : !selected ? (
+                <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground">
+                  Select an automation to view runs.
+                </div>
+              ) : (
+                <>
+                  <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="type-section-title">{selected.name}</h2>
+                        {selected.enabled ? (
+                          <span className="scope-badge scope-badge-active">enabled</span>
+                        ) : (
+                          <span className="scope-badge bg-muted text-muted-foreground">disabled</span>
+                        )}
+                      </div>
+                      {selected.description ? (
+                        <p className="type-body mt-1 text-sm">{selected.description}</p>
+                      ) : null}
+                      <p className="type-body mt-1 text-xs">{selectedSubtitle}</p>
+                    </div>
+
+                    <div className="hidden shrink-0 flex-wrap items-center gap-2 lg:flex">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy || refreshing}
+                        onClick={() => void refresh()}
+                      >
+                        {refreshing ? (
+                          <Spinner className="size-4" />
+                        ) : (
+                          <RefreshCwIcon className="size-4" aria-hidden />
+                        )}
+                        Refresh
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy || runningId !== null}
+                        onClick={() => void handleRun(selected.id)}
+                      >
+                        {runningId === selected.id ? (
+                          <Spinner className="size-4" />
+                        ) : (
+                          <>
+                            <PlayIcon className="size-4" aria-hidden />
+                            Run now
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => openEdit(selected)}
+                      >
+                        <PencilIcon className="size-4" aria-hidden />
+                        Edit
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => setDeleteTarget(selected)}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="mb-5 flex flex-wrap gap-2 lg:hidden">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy || runningId !== null}
+                      onClick={() => void handleRun(selected.id)}
+                    >
+                      {runningId === selected.id ? (
+                        <Spinner className="size-4" />
+                      ) : (
+                        <>
+                          <PlayIcon className="size-4" aria-hidden />
+                          Run now
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => openEdit(selected)}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => setDeleteTarget(selected)}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+
+                  <div className="border-t border-border pt-5">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="type-section-title">Run history</h3>
+                        <p className="type-body mt-1 text-xs">
+                          {runsLoading
+                            ? "Loading runs…"
+                            : runs.length === 0
+                              ? "No runs yet"
+                              : `${runs.length} run${runs.length === 1 ? "" : "s"}`}
+                        </p>
+                      </div>
+                    </div>
+
+                    {runsLoading ? (
+                      <ListSkeleton rows={2} />
+                    ) : runs.length === 0 ? (
+                      <p className="type-body text-xs">No runs yet.</p>
+                    ) : (
+                      <ul className="divide-y divide-border rounded-md border border-border">
+                        {runs.map((run) => (
+                          <RunHistoryItem key={run.id} run={run} />
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
+                  <div className="type-body mt-5 rounded-md border border-border bg-muted/40 p-3 text-xs lg:hidden dark:bg-muted/30">
+                    <p className="font-medium text-foreground">How it works</p>
+                    <p className="mt-2">
+                      Run now triggers a manual execution. Scheduled automations run automatically
+                      when enabled.
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
-          ) : (
-            <p className="py-16 text-center text-sm text-muted-foreground">
-              Select an automation to view runs.
-            </p>
-          )}
-        </main>
+          </div>
+        </section>
       </div>
 
       <Dialog
@@ -431,7 +592,7 @@ export function AutomationsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }
 
@@ -474,6 +635,87 @@ function AutomationListItem({
         </div>
       </div>
     </button>
+  );
+}
+
+function StatusBadge({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "ok" | "neutral";
+}) {
+  const toneClass =
+    tone === "ok"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-200"
+      : "border-border bg-muted text-muted-foreground";
+
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium",
+        toneClass,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function AutomationListSkeleton() {
+  return (
+    <div className="space-y-2 px-2 pb-2" aria-busy="true" aria-label="Loading automations">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <div key={index} className="flex items-start gap-3 rounded-md px-3 py-3">
+          <div className="size-8 animate-pulse rounded-md bg-muted/50" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="h-4 w-2/3 animate-pulse rounded bg-muted/50" />
+            <div className="h-3 w-1/2 animate-pulse rounded bg-muted/40" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AutomationSearch({
+  value,
+  disabled,
+  isSearching,
+  onChange,
+  onClear,
+}: {
+  value: string;
+  disabled: boolean;
+  isSearching: boolean;
+  onChange: (value: string) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="relative">
+      <SearchIcon
+        className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+        aria-hidden
+      />
+      <Input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Search…"
+        disabled={disabled}
+        className={cn("pl-9", isSearching && "pr-9")}
+        aria-label="Search automations"
+      />
+      {isSearching ? (
+        <button
+          type="button"
+          aria-label="Clear search"
+          className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          onClick={onClear}
+        >
+          <XIcon className="size-4" />
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -620,33 +862,9 @@ function AutomationEditorForm({
   );
 }
 
-function StatusBadge({
-  label,
-  tone,
-}: {
-  label: string;
-  tone: "ok" | "neutral";
-}) {
-  const toneClass =
-    tone === "ok"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-200"
-      : "border-border bg-muted text-muted-foreground";
-
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium",
-        toneClass,
-      )}
-    >
-      {label}
-    </span>
-  );
-}
-
 function AutomationsEmptyState() {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-12 text-center">
+    <div className="flex flex-col items-center justify-center gap-3 px-4 py-12 text-center">
       <div className="flex size-12 items-center justify-center rounded-full border border-border bg-muted/40">
         <BotIcon className="size-5 text-muted-foreground" aria-hidden />
       </div>
@@ -660,25 +878,9 @@ function AutomationsEmptyState() {
   );
 }
 
-function AutomationListSkeleton() {
-  return (
-    <div className="space-y-2 px-2 pb-2" aria-busy="true" aria-label="Loading automations">
-      {Array.from({ length: 4 }).map((_, index) => (
-        <div key={index} className="flex items-start gap-3 rounded-md px-3 py-3">
-          <div className="size-8 animate-pulse rounded-md bg-muted/50" />
-          <div className="min-w-0 flex-1 space-y-2">
-            <div className="h-4 w-2/3 animate-pulse rounded bg-muted/50" />
-            <div className="h-3 w-1/2 animate-pulse rounded bg-muted/40" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function RunHistoryItem({ run }: { run: AutomationRunRecord }) {
   return (
-    <li className="py-4 first:pt-0 last:pb-0">
+    <li className="px-4 py-4 first:rounded-t-md last:rounded-b-md">
       <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
         <span className={runStatusClass(run.status)}>{run.status}</span>
         <span className="text-xs text-muted-foreground" title={formatSessionTimestamp(run.startedAt)}>
@@ -757,3 +959,4 @@ function formatTrigger(trigger: AutomationTrigger): string {
 
   return `Schedule · ${trigger.cron}${trigger.timezone ? ` (${trigger.timezone})` : ""}`;
 }
+

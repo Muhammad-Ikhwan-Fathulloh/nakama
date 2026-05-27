@@ -10,6 +10,17 @@ export function buildChatBasePath(): string {
   return "/chat";
 }
 
+/** Profile id from `?new=1&profile=…` when opening a new chat (e.g. Super Bot from Tools). */
+export function readRequestedProfileFromNewChatSearch(search: string): string | null {
+  const params = new URLSearchParams(search);
+  if (params.get("new") !== "1") {
+    return null;
+  }
+
+  const profileId = params.get("profile")?.trim();
+  return profileId || null;
+}
+
 export function chatProfileIdFromPath(pathname: string): string | null {
   const match = pathname.match(/^\/chat\/([^/]+)\//);
   return match?.[1] ? decodeURIComponent(match[1]) : null;

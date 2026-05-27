@@ -96,6 +96,7 @@ export function ProfilesPage() {
 
   const trimmedSearch = searchQuery.trim();
   const isSearching = trimmedSearch.length > 0;
+  const refreshing = profilesRefreshing || (detailLoading && Boolean(selectedId));
 
   const isDirty = useMemo(() => {
     if (!detail) {
@@ -104,6 +105,11 @@ export function ProfilesPage() {
 
     return editName.trim() !== detail.name || editPrompt !== detail.systemPrompt;
   }, [detail, editName, editPrompt]);
+
+  const selectedProfile = useMemo(
+    () => profiles.find((profile) => profile.id === selectedId),
+    [profiles, selectedId],
+  );
 
   const setSelectedId = useCallback(
     (nextProfileId: string | null) => {
@@ -419,126 +425,286 @@ export function ProfilesPage() {
     }
   }
 
+  async function refresh() {
+    setError(null);
+    await Promise.all([
+      refetchProfiles(),
+      selectedId ? refetchDetail() : Promise.resolve(),
+    ]);
+  }
+
+  const profileSubtitle = detail
+    ? [
+        detail.id,
+        detail.isSuper ? "super" : null,
+        `${detail.tools.length} tools`,
+        detail.soulActive ? "soul active" : "soul inactive",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : selectedProfile
+      ? [
+          selectedProfile.id,
+          `${selectedProfile.toolCount} tools`,
+          selectedProfile.soulActive ? "soul active" : "soul inactive",
+        ].join(" · ")
+      : "";
+
+  if (profilesLoading && profiles.length === 0) {
+    return <PageState message="Loading profiles…" />;
+  }
+
   return (
     <>
-      <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <section className={cn(sectionClass, "overflow-hidden")}>
-          <div className="flex items-center justify-between gap-2 border-b border-border p-4">
-            <p className="text-sm font-medium text-foreground">Profiles</p>
-            <div className="flex items-center gap-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                disabled={profilesLoading || profilesRefreshing || busy}
-                aria-label="Refresh"
-                onClick={() => void refetchProfiles()}
-              >
-                {profilesRefreshing ? (
-                  <Spinner className="size-4" />
-                ) : (
-                  <RefreshCwIcon className="size-4" />
-                )}
-              </Button>
-              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setCreateOpen(true)}>
-                <PlusIcon aria-hidden />
-                New
-              </Button>
-            </div>
-          </div>
-
-          <div className="border-b border-border p-3">
-            <div className="relative">
-              <SearchIcon
-                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden
-              />
-              <Input
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search…"
-                disabled={profilesLoading || profiles.length === 0}
-                className={cn("pl-9", isSearching && "pr-9")}
-                aria-label="Search profiles"
-              />
-              {isSearching ? (
+      <div className="space-y-4">
+        {error ? (
+          <p className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {error}
+            {selectedId ? (
+              <>
+                {" "}
                 <button
                   type="button"
-                  aria-label="Clear search"
-                  className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  onClick={() => setSearchQuery("")}
+                  className="underline underline-offset-2"
+                  onClick={() => void refetchDetail()}
                 >
-                  <XIcon className="size-4" />
+                  Retry
                 </button>
-              ) : null}
+              </>
+            ) : null}
+          </p>
+        ) : null}
+
+        <section className={cn(sectionClass, "overflow-hidden")}>
+          <div className="flex flex-col gap-3 border-b border-border p-4 lg:hidden">
+            <div className="flex flex-wrap items-center gap-3">
+              <Select
+                value={selectedId ?? undefined}
+                disabled={busy || refreshing || profiles.length === 0}
+                onValueChange={(value) => {
+                  if (value) {
+                    handleSelectProfile(String(value));
+                  }
+                }}
+              >
+                <SelectTrigger className="min-w-0 flex-1" aria-label="Selected profile">
+                  <SelectValue placeholder="Select profile" />
+                </SelectTrigger>
+                <SelectContent>
+                  {filteredProfiles.map((profile) => (
+                    <SelectItem key={profile.id} value={profile.id}>
+                      <span className="flex items-center gap-2">
+                        <ProfileAvatar profile={profile} size="sm" />
+                        <span>{profile.name}</span>
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={busy || refreshing}
+                  aria-label="Refresh profiles"
+                  onClick={() => void refresh()}
+                >
+                  {refreshing ? (
+                    <Spinner className="size-4" />
+                  ) : (
+                    <RefreshCwIcon className="size-4" aria-hidden />
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => setCreateOpen(true)}
+                >
+                  <PlusIcon className="size-4" aria-hidden />
+                  New
+                </Button>
+              </div>
             </div>
+
+            {profiles.length > 0 ? (
+              <ProfileSearch
+                value={searchQuery}
+                disabled={profilesLoading || busy}
+                isSearching={isSearching}
+                onChange={setSearchQuery}
+                onClear={() => setSearchQuery("")}
+              />
+            ) : null}
           </div>
 
-          {profilesLoading ? (
-            <ListSkeleton rows={4} rounded={false} />
-          ) : profiles.length === 0 ? (
-            <EmptyMessage message="No profiles yet." actionLabel="Create one" onAction={() => setCreateOpen(true)} />
-          ) : filteredProfiles.length === 0 ? (
-            <EmptyMessage
-              message="No profiles match your search."
-              actionLabel="Clear search"
-              onAction={() => setSearchQuery("")}
-            />
-          ) : (
-            <ul className="divide-y divide-border">
-              {filteredProfiles.map((profile) => (
-                <li key={profile.id}>
-                  <ProfileListItem
-                    profile={profile}
-                    selected={selectedId === profile.id}
-                    disabled={busy}
-                    onSelect={() => handleSelectProfile(profile.id)}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <div className="space-y-4">
-          {error ? (
-            <p className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-              {error}
-              {selectedId ? (
-                <>
-                  {" "}
-                  <button
+          <div className="grid gap-0 lg:grid-cols-[240px_minmax(0,1fr)]">
+            <aside className="hidden border-b border-border p-4 lg:block lg:border-r lg:border-b-0">
+              <div className="mb-4 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h2 className="type-section-title">Profiles</h2>
+                  <p className="type-body mt-1 text-xs">
+                    Each profile has its own prompt, tools, and optional soul override.
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
                     type="button"
-                    className="underline underline-offset-2"
-                    onClick={() => void refetchDetail()}
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={busy || refreshing}
+                    aria-label="Refresh profiles"
+                    onClick={() => void refresh()}
                   >
-                    Retry
-                  </button>
-                </>
-              ) : null}
-            </p>
-          ) : null}
+                    {profilesRefreshing ? (
+                      <Spinner className="size-4" />
+                    ) : (
+                      <RefreshCwIcon className="size-4" aria-hidden />
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => setCreateOpen(true)}
+                  >
+                    <PlusIcon className="size-4" aria-hidden />
+                    New
+                  </Button>
+                </div>
+              </div>
 
-          {detailLoading && !detail ? (
-            <ListSkeleton rows={6} />
-          ) : detail ? (
-            <>
-              <section className={cn(sectionClass, "p-5")}>
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="flex min-w-0 items-start gap-3">
-                    <ProfileAvatar profile={detail} size="lg" />
-                    <div className="min-w-0">
-                      <h2 className="text-base font-medium text-foreground">{detail.name}</h2>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {detail.id}
-                        {detail.isSuper ? " · super" : ""}
-                        {" · "}
-                        soul {detail.soulActive ? "active" : "inactive"}
-                      </p>
+              {profiles.length > 0 ? (
+                <div className="mb-4">
+                  <ProfileSearch
+                    value={searchQuery}
+                    disabled={profilesLoading || busy}
+                    isSearching={isSearching}
+                    onChange={setSearchQuery}
+                    onClear={() => setSearchQuery("")}
+                  />
+                </div>
+              ) : null}
+
+              {profiles.length === 0 ? (
+                <EmptyMessage
+                  message="No profiles yet."
+                  actionLabel="Create one"
+                  onAction={() => setCreateOpen(true)}
+                />
+              ) : filteredProfiles.length === 0 ? (
+                <EmptyMessage
+                  message="No profiles match your search."
+                  actionLabel="Clear search"
+                  onAction={() => setSearchQuery("")}
+                />
+              ) : (
+                <div className="max-h-[min(40vh,320px)] space-y-2 overflow-y-auto pr-1 lg:max-h-none">
+                  {filteredProfiles.map((profile) => (
+                    <ProfileScopeButton
+                      key={profile.id}
+                      profile={profile}
+                      active={selectedId === profile.id}
+                      disabled={busy}
+                      onClick={() => handleSelectProfile(profile.id)}
+                    />
+                  ))}
+                </div>
+              )}
+
+              <div className="type-body mt-5 rounded-md border border-border bg-muted/40 p-3 text-xs dark:bg-muted/30">
+                <p className="font-medium text-foreground">How it works</p>
+                <p className="mt-2">
+                  Profiles isolate prompts and tool access. Edit settings here, then open Soul to
+                  customize voice and identity per profile.
+                </p>
+              </div>
+            </aside>
+
+            <div className="min-w-0 p-4 sm:p-5">
+              {profiles.length === 0 ? (
+                <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
+                  <p>No profiles yet.</p>
+                  <Button type="button" size="sm" disabled={busy} onClick={() => setCreateOpen(true)}>
+                    Create profile
+                  </Button>
+                </div>
+              ) : detailLoading && !detail ? (
+                <PageState message="Loading profile…" embedded />
+              ) : !selectedId || !detail ? (
+                <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground">
+                  Select a profile to edit.
+                </div>
+              ) : (
+                <>
+                  <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <ProfileAvatar profile={detail} size="lg" />
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h2 className="type-section-title">{detail.name}</h2>
+                          {detail.soulActive ? (
+                            <span className="scope-badge scope-badge-active">soul active</span>
+                          ) : null}
+                          {detail.isSuper ? (
+                            <span className="scope-badge bg-muted text-muted-foreground">super</span>
+                          ) : null}
+                        </div>
+                        <p className="type-body mt-1 text-xs">{profileSubtitle}</p>
+                        {isDirty ? (
+                          <p className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
+                            Unsaved changes
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="hidden shrink-0 flex-wrap items-center gap-2 lg:flex">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy || refreshing}
+                        onClick={() => void refresh()}
+                      >
+                        {refreshing ? (
+                          <Spinner className="size-4" />
+                        ) : (
+                          <RefreshCwIcon className="size-4" aria-hidden />
+                        )}
+                        Refresh
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy || initSoulMutation.isPending}
+                        onClick={() => void handleInitSoul()}
+                      >
+                        {initSoulMutation.isPending ? (
+                          <Spinner className="size-4" />
+                        ) : (
+                          "Init soul"
+                        )}
+                      </Button>
+                      {!detail.isSuper ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={busy}
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => setDeleteOpen(true)}
+                        >
+                          Delete
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
+                  <div className="mb-4 flex flex-wrap gap-2 lg:hidden">
                     <Button
                       type="button"
                       variant="outline"
@@ -561,148 +727,171 @@ export function ProfilesPage() {
                       </Button>
                     ) : null}
                   </div>
-                </div>
 
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <input
-                    ref={avatarInputRef}
-                    type="file"
-                    accept="image/jpeg,image/png,image/gif,image/webp"
-                    className="hidden"
-                    disabled={busy}
-                    onChange={(event) => void handleAvatarSelected(event)}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={busy || uploadAvatarMutation.isPending}
-                    onClick={() => avatarInputRef.current?.click()}
-                  >
-                    {uploadAvatarMutation.isPending ? <Spinner className="size-4" /> : "Upload avatar"}
-                  </Button>
-                  {detail.hasAvatar ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={busy || deleteAvatarMutation.isPending}
-                      onClick={() => void handleRemoveAvatar()}
-                    >
-                      {deleteAvatarMutation.isPending ? <Spinner className="size-4" /> : "Remove avatar"}
-                    </Button>
-                  ) : null}
-                </div>
-
-                <div className="mt-5 grid gap-4 md:grid-cols-2">
-                  <Field label="Name" htmlFor="profile-name">
-                    <Input
-                      id="profile-name"
-                      value={editName}
-                      disabled={busy}
-                      onChange={(event) => setEditName(event.target.value)}
-                    />
-                  </Field>
-                  <Field label="Model" htmlFor="profile-model">
-                    <Input
-                      id="profile-model"
-                      value={detail.model ?? "inherit global"}
-                      disabled
-                      readOnly
-                    />
-                  </Field>
-                </div>
-
-                <div className="mt-4">
-                  <Field label="System prompt" htmlFor="profile-prompt">
-                    <Textarea
-                      id="profile-prompt"
-                      className="min-h-36 font-mono text-xs leading-relaxed"
-                      value={editPrompt}
-                      disabled={busy}
-                      onChange={(event) => setEditPrompt(event.target.value)}
-                    />
-                  </Field>
-                </div>
-
-                <div className="mt-4 flex justify-end">
-                  <Button
-                    type="button"
-                    disabled={busy || !isDirty || !editName.trim()}
-                    onClick={() => void handleSave()}
-                  >
-                    {updateMutation.isPending ? <Spinner className="size-4" /> : "Save"}
-                  </Button>
-                </div>
-              </section>
-
-              <section className={cn(sectionClass, "p-5")}>
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                  <h3 className="text-sm font-medium text-foreground">Allowed tools</h3>
-                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-                    <Select
-                      value={assignToolId}
-                      disabled={busy || availableTools.length === 0}
-                      onValueChange={(value) => setAssignToolId(value != null ? String(value) : "")}
-                    >
-                      <SelectTrigger className="w-full sm:w-44" aria-label="Tool to assign">
-                        <SelectValue placeholder="Assign tool…" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableTools.map((tool) => (
-                          <SelectItem key={tool.id} value={tool.id}>
-                            {tool.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={busy || !assignToolId}
-                      onClick={() => void handleAssignTool()}
-                    >
-                      Assign
-                    </Button>
-                  </div>
-                </div>
-
-                {detail.tools.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No tools assigned.</p>
-                ) : (
-                  <ul className="divide-y divide-border rounded-md border border-border">
-                    {detail.tools.map((tool) => (
-                      <li
-                        key={tool.id}
-                        className="flex items-start justify-between gap-3 px-4 py-3 first:rounded-t-md last:rounded-b-md"
+                  <div className="space-y-5">
+                    <div className="flex flex-wrap gap-2">
+                      <input
+                        ref={avatarInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png,image/gif,image/webp"
+                        className="hidden"
+                        disabled={busy}
+                        onChange={(event) => void handleAvatarSelected(event)}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy || uploadAvatarMutation.isPending}
+                        onClick={() => avatarInputRef.current?.click()}
                       >
-                        <div className="min-w-0">
-                          <p className="text-sm text-foreground">{tool.name}</p>
-                          <p className="mt-0.5 text-xs text-muted-foreground">{tool.description}</p>
-                        </div>
+                        {uploadAvatarMutation.isPending ? (
+                          <Spinner className="size-4" />
+                        ) : (
+                          "Upload avatar"
+                        )}
+                      </Button>
+                      {detail.hasAvatar ? (
                         <Button
                           type="button"
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
-                          className="shrink-0 text-muted-foreground"
-                          disabled={busy}
-                          onClick={() => void handleUnassignTool(tool.id)}
+                          disabled={busy || deleteAvatarMutation.isPending}
+                          onClick={() => void handleRemoveAvatar()}
                         >
-                          Remove
+                          {deleteAvatarMutation.isPending ? (
+                            <Spinner className="size-4" />
+                          ) : (
+                            "Remove avatar"
+                          )}
                         </Button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-            </>
-          ) : (
-            <section className={cn(sectionClass, "p-8 text-center text-sm text-muted-foreground")}>
-              Select a profile to edit.
-            </section>
-          )}
-        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Field label="Name" htmlFor="profile-name">
+                        <Input
+                          id="profile-name"
+                          value={editName}
+                          disabled={busy}
+                          onChange={(event) => setEditName(event.target.value)}
+                        />
+                      </Field>
+                      <Field label="Model" htmlFor="profile-model">
+                        <Input
+                          id="profile-model"
+                          value={detail.model ?? "inherit global"}
+                          disabled
+                          readOnly
+                        />
+                      </Field>
+                    </div>
+
+                    <Field label="System prompt" htmlFor="profile-prompt">
+                      <Textarea
+                        id="profile-prompt"
+                        className="min-h-36 font-mono text-xs leading-relaxed"
+                        value={editPrompt}
+                        disabled={busy}
+                        onChange={(event) => setEditPrompt(event.target.value)}
+                      />
+                    </Field>
+
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        disabled={busy || !isDirty || !editName.trim()}
+                        onClick={() => void handleSave()}
+                      >
+                        {updateMutation.isPending ? <Spinner className="size-4" /> : "Save changes"}
+                      </Button>
+                    </div>
+
+                    <div className="border-t border-border pt-5">
+                      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <h3 className="type-section-title">Allowed tools</h3>
+                          <p className="type-body mt-1 text-xs">
+                            {detail.tools.length === 0
+                              ? "No tools assigned to this profile."
+                              : `${detail.tools.length} assigned`}
+                          </p>
+                        </div>
+                        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                          <Select
+                            value={assignToolId}
+                            disabled={busy || availableTools.length === 0}
+                            onValueChange={(value) =>
+                              setAssignToolId(value != null ? String(value) : "")
+                            }
+                          >
+                            <SelectTrigger className="w-full sm:w-44" aria-label="Tool to assign">
+                              <SelectValue placeholder="Assign tool…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {availableTools.map((tool) => (
+                                <SelectItem key={tool.id} value={tool.id}>
+                                  {tool.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={busy || !assignToolId}
+                            onClick={() => void handleAssignTool()}
+                          >
+                            Assign
+                          </Button>
+                        </div>
+                      </div>
+
+                      {detail.tools.length === 0 ? (
+                        <p className="type-body text-xs">No tools assigned.</p>
+                      ) : (
+                        <ul className="divide-y divide-border rounded-md border border-border">
+                          {detail.tools.map((tool) => (
+                            <li
+                              key={tool.id}
+                              className="flex items-start justify-between gap-3 px-4 py-3 first:rounded-t-md last:rounded-b-md"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-sm text-foreground">{tool.name}</p>
+                                <p className="mt-0.5 text-xs text-muted-foreground">
+                                  {tool.description}
+                                </p>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="shrink-0 text-muted-foreground"
+                                disabled={busy}
+                                onClick={() => void handleUnassignTool(tool.id)}
+                              >
+                                Remove
+                              </Button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="type-body mt-5 rounded-md border border-border bg-muted/40 p-3 text-xs lg:hidden dark:bg-muted/30">
+                    <p className="font-medium text-foreground">How it works</p>
+                    <p className="mt-2">
+                      Profiles isolate prompts and tool access. Open Soul to customize voice and
+                      identity per profile.
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </section>
       </div>
 
       <Dialog open={createOpen} onOpenChange={handleCreateOpenChange}>
@@ -942,37 +1131,88 @@ export function ProfilesPage() {
   );
 }
 
-function ProfileListItem({
+function ProfileScopeButton({
   profile,
-  selected,
+  active,
   disabled,
-  onSelect,
+  onClick,
 }: {
   profile: ProfileSummary;
-  selected: boolean;
+  active: boolean;
   disabled: boolean;
-  onSelect: () => void;
+  onClick: () => void;
 }) {
   return (
     <button
       type="button"
       disabled={disabled}
-      aria-current={selected ? "true" : undefined}
-      className={cn(
-        "flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors",
-        "disabled:cursor-not-allowed disabled:opacity-50",
-        selected ? "bg-muted" : "hover:bg-muted/50",
-      )}
-      onClick={onSelect}
+      onClick={onClick}
+      data-active={active || undefined}
+      className="scope-item disabled:cursor-not-allowed disabled:opacity-50"
     >
-      <ProfileAvatar profile={profile} size="sm" />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm text-foreground">{profile.name}</p>
-        <p className="text-xs text-muted-foreground">
-          {profile.toolCount} tools · soul {profile.soulActive ? "on" : "off"}
-        </p>
+      <div className="flex items-start gap-3">
+        <ProfileAvatar profile={profile} size="sm" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <p
+              className={cn(
+                "truncate text-sm font-medium",
+                active ? "text-primary" : "text-foreground",
+              )}
+            >
+              {profile.name}
+            </p>
+            {profile.soulActive ? (
+              <span className="scope-badge scope-badge-active">active</span>
+            ) : null}
+          </div>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {profile.toolCount} tools · soul {profile.soulActive ? "on" : "off"}
+          </p>
+        </div>
       </div>
     </button>
+  );
+}
+
+function ProfileSearch({
+  value,
+  disabled,
+  isSearching,
+  onChange,
+  onClear,
+}: {
+  value: string;
+  disabled: boolean;
+  isSearching: boolean;
+  onChange: (value: string) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="relative">
+      <SearchIcon
+        className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+        aria-hidden
+      />
+      <Input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Search…"
+        disabled={disabled}
+        className={cn("pl-9", isSearching && "pr-9")}
+        aria-label="Search profiles"
+      />
+      {isSearching ? (
+        <button
+          type="button"
+          aria-label="Clear search"
+          className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          onClick={onClear}
+        >
+          <XIcon className="size-4" />
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -986,8 +1226,8 @@ function EmptyMessage({
   onAction?: () => void;
 }) {
   return (
-    <div className="px-4 py-10 text-center">
-      <p className="text-sm text-muted-foreground">{message}</p>
+    <div className="py-8 text-center">
+      <p className="type-body text-xs">{message}</p>
       {actionLabel && onAction ? (
         <Button type="button" variant="link" className="mt-2 h-auto p-0" onClick={onAction}>
           {actionLabel}
@@ -997,15 +1237,20 @@ function EmptyMessage({
   );
 }
 
-function ListSkeleton({ rows = 4, rounded = true }: { rows?: number; rounded?: boolean }) {
+function PageState({ message, embedded = false }: { message: string; embedded?: boolean }) {
   return (
-    <div className={cn("divide-y divide-border", rounded && sectionClass)} aria-busy="true">
-      {Array.from({ length: rows }).map((_, index) => (
-        <div key={index} className="space-y-2 px-4 py-3">
-          <div className="h-4 w-2/3 animate-pulse rounded bg-muted/50" />
-          <div className="h-3 w-1/2 animate-pulse rounded bg-muted/40" />
-        </div>
-      ))}
+    <div
+      className={cn(
+        embedded
+          ? "flex min-h-48 flex-col items-center justify-center gap-3 text-sm text-muted-foreground"
+          : cn(
+              sectionClass,
+              "flex min-h-64 flex-col items-center justify-center gap-3 p-8 text-sm text-muted-foreground",
+            ),
+      )}
+    >
+      <Spinner className="size-5" />
+      {message}
     </div>
   );
 }

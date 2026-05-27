@@ -60,6 +60,7 @@ import {
   buildChatPath,
   chatMessagesToListItems,
   parseChatRouteParams,
+  readRequestedProfileFromNewChatSearch,
   sessionStorageKey,
   type ChatListItem,
 } from "@/lib/chat-history";
@@ -201,7 +202,9 @@ export function ChatPage() {
   const routeSession = useMemo(() => parseChatRouteParams(params), [params]);
   const { health, models, setModel } = useAppContext();
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
-  const [profileId, setProfileId] = useState("");
+  const [profileId, setProfileId] = useState(
+    () => readRequestedProfileFromNewChatSearch(location.search) ?? "",
+  );
   const [session, setSession] = useState<RemoteChatSession | null>(null);
   const [messages, setMessages] = useState<ChatListItem[]>([]);
   const [busy, setBusy] = useState(false);
@@ -209,8 +212,6 @@ export function ChatPage() {
   const skipNextProfileSessionRef = useRef(false);
   const loadedRouteRef = useRef<string | null>(null);
   const profileSwitchInFlightRef = useRef(false);
-  const pendingForceNewRef = useRef(false);
-
   const syncChatUrl = useCallback(
     (nextProfileId: string, sessionId: string) => {
       const routeKey = `${nextProfileId}:${sessionId}`;
@@ -258,16 +259,22 @@ export function ChatPage() {
       const response = await client.listProfiles();
       setProfiles(response.profiles);
 
-      if (!profileId && !routeSession && response.profiles.length > 0) {
-        const defaultProfile =
-          response.profiles.find((profile) => profile.id === "profile_default") ??
-          response.profiles[0]!;
-        setProfileId(defaultProfile.id);
+      if (!routeSession && response.profiles.length > 0) {
+        setProfileId((current) => {
+          if (current) {
+            return current;
+          }
+
+          const defaultProfile =
+            response.profiles.find((profile) => profile.id === "profile_default") ??
+            response.profiles[0]!;
+          return defaultProfile.id;
+        });
       }
     } catch (err) {
       setError(formatError(err));
     }
-  }, [profileId, routeSession]);
+  }, [routeSession]);
 
   const enterDraftChat = useCallback(
     (nextProfileId: string) => {
@@ -327,19 +334,21 @@ export function ChatPage() {
       return;
     }
 
-    const requestedProfile = searchParams.get("profile");
+    const requestedProfile = searchParams.get("profile")?.trim() || null;
     setSearchParams({}, { replace: true });
-    pendingForceNewRef.current = true;
 
-    if (requestedProfile && requestedProfile !== profileId) {
-      setProfileId(requestedProfile);
+    const targetProfileId = requestedProfile || profileId;
+    if (!targetProfileId) {
       return;
     }
 
-    if (profileId) {
-      pendingForceNewRef.current = false;
-      enterDraftChat(profileId);
+    skipNextProfileSessionRef.current = true;
+
+    if (requestedProfile && requestedProfile !== profileId) {
+      setProfileId(requestedProfile);
     }
+
+    enterDraftChat(targetProfileId);
   }, [searchParams, setSearchParams, profileId, enterDraftChat]);
 
   useEffect(() => {
@@ -356,7 +365,6 @@ export function ChatPage() {
       return;
     }
 
-    pendingForceNewRef.current = false;
     enterDraftChat(profileId);
   }, [profileId, routeSession, enterDraftChat]);
 
