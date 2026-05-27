@@ -198,6 +198,47 @@ export function buildOpenApiSpec() {
           },
         },
       },
+      "/v1/user/context": {
+        get: {
+          tags: ["User"],
+          summary: "Get USER.md status",
+          operationId: "getUserContext",
+          parameters: [
+            {
+              name: "content",
+              in: "query",
+              required: false,
+              schema: { type: "boolean" },
+              description: "Include file contents when true.",
+            },
+          ],
+          responses: {
+            "200": jsonResponse("UserContextStatusResponse", "User context status"),
+            "500": errorResponse,
+          },
+        },
+        put: {
+          tags: ["User"],
+          summary: "Write USER.md",
+          operationId: "writeUserContext",
+          requestBody: jsonBody("UpdateUserContextRequest"),
+          responses: {
+            "204": { description: "User context saved" },
+            "500": errorResponse,
+          },
+        },
+      },
+      "/v1/user/context/init": {
+        post: {
+          tags: ["User"],
+          summary: "Initialize USER.md template",
+          operationId: "initUserContext",
+          responses: {
+            "201": jsonResponse("InitUserContextResponse", "User context initialized"),
+            "500": errorResponse,
+          },
+        },
+      },
       "/v1/sessions": {
         get: {
           tags: ["Chat"],

@@ -3,9 +3,11 @@ import {
   type AgentChannel,
   type ImageAttachment,
   type InitSoulResponse,
+  type InitUserContextResponse,
   type ModelsResponse,
   type SendMessageInput,
   type SoulStatusResponse,
+  type UserContextStatusResponse,
 } from "@tinyclaw/core";
 import { mergeSendInput, parseImageLine } from "./image-input";
 import type { TinyClawClient } from "@tinyclaw/client";
@@ -241,6 +243,31 @@ export async function runChat(options: RunChatOptions): Promise<void> {
         continue;
       }
 
+      if (line === "/user" || line.startsWith("/user ")) {
+        if (processing) {
+          continue;
+        }
+
+        const subcommand = line.slice("/user".length).trim().toLowerCase();
+        processing = true;
+
+        try {
+          if (subcommand === "init") {
+            const result = await options.client.initUserContext();
+            printUserContextInitResult(result);
+          } else {
+            const status = await options.client.getUserContext();
+            printUserContextStatus(status);
+          }
+        } catch (error) {
+          console.log(`${formatError(error)}\n`);
+        } finally {
+          processing = false;
+        }
+
+        continue;
+      }
+
       if (processing) {
         continue;
       }
@@ -372,6 +399,29 @@ function printSoulInitResult(result: InitSoulResponse): void {
   }
 
   console.log("\nEdit SOUL.md, STYLE.md, and SKILL.md, then start a new session.\n");
+}
+
+function printUserContextStatus(status: UserContextStatusResponse): void {
+  console.log(`USER.md path: ${status.path}`);
+  console.log(`Active: ${status.active ? "yes" : "no"}`);
+
+  if (!status.active) {
+    console.log("\nRun /user init to scaffold USER.md, or edit it in Settings (web).\n");
+    return;
+  }
+
+  console.log("\nEdit USER.md in Settings (web) or on disk. Start a new session to reload.\n");
+}
+
+function printUserContextInitResult(result: InitUserContextResponse): void {
+  console.log(`USER.md path: ${result.path}`);
+
+  if (!result.created) {
+    console.log("Template already exists — nothing created.\n");
+    return;
+  }
+
+  console.log("\nCreated USER.md. Edit it in Settings (web) or on disk, then start a new session.\n");
 }
 
 function isExitCommand(line: string): boolean {

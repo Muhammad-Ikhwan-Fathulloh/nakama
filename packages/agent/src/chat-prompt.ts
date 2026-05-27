@@ -5,6 +5,7 @@ export function buildChatSystemPrompt(
   tools: ToolDefinition[],
   options: {
     basePrompt?: string;
+    userContext?: string;
     enableToolLoop?: boolean;
     soul?: boolean;
     userTimezone?: string;
@@ -15,6 +16,10 @@ export function buildChatSystemPrompt(
     options.basePrompt?.trim() ||
       "You are TinyClaw, a helpful personal AI assistant.",
   ];
+
+  if (options.userContext?.trim()) {
+    sections.push("", "# About the User (USER.md)", options.userContext.trim());
+  }
 
   if (options.soul) {
     sections.push("Use tools when needed while staying in character.");

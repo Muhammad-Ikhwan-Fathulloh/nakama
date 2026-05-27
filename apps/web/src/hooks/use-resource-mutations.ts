@@ -256,3 +256,32 @@ export function useWriteSoulFileMutation() {
     },
   });
 }
+
+export function useUserContextQuery(options: { includeContent?: boolean } = {}) {
+  return useQuery({
+    queryKey: [...queryKeys.userContext, options.includeContent ? "content" : "status"] as const,
+    queryFn: () => client.getUserContext({ includeContent: options.includeContent }),
+  });
+}
+
+export function useInitUserContextMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => client.initUserContext(),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.userContext });
+    },
+  });
+}
+
+export function useWriteUserContextMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (content: string) => client.writeUserContext(content),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.userContext });
+    },
+  });
+}

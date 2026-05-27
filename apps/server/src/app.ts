@@ -24,6 +24,7 @@ import {
   type UpdateTelegramSettingsRequest,
   type HealthResponse,
   type InitSoulResponse,
+  type InitUserContextResponse,
   type ListProfilesResponse,
   type ListToolsResponse,
   type ListSessionsResponse,
@@ -45,7 +46,9 @@ import {
   type SystemStatusResponse,
   type UpdateProfileRequest,
   type UpdateSoulFileRequest,
+  type UpdateUserContextRequest,
   type ImageAttachment,
+  type UserContextStatusResponse,
 } from "@tinyclaw/core";
 import type { AgentChatSession } from "@tinyclaw/agent";
 import { serializeOpenApiSpec } from "./openapi/build-spec";
@@ -174,6 +177,21 @@ export function createApp(options: ServerOptions) {
             const message = error instanceof Error ? error.message : String(error);
             return errorResponse(message, 400);
           }
+        }
+
+        if (request.method === "GET" && url.pathname === "/v1/user/context") {
+          const includeContent = url.searchParams.get("content") === "true";
+          return json<UserContextStatusResponse>(await agent.getUserContext(includeContent));
+        }
+
+        if (request.method === "PUT" && url.pathname === "/v1/user/context") {
+          const body = await readJson<UpdateUserContextRequest>(request);
+          await agent.writeUserContext(body);
+          return new Response(null, { status: 204 });
+        }
+
+        if (request.method === "POST" && url.pathname === "/v1/user/context/init") {
+          return json<InitUserContextResponse>(await agent.initUserContext(), 201);
         }
 
         if (request.method === "POST" && url.pathname === "/v1/sessions") {

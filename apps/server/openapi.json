@@ -420,6 +420,111 @@
         }
       }
     },
+    "/v1/user/context": {
+      "get": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Get USER.md status",
+        "operationId": "getUserContext",
+        "parameters": [
+          {
+            "name": "content",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Include file contents when true."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User context status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserContextStatusResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Write USER.md",
+        "operationId": "writeUserContext",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserContextRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "User context saved"
+          },
+          "500": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/user/context/init": {
+      "post": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Initialize USER.md template",
+        "operationId": "initUserContext",
+        "responses": {
+          "201": {
+            "description": "User context initialized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InitUserContextResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/sessions": {
       "get": {
         "tags": [
@@ -2743,6 +2848,50 @@
         "properties": {
           "content": {
             "type": "string"
+          }
+        }
+      },
+      "UserContextStatusResponse": {
+        "type": "object",
+        "required": [
+          "path",
+          "active"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateUserContextRequest": {
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "InitUserContextResponse": {
+        "type": "object",
+        "required": [
+          "path",
+          "created"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean"
           }
         }
       },

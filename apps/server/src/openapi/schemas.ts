@@ -443,6 +443,30 @@ export const openApiSchemas = {
       content: { type: "string" },
     },
   },
+  UserContextStatusResponse: {
+    type: "object",
+    required: ["path", "active"],
+    properties: {
+      path: { type: "string" },
+      active: { type: "boolean" },
+      content: { type: "string" },
+    },
+  },
+  UpdateUserContextRequest: {
+    type: "object",
+    required: ["content"],
+    properties: {
+      content: { type: "string" },
+    },
+  },
+  InitUserContextResponse: {
+    type: "object",
+    required: ["path", "created"],
+    properties: {
+      path: { type: "string" },
+      created: { type: "boolean" },
+    },
+  },
   AutomationTriggerManual: {
     type: "object",
     required: ["type"],

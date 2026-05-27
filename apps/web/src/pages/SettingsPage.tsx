@@ -10,6 +10,8 @@ import {
   KeyRoundIcon,
 } from "lucide-react";
 import { TelegramSettingsCard } from "@/components/TelegramSettingsCard";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { UserContextCard } from "@/components/UserContextCard";
 import { TimezoneSelect } from "@/components/TimezoneSelect";
 import { Button } from "@/components/ui/button";
 import {
@@ -322,6 +324,16 @@ export function SettingsPage() {
     <div className="space-y-8 max-w-3xl mx-auto">
       <Card className="w-full">
         <CardHeader className="pb-2">
+          <CardTitle>Appearance</CardTitle>
+          <CardDescription>Interface color theme.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ThemeToggle />
+        </CardContent>
+      </Card>
+
+      <Card className="w-full">
+        <CardHeader className="pb-2">
           <CardTitle>Timezone</CardTitle>
           <CardDescription>Default for scheduled automations.</CardDescription>
         </CardHeader>
@@ -364,6 +376,8 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
+      <UserContextCard />
+
       <TelegramSettingsCard />
 
       <Card>
@@ -379,14 +393,9 @@ export function SettingsPage() {
               </div>
             </div>
           </CardHeader>
-        ) : (
-          <CardHeader className="flex-row items-center justify-between space-y-0">
-            <StatusPill label="Connected" tone="ok" />
-            <ProviderBadge provider={models.provider} />
-          </CardHeader>
-        )}
+        ) : null}
 
-        <CardContent className="space-y-5">
+        <CardContent className={cn("space-y-5", isConfigured && "pt-4")}>
           {!isConfigured ? (
             <form
               className="space-y-5"
@@ -581,11 +590,7 @@ function SettingsSkeleton() {
     <div className="space-y-8 animate-pulse" aria-hidden="true">
       <div className="h-4 w-2/3 rounded bg-muted" />
       <Card>
-        <CardHeader className="flex-row items-center justify-between space-y-0">
-          <div className="h-7 w-24 rounded-full bg-muted" />
-          <div className="h-7 w-20 rounded-full bg-muted" />
-        </CardHeader>
-        <CardContent className="space-y-5">
+        <CardContent className="space-y-5 pt-4">
           <div className="space-y-2">
             <div className="h-4 w-12 rounded bg-muted" />
             <div className="h-10 max-w-sm rounded-lg bg-muted" />
@@ -1034,45 +1039,5 @@ function ConnectedProviderSection({
         ) : null}
       </div>
     </>
-  );
-}
-
-function StatusPill({
-  label,
-  tone,
-}: {
-  label: string;
-  tone: "ok" | "neutral";
-}) {
-  const toneClass =
-    tone === "ok"
-      ? "border-emerald-800/60 bg-emerald-950/40 text-emerald-200"
-      : "border-border bg-muted text-muted-foreground";
-
-  return (
-    <span className={cn("rounded-full border px-3 py-1 text-xs font-medium", toneClass)}>
-      {label}
-    </span>
-  );
-}
-
-function ProviderBadge({ provider }: { provider: string | null }) {
-  if (!provider) {
-    return null;
-  }
-
-  const isOpenAI = provider === "openai";
-
-  return (
-    <span
-      className={cn(
-        "rounded-full border px-3 py-1 text-xs font-medium",
-        isOpenAI
-          ? "border-sky-800/60 bg-sky-950/40 text-sky-200"
-          : "border-orange-800/60 bg-orange-950/40 text-orange-200",
-      )}
-    >
-      {formatProviderLabel(provider)}
-    </span>
   );
 }

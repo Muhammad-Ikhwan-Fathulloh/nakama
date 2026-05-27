@@ -1,10 +1,27 @@
+import type { LucideIcon } from "lucide-react";
+import { ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import { Outlet, useLocation } from "react-router-dom";
 import { ConnectionBar } from "@/components/ConnectionBar";
-import { ThemeToggle } from "@/components/ThemeToggle";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useAppContext } from "@/context/app-context";
 import { useAppNavigation } from "@/hooks/use-app-navigation";
 import { usePrefetchAppData } from "@/hooks/use-app-queries";
-import { NAV_ITEMS, pageIdFromPath, SETTINGS_NAV_ITEM } from "@/lib/navigation";
+import { useSidebarCollapsed } from "@/hooks/use-sidebar-collapsed";
+import { cn } from "@/lib/utils";
+import {
+  findNavItem,
+  NAV_GROUPS,
+  NAV_ITEM_ICONS,
+  pageIdFromPath,
+  SETTINGS_NAV_ITEM,
+  type NavItem,
+} from "@/lib/navigation";
 
 export function Layout() {
   const location = useLocation();
@@ -12,95 +29,203 @@ export function Layout() {
   const page = pageIdFromPath(location.pathname) ?? "chat";
   const { error } = useAppContext();
   const prefetchAppData = usePrefetchAppData();
-  const activeNav =
-    page === "settings"
-      ? SETTINGS_NAV_ITEM
-      : NAV_ITEMS.find((item) => item.id === page);
+  const { collapsed, toggle } = useSidebarCollapsed();
+  const activeNav = findNavItem(page);
 
   return (
-    <div className="flex h-svh overflow-hidden bg-background">
-      <aside className="flex h-full w-64 shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar">
-        <div className="border-b border-border px-5 py-5.5">
-          <div className="flex items-center gap-3">
+    <TooltipProvider delay={0}>
+      <div className="flex h-svh overflow-hidden bg-background">
+        <aside
+          aria-label="Main navigation"
+          data-collapsed={collapsed || undefined}
+          className={cn(
+            "flex h-full shrink-0 flex-col overflow-hidden border-r border-border/60 bg-sidebar transition-[width] duration-200 ease-out motion-reduce:transition-none",
+            collapsed ? "w-14" : "w-60",
+          )}
+        >
+          <div
+            className={cn(
+              "app-shell-header",
+              collapsed ? "h-auto min-h-14 flex-col gap-2 px-2 py-3" : "gap-2.5 px-3",
+            )}
+          >
             <img
               src="/tinyclaw.png"
               alt="TinyClaw"
-              className="size-9 shrink-0 rounded-lg object-contain"
+              className="size-8 shrink-0 rounded-lg object-contain"
             />
-            <div>
-              <p className="type-brand">TinyClaw</p>
-            </div>
+            {!collapsed ? (
+              <p className="type-brand min-w-0 flex-1 truncate">TinyClaw</p>
+            ) : null}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-expanded={!collapsed}
+              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              onClick={toggle}
+              className={cn(
+                "shrink-0 text-muted-foreground/70 hover:text-foreground",
+                collapsed &&
+                  "size-9 rounded-md hover:bg-sidebar-accent/60",
+                !collapsed && "ml-auto",
+              )}
+            >
+              {collapsed ? (
+                <ChevronsRightIcon className="sidebar-nav-icon" strokeWidth={1.75} />
+              ) : (
+                <ChevronsLeftIcon className="sidebar-nav-icon" strokeWidth={1.75} />
+              )}
+            </Button>
           </div>
-        </div>
 
-        <nav className="min-h-0 flex-1 space-y-0.5 p-3">
-          {NAV_ITEMS.map((item) => {
-            const active = item.id === page;
-
-            return (
-              <button
-                key={item.id}
-                type="button"
-                title={item.description}
-                aria-current={active ? "page" : undefined}
-                onClick={() => navigateToPage(item.id)}
-                onMouseEnter={item.id === "automations" ? prefetchAppData : undefined}
-                onFocus={item.id === "automations" ? prefetchAppData : undefined}
-                data-active={active || undefined}
-                className="sidebar-nav-link"
-              >
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
-
-        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border p-3">
-          <button
-            type="button"
-            title={SETTINGS_NAV_ITEM.description}
-            aria-current={page === "settings" ? "page" : undefined}
-            onClick={() => navigateToPage("settings")}
-            onMouseEnter={prefetchAppData}
-            onFocus={prefetchAppData}
-            data-active={page === "settings" || undefined}
-            className="sidebar-nav-link !w-auto shrink-0"
+          <nav
+            className={cn(
+              "no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto",
+              collapsed ? "gap-2.5 p-2" : "gap-1 p-3",
+            )}
           >
-            {SETTINGS_NAV_ITEM.label}
-          </button>
-          <ThemeToggle />
-        </div>
-      </aside>
+            {NAV_GROUPS.map((group, groupIndex) => (
+              <div
+                key={group.id}
+                className={cn(
+                  groupIndex > 0 &&
+                    collapsed &&
+                    "border-t border-border/45 pt-2.5",
+                )}
+              >
+                {!collapsed && groupIndex > 0 ? (
+                  <div className="sidebar-nav-divider" aria-hidden="true" />
+                ) : null}
+                <div
+                  className="sidebar-nav-group"
+                  role="group"
+                  aria-label={group.label}
+                >
+                  {!collapsed ? (
+                    <p className="sidebar-nav-group-label">{group.label}</p>
+                  ) : null}
+                  <div className="sidebar-nav-group-items">
+                    {group.items.map((item) => (
+                      <SidebarNavButton
+                        key={item.id}
+                        item={item}
+                        icon={NAV_ITEM_ICONS[item.id]}
+                        active={item.id === page}
+                        collapsed={collapsed}
+                        onClick={() => navigateToPage(item.id)}
+                        onPrefetch={
+                          item.id === "automations" ? prefetchAppData : undefined
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </nav>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {page !== "chat" && page !== "status" ? (
-          <header className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-b border-border bg-card px-6 py-4">
-            <div className="space-y-0.5">
-              <h1 className="type-page-title">{activeNav?.label}</h1>
-              <p className="type-body max-w-xl">{activeNav?.description}</p>
-            </div>
-
-            <ConnectionBar />
-          </header>
-        ) : null}
-
-        {error ? (
-          <div className="shrink-0 border-b border-red-200 bg-red-50 px-6 py-3 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-200">
-            {error}
+          <div
+            className={cn(
+              "flex shrink-0 border-t border-border/60",
+              collapsed ? "justify-center p-2" : "p-3",
+            )}
+          >
+            <SidebarNavButton
+              item={SETTINGS_NAV_ITEM}
+              icon={NAV_ITEM_ICONS.settings}
+              active={page === "settings"}
+              collapsed={collapsed}
+              onClick={() => navigateToPage("settings")}
+              onPrefetch={prefetchAppData}
+            />
           </div>
-        ) : null}
+        </aside>
 
-        <main
-          className={
-            page === "chat"
-              ? "flex min-h-0 flex-1 flex-col overflow-hidden"
-              : "min-h-0 flex-1 overflow-y-auto p-6"
-          }
-        >
-          <Outlet />
-        </main>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {page !== "chat" && page !== "status" ? (
+            <header className="app-shell-header justify-between gap-4 bg-card px-6">
+              <h1 className="type-brand min-w-0 truncate">{activeNav?.label}</h1>
+              <ConnectionBar />
+            </header>
+          ) : null}
+
+          {error ? (
+            <div className="shrink-0 border-b border-red-200 bg-red-50 px-6 py-3 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-200">
+              {error}
+            </div>
+          ) : null}
+
+          <main
+            className={
+              page === "chat"
+                ? "flex min-h-0 flex-1 flex-col overflow-hidden"
+                : "min-h-0 flex-1 overflow-y-auto p-6"
+            }
+          >
+            <Outlet />
+          </main>
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
 
+function SidebarNavButton({
+  item,
+  icon: Icon,
+  active,
+  collapsed,
+  onClick,
+  onPrefetch,
+  className,
+}: {
+  item: NavItem;
+  icon: LucideIcon;
+  active: boolean;
+  collapsed: boolean;
+  onClick: () => void;
+  onPrefetch?: () => void;
+  className?: string;
+}) {
+  const button = (
+    <button
+      type="button"
+      title={collapsed ? undefined : item.description}
+      aria-label={item.label}
+      aria-current={active ? "page" : undefined}
+      onClick={onClick}
+      onMouseEnter={onPrefetch}
+      onFocus={onPrefetch}
+      data-active={active || undefined}
+      className={cn(
+        "sidebar-nav-link",
+        collapsed && "sidebar-nav-link--collapsed",
+        className,
+      )}
+    >
+      <Icon
+        className="sidebar-nav-icon"
+        strokeWidth={1.75}
+        aria-hidden="true"
+      />
+      {!collapsed ? (
+        <span className="min-w-0 truncate">{item.label}</span>
+      ) : null}
+    </button>
+  );
+
+  if (!collapsed) {
+    return button;
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={button} />
+      <TooltipContent side="right" sideOffset={8}>
+        {item.label}
+      </TooltipContent>
+    </Tooltip>
+  );
+}

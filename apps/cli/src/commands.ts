@@ -18,12 +18,13 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/compact", description: "compact conversation history" },
   { name: "/create", description: "draft an automation" },
   { name: "/soul", description: "show or initialize agent identity" },
+  { name: "/user", description: "show or initialize USER.md" },
   { name: "/models", description: "list available models" },
   { name: "/model", description: "show or switch model" },
   { name: "/exit", description: "quit" },
 ];
 
-const COMMANDS_WITH_ARGS = new Set(["/model", "/create", "/soul"]);
+const COMMANDS_WITH_ARGS = new Set(["/model", "/create", "/soul", "/user"]);
 
 export interface ResolveSuggestionsOptions {
   input: string;
@@ -85,6 +86,21 @@ export function resolveSuggestions(
         label: command.name,
         description: command.description,
         insertValue: `/soul ${command.name}`,
+      }));
+  }
+
+  const userMatch = input.match(/^\/user(?:\s+(.*))?$/);
+
+  if (userMatch) {
+    const query = (userMatch[1] ?? "").trim().toLowerCase();
+    const subcommands = [{ name: "init", description: "scaffold USER.md template" }];
+
+    return subcommands
+      .filter((command) => !query || command.name.startsWith(query))
+      .map((command) => ({
+        label: command.name,
+        description: command.description,
+        insertValue: `/user ${command.name}`,
       }));
   }
 

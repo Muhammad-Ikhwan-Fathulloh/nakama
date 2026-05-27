@@ -25,4 +25,5 @@ export const queryKeys = {
   telegram: {
     settings: ["telegram", "settings"] as const,
   },
+  userContext: ["userContext"] as const,
 } as const;

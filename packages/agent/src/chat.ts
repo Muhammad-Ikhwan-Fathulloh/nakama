@@ -61,6 +61,7 @@ export interface AgentChatSessionOptions {
   channel?: AgentRequest["channel"];
   tools?: ToolDefinition[];
   systemPrompt?: string;
+  userContext?: string;
   enableToolLoop?: boolean;
   soul?: boolean;
   initialHistory?: ChatMessage[];
@@ -84,6 +85,7 @@ export function createAgentChatSession(
   const enableToolLoop = options.enableToolLoop ?? tools.length > 0;
   const systemPrompt = buildChatSystemPrompt(tools, {
     basePrompt: options.systemPrompt,
+    userContext: options.userContext,
     enableToolLoop,
     soul: options.soul,
     userTimezone: options.userTimezone,

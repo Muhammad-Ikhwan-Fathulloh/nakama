@@ -1,3 +1,15 @@
+import type { LucideIcon } from "lucide-react";
+import {
+  CircleGaugeIcon,
+  GemIcon,
+  HistoryIcon,
+  MessageCircleIcon,
+  Settings2Icon,
+  UserRoundIcon,
+  WorkflowIcon,
+  WrenchIcon,
+} from "lucide-react";
+
 export type PageId =
   | "status"
   | "chat"
@@ -14,48 +26,85 @@ export interface NavItem {
   description: string;
 }
 
-export const NAV_ITEMS: NavItem[] = [
-  {
-    id: "status",
-    label: "Status",
-    description: "Server and automation worker health",
-  },
+export interface NavGroup {
+  id: string;
+  label: string;
+  items: NavItem[];
+}
+
+export const NAV_GROUPS: NavGroup[] = [
   {
     id: "chat",
     label: "Chat",
-    description: "Talk to the agent with streaming replies",
+    items: [
+      {
+        id: "chat",
+        label: "Chat",
+        description: "Talk to the agent with streaming replies",
+      },
+      {
+        id: "history",
+        label: "History",
+        description: "Browse and reopen saved chat sessions",
+      },
+    ],
   },
   {
-    id: "history",
-    label: "History",
-    description: "Browse and reopen saved chat sessions",
+    id: "agent",
+    label: "Agent",
+    items: [
+      {
+        id: "profiles",
+        label: "Profiles",
+        description: "Manage bot configs and tool allowlists",
+      },
+      {
+        id: "soul",
+        label: "Soul",
+        description: "Identity stack files and templates",
+      },
+      {
+        id: "tools",
+        label: "Tools",
+        description: "Browse tools created by the agent",
+      },
+    ],
   },
   {
-    id: "profiles",
-    label: "Profiles",
-    description: "Manage bot configs and tool allowlists",
-  },
-  {
-    id: "tools",
-    label: "Tools",
-    description: "Browse tools created by the agent",
-  },
-  {
-    id: "soul",
-    label: "Soul",
-    description: "Identity stack files and templates",
-  },
-  {
-    id: "automations",
-    label: "Automations",
-    description: "Draft workflows from natural language",
+    id: "system",
+    label: "System",
+    items: [
+      {
+        id: "status",
+        label: "Status",
+        description: "Server and automation worker health",
+      },
+      {
+        id: "automations",
+        label: "Automations",
+        description: "Draft workflows from natural language",
+      },
+    ],
   },
 ];
+
+export const NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
 export const SETTINGS_NAV_ITEM: NavItem = {
   id: "settings",
   label: "Settings",
   description: "Provider API key and model",
+};
+
+export const NAV_ITEM_ICONS: Record<PageId, LucideIcon> = {
+  status: CircleGaugeIcon,
+  chat: MessageCircleIcon,
+  history: HistoryIcon,
+  profiles: UserRoundIcon,
+  tools: WrenchIcon,
+  soul: GemIcon,
+  automations: WorkflowIcon,
+  settings: Settings2Icon,
 };
 
 export const PAGE_PATHS: Record<PageId, string> = {
@@ -71,6 +120,14 @@ export const PAGE_PATHS: Record<PageId, string> = {
 
 export function pathForPage(pageId: PageId): string {
   return PAGE_PATHS[pageId];
+}
+
+export function findNavItem(pageId: PageId): NavItem | undefined {
+  if (pageId === "settings") {
+    return SETTINGS_NAV_ITEM;
+  }
+
+  return NAV_ITEMS.find((item) => item.id === pageId);
 }
 
 export function pageIdFromPath(pathname: string): PageId | null {

@@ -12,6 +12,7 @@ import type {
   CreateProfileRequest,
   CreateToolRequest,
   InitSoulResponse,
+  InitUserContextResponse,
   ListProfilesResponse,
   ListToolsResponse,
   ListSessionsResponse,
@@ -27,6 +28,8 @@ import type {
   UpdateProfileRequest,
   UpdateSoulFileRequest,
   UpdateTelegramSettingsRequest,
+  UpdateUserContextRequest,
+  UserContextStatusResponse,
   UserProviderConfig,
   type ProviderClient,
 } from "@tinyclaw/core";
@@ -61,6 +64,7 @@ import { createSuperBotTools } from "../tools/super-bot-tools";
 import type { AutomationRunner } from "./automation-runner";
 import { ProfileService } from "./profile-service";
 import { SoulService } from "./soul-service";
+import { UserContextService } from "./user-context-service";
 import { resolveToolsFromStorage } from "./tool-resolver";
 import { loadSessionHistory, wrapPersistedSession } from "./session-persistence";
 
@@ -76,6 +80,7 @@ export class AgentService {
   private readonly db: DatabaseAdapter;
   private readonly profileService: ProfileService;
   private readonly soulService: SoulService;
+  private readonly userContextService: UserContextService;
   private readonly superBotTools: ToolDefinition[];
   private automationTools: ToolDefinition[] = [];
   private automationRunner: AutomationRunner | null = null;
@@ -91,6 +96,7 @@ export class AgentService {
     this.db = db;
     this.profileService = new ProfileService(db);
     this.soulService = new SoulService();
+    this.userContextService = new UserContextService();
     this.superBotTools = createSuperBotTools(this.profileService);
     this._providerConfigured = provider !== null;
     this.harness = this.createHarness(provider);
@@ -167,11 +173,13 @@ export class AgentService {
       ? await this.soulService.resolveSystemPrompt(profileId, profile.systemPrompt)
       : profile.systemPrompt;
     const userTimezone = await this.getUserTimezone();
+    const userContext = await this.userContextService.load();
 
     const session = this.harness.createChatSession({
       channel: "automation",
       tools,
       systemPrompt,
+      userContext,
       enableToolLoop: true,
       soul: soulStack !== null,
       userTimezone,
@@ -571,6 +579,18 @@ export class AgentService {
     await this.soulService.writeProfileSoulFile(profileId, key, request.content);
   }
 
+  async getUserContext(includeContent = false): Promise<UserContextStatusResponse> {
+    return this.userContextService.getStatus(includeContent);
+  }
+
+  async initUserContext(): Promise<InitUserContextResponse> {
+    return this.userContextService.init();
+  }
+
+  async writeUserContext(request: UpdateUserContextRequest): Promise<void> {
+    await this.userContextService.write(request.content);
+  }
+
   private createHarness(provider: ProviderClient | null): AgentHarness {
     return createAgentHarness({
       provider: provider ?? undefined,
@@ -622,12 +642,14 @@ export class AgentService {
       : systemPrompt;
     const initialHistory = await loadSessionHistory(this.db, sessionId);
     const userTimezone = await this.getUserTimezone();
+    const userContext = await this.userContextService.load();
     const compaction = this.resolveCompactionConfig(profile);
 
     const session = this.harness.createChatSession({
       channel,
       tools,
       systemPrompt: resolvedSystemPrompt,
+      userContext,
       enableToolLoop: true,
       soul: soulStack !== null,
       initialHistory,

@@ -141,24 +141,72 @@
     @apply text-xs font-semibold uppercase tracking-wide;
   }
 
+  .app-shell-header {
+    @apply flex h-14 shrink-0 items-center border-b border-border/60;
+  }
+
   .sidebar-nav-link {
-    @apply w-full cursor-pointer rounded-md px-3 py-2 text-left text-sm transition text-muted-foreground;
+    @apply flex w-full cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors duration-150 text-muted-foreground;
   }
 
-  .sidebar-nav-link:hover {
-    @apply bg-muted text-foreground;
+  .sidebar-nav-link--collapsed {
+    @apply size-9 justify-center gap-0 rounded-md px-0 py-0;
   }
 
-  .dark .sidebar-nav-link:hover {
-    @apply bg-sidebar-accent/60 text-sidebar-foreground;
+  aside:not([data-collapsed]) .sidebar-nav-link:hover {
+    @apply bg-muted/50 text-foreground;
   }
 
-  .sidebar-nav-link[data-active] {
-    @apply bg-primary/12 font-semibold text-primary ring-1 ring-primary/25;
+  aside:not([data-collapsed]) .sidebar-nav-link[data-active] {
+    @apply bg-muted/80 font-medium text-foreground;
   }
 
-  .dark .sidebar-nav-link[data-active] {
-    @apply bg-sidebar-accent text-sidebar-foreground ring-0 shadow-sm;
+  .dark aside:not([data-collapsed]) .sidebar-nav-link[data-active] {
+    @apply bg-sidebar-accent text-sidebar-foreground;
+  }
+
+  aside[data-collapsed] .sidebar-nav-link {
+    @apply text-muted-foreground/70;
+  }
+
+  aside[data-collapsed] .sidebar-nav-link:hover {
+    @apply bg-sidebar-accent/55 text-sidebar-foreground;
+  }
+
+  aside[data-collapsed] .sidebar-nav-link[data-active] {
+    @apply bg-sidebar-accent font-normal text-sidebar-foreground;
+  }
+
+  aside[data-collapsed] .sidebar-nav-link[data-active]:hover {
+    @apply bg-sidebar-accent text-sidebar-foreground;
+  }
+
+  .sidebar-nav-icon {
+    @apply size-3.5 shrink-0;
+  }
+
+  .sidebar-nav-link--collapsed .sidebar-nav-icon {
+    @apply size-4;
+  }
+
+  .sidebar-nav-divider {
+    @apply mx-1 mb-3 border-t border-border/45;
+  }
+
+  .sidebar-nav-group {
+    @apply flex flex-col;
+  }
+
+  .sidebar-nav-group-label {
+    @apply mb-1 px-3 text-xs text-muted-foreground/55;
+  }
+
+  .sidebar-nav-group-items {
+    @apply flex flex-col gap-px;
+  }
+
+  aside[data-collapsed] .sidebar-nav-group-items {
+    @apply gap-0.5;
   }
 
   .scope-item {

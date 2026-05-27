@@ -9,3 +9,4 @@ export * from "./provider-setup-prompt";
 export * from "./soul";
 export * from "./telegram-config";
 export * from "./tools";
+export * from "./user-context";

@@ -9,6 +9,7 @@ import type {
   HealthResponse,
   ImageAttachment,
   InitSoulResponse,
+  InitUserContextResponse,
   ListProfilesResponse,
   ListToolsResponse,
   ListSessionsResponse,
@@ -27,6 +28,8 @@ import type {
   StreamEvent,
   UpdateProfileRequest,
   UpdateSoulFileRequest,
+  UpdateUserContextRequest,
+  UserContextStatusResponse,
   AutomationDefinition,
   AutomationRunRecord,
   CreateAutomationRequest,
@@ -295,6 +298,26 @@ export class TinyClawClient {
         body: JSON.stringify({ content } satisfies UpdateSoulFileRequest),
       },
     );
+  }
+
+  async getUserContext(
+    options: { includeContent?: boolean } = {},
+  ): Promise<UserContextStatusResponse> {
+    const query = options.includeContent ? "?content=true" : "";
+    return this.request<UserContextStatusResponse>(`/v1/user/context${query}`);
+  }
+
+  async writeUserContext(content: string): Promise<void> {
+    await this.request("/v1/user/context", {
+      method: "PUT",
+      body: JSON.stringify({ content } satisfies UpdateUserContextRequest),
+    });
+  }
+
+  async initUserContext(): Promise<InitUserContextResponse> {
+    return this.request<InitUserContextResponse>("/v1/user/context/init", {
+      method: "POST",
+    });
   }
 
   createChatSession(sessionId: string, channel: AgentChannel): RemoteChatSession {

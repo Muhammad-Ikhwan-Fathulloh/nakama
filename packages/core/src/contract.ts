@@ -356,6 +356,21 @@ export interface UpdateSoulFileRequest {
   content: string;
 }
 
+export interface UserContextStatusResponse {
+  path: string;
+  active: boolean;
+  content?: string;
+}
+
+export interface UpdateUserContextRequest {
+  content: string;
+}
+
+export interface InitUserContextResponse {
+  path: string;
+  created: boolean;
+}
+
 export type ProviderName = "openai" | "anthropic";
 
 export interface GenerateTextInput {
