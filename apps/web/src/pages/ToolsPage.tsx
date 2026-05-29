@@ -1,8 +1,9 @@
-import type { ToolSummary } from "@tinyclaw/core/contract";
+import type { ToolDetail } from "@tinyclaw/core/contract";
 import { isProtectedToolId } from "@tinyclaw/core/tools/protected";
 import { PlusIcon, RefreshCwIcon, Trash2Icon, WrenchIcon } from "lucide-react";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { ToolDetailDialog } from "@/components/tools/ToolDetailDialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useToolsQuery } from "@/hooks/use-app-queries";
@@ -15,7 +16,7 @@ import { cn } from "@/lib/utils";
 
 const sectionClass = "rounded-md border border-border bg-card";
 
-function isDeletableTool(tool: ToolSummary): boolean {
+function isDeletableTool(tool: ToolDetail): boolean {
   return !isProtectedToolId(tool.id);
 }
 
@@ -25,6 +26,7 @@ export function ToolsPage() {
   const { data: tools = [], isLoading, error, isFetching } = useToolsQuery();
   const deleteToolMutation = useDeleteToolMutation();
   const [actionError, setActionError] = useState<string | null>(null);
+  const [detailToolId, setDetailToolId] = useState<string | null>(null);
 
   const loading = isLoading && tools.length === 0;
   const refreshing = isFetching && !loading;
@@ -41,14 +43,14 @@ export function ToolsPage() {
     navigateToNewChat(SUPER_BOT_PROFILE_ID);
   }
 
-  async function handleDeleteTool(tool: ToolSummary) {
-    if (!isDeletableTool(tool)) {
+  async function handleDeleteTool(toolId: string, toolName: string) {
+    if (isProtectedToolId(toolId)) {
       return;
     }
 
     if (
       !window.confirm(
-        `Delete tool "${tool.name}"? This removes it from every profile and cannot be undone.`,
+        `Delete tool "${toolName}"? This removes it from every profile and cannot be undone.`,
       )
     ) {
       return;
@@ -57,7 +59,8 @@ export function ToolsPage() {
     setActionError(null);
 
     try {
-      await deleteToolMutation.mutateAsync(tool.id);
+      await deleteToolMutation.mutateAsync(toolId);
+      setDetailToolId(null);
     } catch (err) {
       setActionError(formatError(err));
     }
@@ -194,7 +197,8 @@ export function ToolsPage() {
                       key={tool.id}
                       tool={tool}
                       busy={busy}
-                      onDelete={() => void handleDeleteTool(tool)}
+                      onView={() => setDetailToolId(tool.id)}
+                      onDelete={() => void handleDeleteTool(tool.id, tool.name)}
                     />
                   ))}
                 </ul>
@@ -213,6 +217,17 @@ export function ToolsPage() {
           </div>
         </div>
       </section>
+
+      <ToolDetailDialog
+        toolId={detailToolId}
+        busy={busy}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDetailToolId(null);
+          }
+        }}
+        onDelete={(toolId, toolName) => void handleDeleteTool(toolId, toolName)}
+      />
     </div>
   );
 }
@@ -220,17 +235,25 @@ export function ToolsPage() {
 function ToolListItem({
   tool,
   busy,
+  onView,
   onDelete,
 }: {
-  tool: ToolSummary;
+  tool: ToolDetail;
   busy: boolean;
+  onView: () => void;
   onDelete: () => void;
 }) {
   const deletable = isDeletableTool(tool);
 
   return (
-    <li className="flex items-start justify-between gap-3 px-4 py-3 first:rounded-t-md last:rounded-b-md">
-      <div className="flex min-w-0 items-start gap-3">
+    <li className="group flex items-start justify-between gap-3 px-4 py-3 first:rounded-t-md last:rounded-b-md hover:bg-muted/40">
+      <button
+        type="button"
+        disabled={busy}
+        className="flex min-w-0 flex-1 items-start gap-3 text-left disabled:opacity-50"
+        aria-label={`View details for ${tool.name}`}
+        onClick={onView}
+      >
         <span
           className={cn(
             "flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted/30",
@@ -241,12 +264,14 @@ function ToolListItem({
         </span>
         <div className="min-w-0">
           <p className="text-sm font-medium text-foreground">{tool.name}</p>
-          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{tool.description}</p>
+          <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+            {tool.description}
+          </p>
           <p className="type-code mt-2 truncate text-muted-foreground/80" title={tool.id}>
             {tool.id}
           </p>
         </div>
-      </div>
+      </button>
 
       <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
         <span
@@ -267,7 +292,10 @@ function ToolListItem({
             size="sm"
             disabled={busy}
             className="text-muted-foreground hover:text-destructive"
-            onClick={onDelete}
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
           >
             <Trash2Icon className="size-4" aria-hidden />
             Remove

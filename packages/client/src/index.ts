@@ -12,6 +12,8 @@ import type {
   InitUserContextResponse,
   ListProfilesResponse,
   ListToolsResponse,
+  ToolResponse,
+  ToolSourceResponse,
   ListSessionsResponse,
   ModelsResponse,
   ProfileResponse,
@@ -224,6 +226,16 @@ export class TinyClawClient {
 
   async listTools(): Promise<ListToolsResponse> {
     return this.request<ListToolsResponse>("/v1/tools");
+  }
+
+  async getTool(toolId: string): Promise<ToolResponse> {
+    return this.request<ToolResponse>(`/v1/tools/${encodeURIComponent(toolId)}`);
+  }
+
+  async getToolSource(toolId: string): Promise<ToolSourceResponse> {
+    return this.request<ToolSourceResponse>(
+      `/v1/tools/${encodeURIComponent(toolId)}/source`,
+    );
   }
 
   async createTool(request: CreateToolRequest) {

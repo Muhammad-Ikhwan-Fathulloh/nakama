@@ -512,6 +512,24 @@ export function buildOpenApiSpec() {
         },
       },
       "/v1/tools/{toolId}": {
+        get: {
+          tags: ["Tools"],
+          summary: "Get a tool",
+          operationId: "getTool",
+          parameters: [
+            {
+              name: "toolId",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            "200": jsonResponse("ToolResponse", "Tool detail"),
+            "404": errorResponse,
+            "500": errorResponse,
+          },
+        },
         delete: {
           tags: ["Tools"],
           summary: "Delete a registered tool",
@@ -526,6 +544,26 @@ export function buildOpenApiSpec() {
           ],
           responses: {
             "204": { description: "Tool deleted" },
+            "500": errorResponse,
+          },
+        },
+      },
+      "/v1/tools/{toolId}/source": {
+        get: {
+          tags: ["Tools"],
+          summary: "Get tool source code",
+          operationId: "getToolSource",
+          parameters: [
+            {
+              name: "toolId",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            "200": jsonResponse("ToolSourceResponse", "Tool source"),
+            "404": errorResponse,
             "500": errorResponse,
           },
         },

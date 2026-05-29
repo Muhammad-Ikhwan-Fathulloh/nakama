@@ -8,6 +8,9 @@ import type {
   ProfileDetail,
   ProfileResponse,
   ProfileSummary,
+  ToolDetail,
+  ToolResponse,
+  ToolSourceResponse,
   ToolSummary,
   UpdateProfileRequest,
 } from "@tinyclaw/core";
@@ -24,6 +27,7 @@ import { isProtectedToolId } from "@tinyclaw/core/tools/protected";
 import type { DatabaseAdapter, StoredProfileRecord, StoredToolRecord } from "@tinyclaw/db";
 import { SUPER_BOT_PROFILE_ID } from "@tinyclaw/db";
 import { validateJavascriptToolModule } from "./javascript-tool-loader";
+import { readToolSource } from "./tool-source";
 
 export class ProfileService {
   constructor(private readonly db: DatabaseAdapter) {}
@@ -103,7 +107,17 @@ export class ProfileService {
 
   async listTools(): Promise<ListToolsResponse> {
     const tools = await this.db.listTools();
-    return { tools: tools.map(toToolSummary) };
+    return { tools: tools.map(toToolDetail) };
+  }
+
+  async getTool(toolId: string): Promise<ToolResponse> {
+    const tool = await this.requireTool(toolId);
+    return { tool: toToolDetail(tool) };
+  }
+
+  async getToolSource(toolId: string): Promise<ToolSourceResponse> {
+    const tool = await this.requireTool(toolId);
+    return readToolSource(tool);
   }
 
   async listProfileTools(profileId: string): Promise<ListToolsResponse> {
@@ -130,7 +144,7 @@ export class ProfileService {
     }
   }
 
-  async createTool(request: CreateToolRequest): Promise<ToolSummary> {
+  async createTool(request: CreateToolRequest): Promise<ToolDetail> {
     const name = request.name.trim();
     const description = request.description.trim();
 
@@ -166,7 +180,7 @@ export class ProfileService {
 
     await this.db.upsertTool(record);
 
-    return toToolSummary(record);
+    return toToolDetail(record);
   }
 
   async assignTool(profileId: string, request: AssignToolRequest): Promise<ProfileResponse> {
@@ -249,6 +263,16 @@ export class ProfileService {
     return profile;
   }
 
+  private async requireTool(toolId: string): Promise<StoredToolRecord> {
+    const tool = await this.db.getTool(toolId);
+
+    if (!tool) {
+      throw new TinyClawApiError("Tool not found.", 404);
+    }
+
+    return tool;
+  }
+
   private async toProfileSummary(profile: StoredProfileRecord): Promise<ProfileSummary> {
     const tools = await this.db.listToolsForProfile(profile.id);
     const soulStack = await resolveSoulStackForProfile(profile.id);
@@ -273,6 +297,15 @@ function toToolSummary(record: StoredToolRecord): ToolSummary {
     name: record.name,
     description: record.description,
     handlerType: record.handlerType,
+  };
+}
+
+function toToolDetail(record: StoredToolRecord): ToolDetail {
+  return {
+    ...toToolSummary(record),
+    handlerConfig: record.handlerConfig,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
   };
 }
 

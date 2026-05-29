@@ -8,6 +8,8 @@ export const queryKeys = {
   },
   tools: {
     all: ["tools"] as const,
+    detail: (toolId: string) => ["tools", toolId] as const,
+    source: (toolId: string) => ["tools", toolId, "source"] as const,
   },
   automations: {
     all: ["automations"] as const,

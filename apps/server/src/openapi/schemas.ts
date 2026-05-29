@@ -261,6 +261,36 @@ export const openApiSchemas = {
       },
     },
   },
+  ToolDetail: {
+    allOf: [
+      { $ref: "#/components/schemas/ToolSummary" },
+      {
+        type: "object",
+        required: ["handlerConfig", "createdAt", "updatedAt"],
+        properties: {
+          handlerConfig: {},
+          createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time" },
+        },
+      },
+    ],
+  },
+  ToolResponse: {
+    type: "object",
+    required: ["tool"],
+    properties: {
+      tool: { $ref: "#/components/schemas/ToolDetail" },
+    },
+  },
+  ToolSourceResponse: {
+    type: "object",
+    required: ["path", "content", "language"],
+    properties: {
+      path: { type: "string" },
+      content: { type: "string" },
+      language: { type: "string", enum: ["javascript", "typescript"] },
+    },
+  },
   ProfileSummary: {
     type: "object",
     required: [
@@ -343,7 +373,7 @@ export const openApiSchemas = {
     properties: {
       tools: {
         type: "array",
-        items: { $ref: "#/components/schemas/ToolSummary" },
+        items: { $ref: "#/components/schemas/ToolDetail" },
       },
     },
   },
@@ -369,7 +399,7 @@ export const openApiSchemas = {
     type: "object",
     required: ["tool"],
     properties: {
-      tool: { $ref: "#/components/schemas/ToolSummary" },
+      tool: { $ref: "#/components/schemas/ToolDetail" },
     },
   },
   AssignToolRequest: {

@@ -1,7 +1,7 @@
 import type { ProfileSummary } from "@tinyclaw/core/contract";
 import type { ChatStatus } from "ai";
 import type { FileUIPart } from "ai";
-import { ArrowUpIcon, ImageIcon, SquareIcon, WifiOffIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, ImageIcon, WifiOffIcon, XIcon } from "lucide-react";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import {
   PromptInput,
@@ -153,7 +153,7 @@ export function ChatComposer(props: ChatComposerProps) {
               className="size-8 shrink-0 rounded-full bg-primary text-primary-foreground shadow-none transition-colors hover:bg-primary/90 disabled:opacity-50"
             >
               {canStop ? (
-                <SquareIcon className="size-3.5" />
+                <StopIcon />
               ) : (
                 <ArrowUpIcon className="size-3.5" />
               )}
@@ -264,7 +264,7 @@ export function ChatComposer(props: ChatComposerProps) {
                   className="size-8 shrink-0 rounded-full bg-primary text-primary-foreground shadow-none transition-colors hover:bg-primary/90 disabled:opacity-50"
                 >
                   {canStop ? (
-                    <SquareIcon className="size-3.5" />
+                    <StopIcon />
                   ) : (
                     <ArrowUpIcon className="size-3.5" />
                   )}
@@ -335,5 +335,14 @@ function ChatAttachmentButton({ disabled }: { disabled: boolean }) {
       />
       <TooltipContent side="top">Add image</TooltipContent>
     </Tooltip>
+  );
+}
+
+function StopIcon() {
+  return (
+    <span
+      className="inline-block size-2.5 shrink-0 rounded-[2px] bg-current"
+      aria-hidden
+    />
   );
 }

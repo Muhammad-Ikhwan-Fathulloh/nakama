@@ -1312,6 +1312,55 @@
       }
     },
     "/v1/tools/{toolId}": {
+      "get": {
+        "tags": [
+          "Tools"
+        ],
+        "summary": "Get a tool",
+        "operationId": "getTool",
+        "parameters": [
+          {
+            "name": "toolId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tool detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "Tools"
@@ -1331,6 +1380,57 @@
         "responses": {
           "204": {
             "description": "Tool deleted"
+          },
+          "500": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tools/{toolId}/source": {
+      "get": {
+        "tags": [
+          "Tools"
+        ],
+        "summary": "Get tool source code",
+        "operationId": "getToolSource",
+        "parameters": [
+          {
+            "name": "toolId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tool source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolSourceResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
           },
           "500": {
             "description": "Error",
@@ -2911,6 +3011,66 @@
           }
         }
       },
+      "ToolDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ToolSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "handlerConfig",
+              "createdAt",
+              "updatedAt"
+            ],
+            "properties": {
+              "handlerConfig": {},
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        ]
+      },
+      "ToolResponse": {
+        "type": "object",
+        "required": [
+          "tool"
+        ],
+        "properties": {
+          "tool": {
+            "$ref": "#/components/schemas/ToolDetail"
+          }
+        }
+      },
+      "ToolSourceResponse": {
+        "type": "object",
+        "required": [
+          "path",
+          "content",
+          "language"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "javascript",
+              "typescript"
+            ]
+          }
+        }
+      },
       "ProfileSummary": {
         "type": "object",
         "required": [
@@ -3058,7 +3218,7 @@
           "tools": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ToolSummary"
+              "$ref": "#/components/schemas/ToolDetail"
             }
           }
         }
@@ -3096,7 +3256,7 @@
         ],
         "properties": {
           "tool": {
-            "$ref": "#/components/schemas/ToolSummary"
+            "$ref": "#/components/schemas/ToolDetail"
           }
         }
       },

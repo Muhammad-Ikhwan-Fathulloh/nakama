@@ -19,6 +19,8 @@ import type {
   ListSessionsResponse,
   ModelsResponse,
   ProfileResponse,
+  ToolResponse,
+  ToolSourceResponse,
   ConfigureProviderResponse,
   ImageAttachment,
   SetModelResponse,
@@ -614,6 +616,14 @@ export class AgentService {
 
   async listTools(): Promise<ListToolsResponse> {
     return this.profileService.listTools();
+  }
+
+  async getTool(toolId: string): Promise<ToolResponse> {
+    return this.profileService.getTool(toolId);
+  }
+
+  async getToolSource(toolId: string): Promise<ToolSourceResponse> {
+    return this.profileService.getToolSource(toolId);
   }
 
   async createTool(request: CreateToolRequest) {

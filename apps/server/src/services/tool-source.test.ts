@@ -1,0 +1,82 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { BASH_TOOL_ID, BUILTIN_TOOL_IDS } from "@tinyclaw/core/tools/protected";
+import type { StoredToolRecord } from "@tinyclaw/db";
+import { readToolSource } from "./tool-source";
+
+describe("readToolSource", () => {
+  let toolsDir: string;
+  const previousToolsDir = process.env.TINYCLAW_TOOLS_DIR;
+
+  beforeEach(async () => {
+    toolsDir = path.join(import.meta.dir, ".test-tools");
+    await rm(toolsDir, { recursive: true, force: true });
+    await mkdir(toolsDir, { recursive: true });
+    process.env.TINYCLAW_TOOLS_DIR = toolsDir;
+  });
+
+  afterEach(async () => {
+    if (previousToolsDir === undefined) {
+      delete process.env.TINYCLAW_TOOLS_DIR;
+    } else {
+      process.env.TINYCLAW_TOOLS_DIR = previousToolsDir;
+    }
+
+    await rm(toolsDir, { recursive: true, force: true });
+  });
+
+  test("reads javascript tool modules from the tools directory", async () => {
+    await writeFile(
+      path.join(toolsDir, "echo.js"),
+      'export async function run() { return "ok"; }',
+      "utf8",
+    );
+
+    const source = await readToolSource({
+      id: "tool_echo",
+      name: "echo",
+      description: "Echo",
+      handlerType: "javascript",
+      handlerConfig: { modulePath: "echo.js" },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    expect(source.path).toBe("echo.js");
+    expect(source.language).toBe("javascript");
+    expect(source.content).toContain('return "ok"');
+  });
+
+  test("reads built-in write_file source", async () => {
+    const source = await readToolSource({
+      id: BUILTIN_TOOL_IDS.write_file,
+      name: "write_file",
+      description: "Write file",
+      handlerType: "builtin",
+      handlerConfig: { name: "write_file" },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    expect(source.path).toBe("packages/core/src/tools/builtin.ts");
+    expect(source.language).toBe("typescript");
+    expect(source.content).toContain("writeFileTool");
+  });
+
+  test("reads bash tool source", async () => {
+    const source = await readToolSource({
+      id: BASH_TOOL_ID,
+      name: "bash",
+      description: "Bash",
+      handlerType: "bash",
+      handlerConfig: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    expect(source.path).toBe("apps/server/src/tools/bash.ts");
+    expect(source.language).toBe("typescript");
+    expect(source.content.length).toBeGreaterThan(0);
+  });
+});

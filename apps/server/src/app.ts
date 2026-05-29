@@ -27,6 +27,8 @@ import {
   type InitUserContextResponse,
   type ListProfilesResponse,
   type ListToolsResponse,
+  type ToolResponse,
+  type ToolSourceResponse,
   type ListSessionsResponse,
   type ModelsResponse,
   type ProfileResponse,
@@ -246,7 +248,19 @@ export function createApp(options: ServerOptions) {
           return json(await agent.createTool(body), 201);
         }
 
+        const toolSourceMatch = url.pathname.match(/^\/v1\/tools\/([^/]+)\/source$/);
+
+        if (toolSourceMatch && request.method === "GET") {
+          const toolId = decodeURIComponent(toolSourceMatch[1]!);
+          return json<ToolSourceResponse>(await agent.getToolSource(toolId));
+        }
+
         const toolMatch = url.pathname.match(/^\/v1\/tools\/([^/]+)$/);
+
+        if (toolMatch && request.method === "GET") {
+          const toolId = decodeURIComponent(toolMatch[1]!);
+          return json<ToolResponse>(await agent.getTool(toolId));
+        }
 
         if (toolMatch && request.method === "DELETE") {
           const toolId = decodeURIComponent(toolMatch[1]!);

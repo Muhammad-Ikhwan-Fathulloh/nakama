@@ -380,6 +380,22 @@ export interface ToolSummary {
   handlerType: string;
 }
 
+export interface ToolDetail extends ToolSummary {
+  handlerConfig: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ToolResponse {
+  tool: ToolDetail;
+}
+
+export interface ToolSourceResponse {
+  path: string;
+  content: string;
+  language: "javascript" | "typescript";
+}
+
 export interface ListProfilesResponse {
   profiles: ProfileSummary[];
 }
@@ -409,7 +425,7 @@ export interface CreateToolRequest {
 }
 
 export interface ListToolsResponse {
-  tools: ToolSummary[];
+  tools: ToolDetail[];
 }
 
 export interface AssignToolRequest {

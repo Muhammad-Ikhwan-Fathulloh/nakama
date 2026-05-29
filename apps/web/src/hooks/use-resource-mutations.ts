@@ -35,8 +35,12 @@ export function useDeleteToolMutation() {
 
   return useMutation({
     mutationFn: (toolId: string) => client.deleteTool(toolId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.tools.all });
+    onSuccess: async (_data, toolId) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.tools.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tools.detail(toolId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tools.source(toolId) }),
+      ]);
     },
   });
 }
