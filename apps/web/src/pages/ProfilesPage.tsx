@@ -1,5 +1,5 @@
 import type { ProfileSummary } from "@tinyclaw/core/contract";
-import { PlusIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
+import { PlusIcon, RefreshCwIcon, SearchIcon, UsersRoundIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
@@ -39,6 +39,7 @@ import { formatError } from "@/lib/client";
 
 const defaultCreatePrompt = "You are a helpful assistant.";
 const sectionClass = "rounded-md border border-border bg-card";
+const profilesTagline = "Separate prompt, tools, and soul for each bot.";
 
 export function ProfilesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -542,38 +543,36 @@ export function ProfilesPage() {
 
           <div className="grid gap-0 lg:grid-cols-[240px_minmax(0,1fr)]">
             <aside className="hidden border-b border-border p-4 lg:block lg:border-r lg:border-b-0">
-              <div className="mb-4 flex items-start justify-between gap-2">
-                <div className="min-w-0">
+              <div className="mb-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
                   <h2 className="type-section-title">Profiles</h2>
-                  <p className="type-body mt-1 text-xs">
-                    Each profile has its own prompt, tools, and optional soul override.
-                  </p>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      disabled={busy || refreshing}
+                      aria-label="Refresh profiles"
+                      onClick={() => void refresh()}
+                    >
+                      {profilesRefreshing ? (
+                        <Spinner className="size-4" />
+                      ) : (
+                        <RefreshCwIcon className="size-4" aria-hidden />
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => setCreateOpen(true)}
+                    >
+                      <PlusIcon className="size-4" aria-hidden />
+                      New
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    disabled={busy || refreshing}
-                    aria-label="Refresh profiles"
-                    onClick={() => void refresh()}
-                  >
-                    {profilesRefreshing ? (
-                      <Spinner className="size-4" />
-                    ) : (
-                      <RefreshCwIcon className="size-4" aria-hidden />
-                    )}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => setCreateOpen(true)}
-                  >
-                    <PlusIcon className="size-4" aria-hidden />
-                    New
-                  </Button>
-                </div>
+                <p className="text-xs leading-relaxed text-muted-foreground">{profilesTagline}</p>
               </div>
 
               {profiles.length > 0 ? (
@@ -589,10 +588,10 @@ export function ProfilesPage() {
               ) : null}
 
               {profiles.length === 0 ? (
-                <EmptyMessage
-                  message="No profiles yet."
-                  actionLabel="Create one"
-                  onAction={() => setCreateOpen(true)}
+                <ProfilesEmptyState
+                  variant="compact"
+                  disabled={busy}
+                  onCreate={() => setCreateOpen(true)}
                 />
               ) : filteredProfiles.length === 0 ? (
                 <EmptyMessage
@@ -614,23 +613,24 @@ export function ProfilesPage() {
                 </div>
               )}
 
-              <div className="type-body mt-5 rounded-md border border-border bg-muted/40 p-3 text-xs dark:bg-muted/30">
-                <p className="font-medium text-foreground">How it works</p>
-                <p className="mt-2">
-                  Profiles isolate prompts and tool access. Edit settings here, then open Soul to
-                  customize voice and identity per profile.
-                </p>
-              </div>
+              {profiles.length > 0 ? (
+                <div className="type-body mt-5 rounded-md border border-border bg-muted/40 p-3 text-xs dark:bg-muted/30">
+                  <p className="font-medium text-foreground">How it works</p>
+                  <p className="mt-2">
+                    Profiles isolate prompts and tool access. Edit settings here, then open Soul to
+                    customize voice and identity per profile.
+                  </p>
+                </div>
+              ) : null}
             </aside>
 
             <div className="min-w-0 p-4 sm:p-5">
               {profiles.length === 0 ? (
-                <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
-                  <p>No profiles yet.</p>
-                  <Button type="button" size="sm" disabled={busy} onClick={() => setCreateOpen(true)}>
-                    Create profile
-                  </Button>
-                </div>
+                <ProfilesEmptyState
+                  variant="full"
+                  disabled={busy}
+                  onCreate={() => setCreateOpen(true)}
+                />
               ) : detailLoading && !detail ? (
                 <PageState message="Loading profile…" embedded />
               ) : !selectedId || !detail ? (
@@ -1216,6 +1216,99 @@ function ProfileSearch({
   );
 }
 
+const profileEmptySteps = [
+  {
+    title: "Create a profile",
+    description: "Give it a name, avatar, and system prompt.",
+  },
+  {
+    title: "Assign tools",
+    description: "Control which capabilities this bot can use.",
+  },
+  {
+    title: "Customize in Soul",
+    description: "Set voice and identity per profile when you are ready.",
+  },
+] as const;
+
+function ProfilesEmptyState({
+  variant,
+  disabled,
+  onCreate,
+}: {
+  variant: "compact" | "full";
+  disabled?: boolean;
+  onCreate: () => void;
+}) {
+  const isCompact = variant === "compact";
+
+  return (
+    <div
+      role="status"
+      aria-labelledby="profiles-empty-title"
+      className={cn(
+        "text-center",
+        isCompact
+          ? "flex flex-col items-center gap-3 rounded-md border border-dashed border-border/80 bg-muted/20 px-3 py-6"
+          : "flex min-h-[min(20rem,50dvh)] flex-col items-center justify-center gap-6 px-4 py-10 sm:px-6",
+      )}
+    >
+      <div
+        className={cn(
+          "flex shrink-0 items-center justify-center border border-border bg-muted/40",
+          isCompact ? "size-10 rounded-full" : "size-14 rounded-2xl",
+        )}
+      >
+        <UsersRoundIcon
+          className={cn("text-muted-foreground", isCompact ? "size-4" : "size-6")}
+          aria-hidden
+        />
+      </div>
+
+      <div className={cn("space-y-1.5", !isCompact && "max-w-sm")}>
+        <p
+          id="profiles-empty-title"
+          className={cn(
+            "font-medium text-foreground",
+            isCompact ? "text-sm" : "type-section-title",
+          )}
+        >
+          {isCompact ? "No profiles yet" : "Create your first profile"}
+        </p>
+        {!isCompact ? (
+          <p className="type-body text-sm text-muted-foreground">{profilesTagline}</p>
+        ) : null}
+      </div>
+
+      <Button type="button" size={isCompact ? "sm" : "default"} disabled={disabled} onClick={onCreate}>
+        <PlusIcon className="size-4" aria-hidden />
+        {isCompact ? "Create profile" : "New profile"}
+      </Button>
+
+      {!isCompact ? (
+        <ol className="w-full max-w-md space-y-3 border-t border-border pt-6 text-left">
+          {profileEmptySteps.map((step, index) => (
+            <li key={step.title} className="flex gap-3">
+              <span
+                className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium tabular-nums text-muted-foreground"
+                aria-hidden
+              >
+                {index + 1}
+              </span>
+              <div className="min-w-0 pt-0.5">
+                <p className="text-sm font-medium text-foreground">{step.title}</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {step.description}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </div>
+  );
+}
+
 function EmptyMessage({
   message,
   actionLabel,
@@ -1226,8 +1319,8 @@ function EmptyMessage({
   onAction?: () => void;
 }) {
   return (
-    <div className="py-8 text-center">
-      <p className="type-body text-xs">{message}</p>
+    <div className="rounded-md border border-dashed border-border/60 px-3 py-8 text-center" role="status">
+      <p className="type-body text-xs text-muted-foreground">{message}</p>
       {actionLabel && onAction ? (
         <Button type="button" variant="link" className="mt-2 h-auto p-0" onClick={onAction}>
           {actionLabel}

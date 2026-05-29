@@ -54,7 +54,7 @@ On first run with no API key, go to **Settings** in the sidebar to enter your pr
 For local development without Docker, run the Vite dev server separately:
 
 ```bash
-bun run dev:web   # http://127.0.0.1:5173 with API proxy to :4310
+bun run dev:web   # http://127.0.0.1:3000 with API proxy to :4310
 ```
 
 ### Run the CLI
