@@ -66,8 +66,8 @@ export function CreateTaskDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="task-title">
+          <div className="space-y-2.5">
+            <label className="block text-sm font-medium" htmlFor="task-title">
               Title
             </label>
             <Input
@@ -78,8 +78,8 @@ export function CreateTaskDialog({
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="task-description">
+          <div className="space-y-2.5">
+            <label className="block text-sm font-medium" htmlFor="task-description">
               Description
             </label>
             <Input
@@ -90,8 +90,8 @@ export function CreateTaskDialog({
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="task-prompt">
+          <div className="space-y-2.5">
+            <label className="block text-sm font-medium" htmlFor="task-prompt">
               Agent prompt
             </label>
             <Textarea
@@ -103,8 +103,8 @@ export function CreateTaskDialog({
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="task-profile">
+          <div className="space-y-2.5">
+            <label className="block text-sm font-medium" htmlFor="task-profile">
               Profile
             </label>
             <Select
