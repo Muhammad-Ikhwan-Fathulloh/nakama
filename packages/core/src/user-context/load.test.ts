@@ -2,8 +2,11 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { getUserContextPath } from "./paths";
-import { getUserContextStatus, loadUserContext } from "./load";
+import {
+  getUserContextPath,
+  getUserContextStatus,
+  loadUserContext,
+} from "./user-context";
 
 const originalConfigDir = process.env.TINYCLAW_CONFIG_DIR;
 let testConfigDir = "";

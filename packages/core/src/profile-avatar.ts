@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ImageAttachment } from "./contract";
 import { validateImageAttachments } from "./message-content";
-import { getProfileSoulDir } from "./soul/paths";
+import { getProfileSoulDir } from "./soul/resolve";
 
 const AVATAR_BASENAME = "avatar";
 

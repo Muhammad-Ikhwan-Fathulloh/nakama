@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ToolDefinition } from "../contract";
-import { partitionTools } from "./partition";
-import { webSearchTool } from "./web-search";
+import { partitionTools, webSearchTool } from "./web-search";
 
 const writeFileTool: ToolDefinition = {
   name: "write_file",

@@ -3,6 +3,8 @@ import {
   createAgentChatSession,
   type AgentChatSession,
   type AgentChatSessionOptions,
+  type AgentDependencies,
+  type AgentRequest,
 } from "./chat";
 import { createFallbackAutomation } from "./fallback";
 import { parseAutomationResponse } from "./parse";
@@ -10,8 +12,6 @@ import {
   buildAutomationSystemPrompt,
   buildAutomationUserPrompt,
 } from "./prompt";
-import type { AgentDependencies, AgentRequest } from "./types";
-
 export interface AgentHarness {
   createAutomationFromPrompt(
     request: AgentRequest,
@@ -73,6 +73,8 @@ export {
   getLastUserMessage,
   type AgentChatSession,
   type AgentChatSessionOptions,
+  type AgentDependencies,
+  type AgentRequest,
 } from "./chat";
 export { buildChatSystemPrompt } from "./chat-prompt";
 export {
@@ -97,4 +99,3 @@ export {
   type DraftTaskPromptInput,
 } from "./task-prompt";
 export { normalizeTaskPrompt } from "@tinyclaw/core";
-export type { AgentDependencies, AgentRequest } from "./types";

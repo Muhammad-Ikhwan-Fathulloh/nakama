@@ -1,5 +1,5 @@
 import type { ToolDefinition } from "@tinyclaw/core";
-import type { AgentRequest } from "./types";
+import type { AgentRequest } from "./chat";
 
 export function buildChatSystemPrompt(
   tools: ToolDefinition[],

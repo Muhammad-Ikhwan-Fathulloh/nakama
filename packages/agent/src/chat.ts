@@ -8,6 +8,16 @@ import type {
   ToolContext,
   ToolDefinition,
 } from "@tinyclaw/core";
+
+export interface AgentRequest {
+  prompt: string;
+  channel: "web" | "cli" | "telegram" | "automation";
+}
+
+export interface AgentDependencies {
+  provider?: ProviderClient;
+  tools?: ToolDefinition[];
+}
 import {
   getUserMessageText,
   messageContentHasImages,
@@ -26,7 +36,6 @@ import {
   buildAutomationUserPrompt,
 } from "./prompt";
 import { parseAutomationResponse } from "./parse";
-import type { AgentDependencies, AgentRequest } from "./types";
 import { executeToolCall, serializeToolResult } from "./tool-loop";
 
 const MAX_TOOL_ITERATIONS = 5;

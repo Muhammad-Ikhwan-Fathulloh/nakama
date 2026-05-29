@@ -1,6 +1,17 @@
-import { getGlobalSoulDir, getProfileSoulDir } from "./paths";
+import { join } from "node:path";
+import { getUserConfigDir } from "../user-config";
 import { getSoulStatus, loadSoulStack, toSoulStatus } from "./load";
 import type { LoadedSoulStack, SoulStatus } from "./types";
+
+/** Global soul stack: ~/.tinyclaw/SOUL.md, STYLE.md, etc. */
+export function getGlobalSoulDir(): string {
+  return getUserConfigDir();
+}
+
+/** Per-profile soul override: ~/.tinyclaw/profiles/{profileId}/ */
+export function getProfileSoulDir(profileId: string): string {
+  return join(getUserConfigDir(), "profiles", profileId);
+}
 
 async function firstLoadedSoulStack(
   directories: string[],
