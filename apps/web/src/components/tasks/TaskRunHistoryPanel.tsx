@@ -1,5 +1,5 @@
-import type { StoredTask } from "@tinyclaw/core/contract";
-import { MessageSquareIcon, XIcon } from "lucide-react";
+import type { ProfileSummary, StoredTask } from "@tinyclaw/core/contract";
+import { XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChatComposer } from "@/components/chat/chat-composer";
@@ -17,15 +17,19 @@ import {
 } from "@/lib/chat-stream";
 import { client, formatError } from "@/lib/client";
 import { queryKeys } from "@/lib/query-keys";
+import { NAV_ITEM_ICONS } from "@/lib/navigation";
 import { TASK_STATUS_BADGE } from "@/lib/task-board";
 import { cn } from "@/lib/utils";
 
+const ChatNavIcon = NAV_ITEM_ICONS.chat;
+
 interface TaskRunHistoryPanelProps {
   task: StoredTask;
+  profile?: ProfileSummary | null;
   onClose: () => void;
 }
 
-export function TaskRunHistoryPanel({ task, onClose }: TaskRunHistoryPanelProps) {
+export function TaskRunHistoryPanel({ task, profile, onClose }: TaskRunHistoryPanelProps) {
   const queryClient = useQueryClient();
   const { data, isLoading, isFetching, error: loadError } = useTaskMessagesQuery(task.id);
 
@@ -37,6 +41,7 @@ export function TaskRunHistoryPanel({ task, onClose }: TaskRunHistoryPanelProps)
 
   const streamAbortRef = useRef<AbortController | null>(null);
   const statusBadge = TASK_STATUS_BADGE[task.status];
+  const profileLabel = profile?.name ?? task.profileId;
 
   const waitingForMessages = isLoading || (isFetching && messages.length === 0);
 
@@ -134,7 +139,11 @@ export function TaskRunHistoryPanel({ task, onClose }: TaskRunHistoryPanelProps)
       <header className="flex items-start justify-between gap-3 border-b border-border/60 bg-muted/20 px-4 py-4 sm:px-5">
         <div className="min-w-0 space-y-2">
           <div className="flex items-center gap-2">
-            <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+            <ChatNavIcon
+              className="sidebar-nav-icon text-muted-foreground"
+              strokeWidth={1.75}
+              aria-hidden
+            />
             <p className="type-label">Run chat</p>
           </div>
           <h2 className="truncate text-sm font-semibold text-foreground">{task.title}</h2>
@@ -147,7 +156,7 @@ export function TaskRunHistoryPanel({ task, onClose }: TaskRunHistoryPanelProps)
             >
               {statusBadge.label}
             </span>
-            <span className="truncate text-xs text-muted-foreground">{task.profileId}</span>
+            <span className="truncate text-xs text-muted-foreground">{profileLabel}</span>
           </div>
         </div>
         <Button

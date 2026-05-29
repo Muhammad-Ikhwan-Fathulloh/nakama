@@ -353,7 +353,11 @@ export function TasksPage() {
       </div>
 
       {showHistoryPanel && focusedTask ? (
-        <TaskRunHistoryPanel task={focusedTask} onClose={() => setFocusedTaskId(null)} />
+        <TaskRunHistoryPanel
+          task={focusedTask}
+          profile={profileById.get(focusedTask.profileId) ?? null}
+          onClose={() => setFocusedTaskId(null)}
+        />
       ) : null}
 
       <CreateTaskDialog
