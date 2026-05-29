@@ -74,9 +74,14 @@ When the model needs a tool, the server sends **native tool definitions** to Ope
 - Trigger automations from chat using the `run_automation` tool
 - Draft automations from natural language (`/create` in CLI or Automations page)
 - Save, edit, enable/disable, and delete automations via API or web UI
-- Run automations manually or on a timezone-aware cron schedule
+- **Manual trigger** — run on demand from the web UI, API, or `run_automation` in chat
+- **Schedule trigger** — standard 5-field cron (e.g. `0 8 * * *`), with an optional per-automation timezone (otherwise your timezone from **Settings**)
+- **Scheduled runs** — while the server is running, an in-process scheduler registers cron jobs for every enabled automation with a `schedule` trigger; the job list reloads when automations change
 - Each run re-executes the stored prompt through the agent so it can choose tools dynamically
 - Run history is stored in SQLite
+- **Status** page (`/status` in the web UI) shows scheduler health (scheduled job count, active automation runs)
+
+Scheduled automations only fire while the TinyClaw server process is up (there is no separate background worker).
 
 ## Storage
 
@@ -89,7 +94,8 @@ Data is saved in **SQLite** (default: `data/sqlite/tinyclaw.sqlite`).
 | Profile ↔ tool links |
 | Session metadata |
 | Chat message history |
-| Automations (schema ready) |
+| Automations |
+| Automation run history |
 
 Migrations run automatically when the server starts.
 
@@ -112,7 +118,6 @@ Routes and schemas live in the OpenAPI spec:
 
 ## Not yet
 
-- Running automations on a schedule
 - User approval before Super Bot creates bots
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for system design details.
