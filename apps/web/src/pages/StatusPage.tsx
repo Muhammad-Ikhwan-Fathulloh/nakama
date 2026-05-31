@@ -1,40 +1,52 @@
 import {
   AlertTriangleIcon,
-  BotIcon,
   CheckCircle2Icon,
+  CircleGaugeIcon,
   ClockIcon,
+  KanbanIcon,
   RefreshCwIcon,
   ServerIcon,
+  WorkflowIcon,
   XCircleIcon,
+  type LucideIcon,
 } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
+import { Link } from "react-router-dom";
+import type { SystemStatusResponse } from "@tinyclaw/core/contract";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { useRefreshSystemStatus, useSystemStatusQuery } from "@/hooks/use-system-status";
 import { formatError } from "@/lib/client";
+import { PAGE_PATHS } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 
-const METRICS_GRID_CLASS =
-  "grid min-w-0 gap-2 sm:gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(100%,13.5rem),1fr))]";
+const sectionClass = "rounded-md border border-border bg-card";
+const iconTileClass =
+  "flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40";
+const iconClass = "size-5 text-foreground";
+
+type StatusTone = "ok" | "warn" | "bad";
+type ValueKind = "ok" | "warn" | "bad" | "active" | "neutral";
 
 export function StatusPage() {
   const { data: status, error, isLoading, isFetching } = useSystemStatusQuery();
   const refreshSystemStatus = useRefreshSystemStatus();
-
-  const initialLoading = isLoading && !status;
   const refreshing = isFetching && !isLoading;
   const errorMessage = error ? formatError(error) : null;
-  const overall = useMemo(() => deriveOverallHealth(status ?? null), [status]);
 
   return (
     <div className="min-w-0 space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
-        <div className="space-y-1.5">
-          <h1 className="type-page-title">Status</h1>
-          <p className="type-body max-w-2xl text-muted-foreground">
-            Live health for the TinyClaw server and in-process automation scheduler.
-          </p>
+        <div className="flex min-w-0 items-center gap-3">
+          <div className={iconTileClass}>
+            <CircleGaugeIcon className={iconClass} aria-hidden />
+          </div>
+          <div className="min-w-0 space-y-0.5">
+            <h1 className="type-page-title">Status</h1>
+            <p className="type-body max-w-2xl">
+              Live health for the TinyClaw server and in-process workers.
+            </p>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -47,180 +59,90 @@ export function StatusPage() {
             aria-label="Refresh system status"
             onClick={() => void refreshSystemStatus()}
           >
-            {refreshing ? <Spinner className="size-4" /> : <RefreshCwIcon className="size-4" aria-hidden />}
+            {refreshing ? (
+              <Spinner className="size-4" />
+            ) : (
+              <RefreshCwIcon className="size-4" aria-hidden />
+            )}
             Refresh
           </Button>
         </div>
       </header>
 
       {errorMessage ? (
-        <Card className="border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-950/20">
-          <CardContent className="flex flex-wrap items-start gap-3 p-4">
-            <AlertTriangleIcon
-              className="mt-0.5 size-5 shrink-0 text-red-700 dark:text-red-300"
-              aria-hidden
-            />
-            <div className="min-w-0 flex-1 space-y-2">
-              <p className="text-sm font-medium text-red-900 dark:text-red-100">
-                Could not load system status
-              </p>
-              <p className="text-sm text-red-800 dark:text-red-200">{errorMessage}</p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="border-red-300 bg-white text-red-900 hover:bg-red-100 dark:border-red-800 dark:bg-red-950/40 dark:text-red-100 dark:hover:bg-red-950/60"
-                onClick={() => void refreshSystemStatus()}
-              >
-                Try again
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        <div
+          className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3"
+          role="alert"
+        >
+          <p className="min-w-0 flex-1 text-sm text-destructive">
+            Could not load system status: {errorMessage}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="shrink-0 border-destructive/30 bg-background text-destructive hover:bg-destructive/10"
+            onClick={() => void refreshSystemStatus()}
+          >
+            Try again
+          </Button>
+        </div>
       ) : null}
 
-      {initialLoading && !status ? (
-        <StatusPageSkeleton />
+      {isLoading && !status ? (
+        <StatusSkeleton />
       ) : status ? (
-        <>
-          <Card
-            className={cn(
-              "border",
-              overall.tone === "ok"
-                ? "border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/40 dark:bg-emerald-950/20"
-                : overall.tone === "warn"
-                  ? "border-amber-200 bg-amber-50/60 dark:border-amber-900/40 dark:bg-amber-950/20"
-                  : "border-red-200 bg-red-50/60 dark:border-red-900/40 dark:bg-red-950/20",
-            )}
-          >
-            <CardContent className="flex flex-wrap items-center gap-4 p-5">
-              <OverallStatusIcon tone={overall.tone} />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-foreground">{overall.title}</p>
-                <p className="mt-1 text-sm text-muted-foreground">{overall.description}</p>
-              </div>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <ClockIcon className="size-3.5 shrink-0" aria-hidden />
-                <span title={formatDate(status.checkedAt)}>
-                  Updated {formatRelativeTime(status.checkedAt)}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-
-          <div className={METRICS_GRID_CLASS}>
-            <MetricTile
-              label="Scheduled jobs"
-              value={status.automationWorker.scheduledJobs}
-              hint="Enabled cron automations"
-            />
-            <MetricTile
-              label="Automation runs"
-              value={status.automationWorker.activeRuns}
-              hint="Currently executing"
-              highlight={status.automationWorker.activeRuns > 0}
-            />
-            <MetricTile
-              label="Task runs"
-              value={status.taskWorker.activeRuns}
-              hint="Agent swarm in progress"
-              highlight={status.taskWorker.activeRuns > 0}
-            />
-          </div>
-
-          <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <ServiceStatusCard
-              icon={ServerIcon}
-              title="Server"
-              subtitle={status.server.ok ? "Online and responding" : "Not reachable"}
-              healthy={status.server.ok}
-              statusLabel={status.server.ok ? "Healthy" : "Offline"}
-              rows={[
-                {
-                  label: "API version",
-                  value: String(status.server.apiVersion),
-                },
-                {
-                  label: "LLM provider",
-                  value: status.server.providerConfigured ? "Configured" : "Not configured",
-                  tone: status.server.providerConfigured ? "ok" : "warn",
-                },
-              ]}
-            />
-
-            <ServiceStatusCard
-              icon={BotIcon}
-              title="Automation worker"
-              subtitle={
-                status.automationWorker.running
-                  ? "Scheduler is active"
-                  : "Scheduler is not running"
-              }
-              healthy={status.automationWorker.ok}
-              statusLabel={status.automationWorker.running ? "Running" : "Stopped"}
-              rows={[
-                {
-                  label: "Scheduler",
-                  value: status.automationWorker.running ? "Active" : "Inactive",
-                  tone: status.automationWorker.running ? "ok" : "bad",
-                },
-                {
-                  label: "Scheduled jobs",
-                  value: String(status.automationWorker.scheduledJobs),
-                },
-                {
-                  label: "Active runs",
-                  value: String(status.automationWorker.activeRuns),
-                },
-                {
-                  label: "LLM provider",
-                  value: status.automationWorker.providerConfigured
-                    ? "Ready for runs"
-                    : "Required for execution",
-                  tone: status.automationWorker.providerConfigured ? "ok" : "warn",
-                },
-              ]}
-            />
-
-            <ServiceStatusCard
-              icon={BotIcon}
-              title="Task worker"
-              subtitle={
-                status.taskWorker.activeRuns > 0
-                  ? "Agents are executing swarm tasks"
-                  : "No active task runs"
-              }
-              healthy={status.taskWorker.ok}
-              statusLabel={status.taskWorker.activeRuns > 0 ? "Running" : "Idle"}
-              rows={[
-                {
-                  label: "Active runs",
-                  value: String(status.taskWorker.activeRuns),
-                  tone: status.taskWorker.activeRuns > 0 ? "ok" : undefined,
-                },
-                {
-                  label: "LLM provider",
-                  value: status.taskWorker.providerConfigured
-                    ? "Ready for runs"
-                    : "Required for execution",
-                  tone: status.taskWorker.providerConfigured ? "ok" : "warn",
-                },
-              ]}
-            />
-          </div>
-        </>
+        <StatusDashboard status={status} />
       ) : null}
     </div>
+  );
+}
+
+function StatusDashboard({ status }: { status: SystemStatusResponse }) {
+  const summary = useMemo(() => deriveSummary(status), [status]);
+  const services = useMemo(() => buildServiceColumns(status), [status]);
+  const { automationWorker, taskWorker } = status;
+
+  return (
+    <section className={cn(sectionClass, "min-w-0 overflow-hidden")}>
+      <SummaryStrip status={status} summary={summary} />
+
+      <div className="grid grid-cols-1 divide-y divide-border border-b border-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        <QuickStat
+          label="Scheduled jobs"
+          value={automationWorker.scheduledJobs}
+          hint="Enabled cron automations"
+        />
+        <QuickStat
+          label="Automation runs"
+          value={automationWorker.activeRuns}
+          hint="Currently executing"
+          active={automationWorker.activeRuns > 0}
+        />
+        <QuickStat
+          label="Task runs"
+          value={taskWorker.activeRuns}
+          hint="Agent swarm in progress"
+          active={taskWorker.activeRuns > 0}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 divide-y divide-border lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+        {services.map((service) => (
+          <ServiceColumn key={service.title} {...service} />
+        ))}
+      </div>
+    </section>
   );
 }
 
 function LiveIndicator({ active }: { active: boolean }) {
   return (
     <div
-      className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground"
+      className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 text-xs font-medium text-muted-foreground"
       aria-live="polite"
     >
-      <span className="relative flex size-2">
+      <span className="relative flex size-2 shrink-0">
         {active ? (
           <>
             <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60 motion-reduce:animate-none" />
@@ -230,16 +152,160 @@ function LiveIndicator({ active }: { active: boolean }) {
           <span className="relative inline-flex size-2 rounded-full bg-muted-foreground/40" />
         )}
       </span>
-      {active ? "Live monitoring" : "Waiting for data"}
+      <span className={active ? "text-emerald-800 dark:text-emerald-200" : undefined}>
+        {active ? "Live" : "Waiting"}
+      </span>
     </div>
   );
 }
 
-function OverallStatusIcon({ tone }: { tone: StatusTone }) {
+function SummaryStrip({
+  status,
+  summary,
+}: {
+  status: SystemStatusResponse;
+  summary: ReturnType<typeof deriveSummary>;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-3 border-b border-border border-l-4 px-5 py-4 sm:gap-4",
+        summary.tone === "ok" && "border-l-emerald-500 bg-emerald-50/40 dark:bg-emerald-950/10",
+        summary.tone === "warn" && "border-l-amber-500 bg-amber-50/40 dark:bg-amber-950/10",
+        summary.tone === "bad" && "border-l-destructive bg-destructive/5",
+      )}
+    >
+      <div className={cn(iconTileClass, "bg-background/70")}>
+        <ToneIcon tone={summary.tone} className="size-5" />
+      </div>
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <p className="text-sm font-semibold text-foreground">{summary.title}</p>
+        <p className="text-sm text-muted-foreground">{summary.description}</p>
+        {summary.tone === "warn" ? (
+          <Link
+            to={PAGE_PATHS.settings}
+            className="inline-block text-sm font-medium text-primary underline-offset-4 hover:underline"
+          >
+            Open Settings
+          </Link>
+        ) : null}
+      </div>
+      <div className="flex items-center gap-1.5 text-xs leading-none text-muted-foreground">
+        <ClockIcon className="size-3.5 shrink-0 opacity-70" aria-hidden />
+        <span title={formatDate(status.checkedAt)}>Updated {formatRelativeTime(status.checkedAt)}</span>
+      </div>
+    </div>
+  );
+}
+
+function QuickStat({
+  label,
+  value,
+  hint,
+  active = false,
+}: {
+  label: string;
+  value: number;
+  hint: string;
+  active?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "space-y-1 px-5 py-4",
+        active && "bg-primary/5 dark:bg-primary/10",
+      )}
+    >
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p
+        className={cn(
+          "text-2xl font-semibold tabular-nums tracking-tight text-foreground",
+          active && "text-primary",
+        )}
+      >
+        {value}
+      </p>
+      <p className="text-xs text-muted-foreground">{hint}</p>
+    </div>
+  );
+}
+
+function ServiceColumn({
+  icon: Icon,
+  title,
+  ok,
+  rows,
+}: {
+  icon: LucideIcon;
+  title: string;
+  ok: boolean;
+  rows: Array<{ label: string; value: string; kind?: ValueKind }>;
+}) {
+  return (
+    <div className="min-w-0 p-5">
+      <div className="mb-5 flex items-center gap-3">
+        <span
+          className={cn(
+            iconTileClass,
+            !ok && "border-destructive/30 bg-destructive/5",
+          )}
+        >
+          <Icon className={iconClass} aria-hidden />
+        </span>
+        <div className="min-w-0">
+          <h2 className="type-section-title leading-tight">{title}</h2>
+          <p
+            className={cn(
+              "mt-1 text-xs font-medium leading-none",
+              ok ? "text-emerald-700 dark:text-emerald-300" : "text-destructive",
+            )}
+          >
+            {ok ? "Healthy" : "Needs attention"}
+          </p>
+        </div>
+      </div>
+
+      <dl className="space-y-3">
+        {rows.map((row) => (
+          <div key={row.label} className="flex items-center justify-between gap-4 text-sm">
+            <dt className="text-muted-foreground">{row.label}</dt>
+            <dd className="min-w-0 text-right">
+              <StatusValue kind={row.kind ?? "neutral"}>{row.value}</StatusValue>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function StatusValue({ kind, children }: { kind: ValueKind; children: ReactNode }) {
+  const dotClass =
+    kind === "ok"
+      ? "bg-emerald-500"
+      : kind === "warn"
+        ? "bg-amber-500"
+        : kind === "bad"
+          ? "bg-red-500"
+          : kind === "active"
+            ? "bg-primary"
+            : null;
+
+  return (
+    <span className="inline-flex items-center justify-end gap-1.5 text-sm font-medium tabular-nums text-foreground">
+      {dotClass ? (
+        <span className={cn("size-2 shrink-0 rounded-full", dotClass)} aria-hidden />
+      ) : null}
+      {children}
+    </span>
+  );
+}
+
+function ToneIcon({ tone, className }: { tone: StatusTone; className?: string }) {
   if (tone === "ok") {
     return (
       <CheckCircle2Icon
-        className="size-8 shrink-0 text-emerald-600 dark:text-emerald-400"
+        className={cn("text-emerald-600 dark:text-emerald-400", className)}
         aria-hidden
       />
     );
@@ -248,209 +314,123 @@ function OverallStatusIcon({ tone }: { tone: StatusTone }) {
   if (tone === "warn") {
     return (
       <AlertTriangleIcon
-        className="size-8 shrink-0 text-amber-600 dark:text-amber-400"
+        className={cn("text-amber-600 dark:text-amber-400", className)}
         aria-hidden
       />
     );
   }
 
-  return <XCircleIcon className="size-8 shrink-0 text-red-600 dark:text-red-400" aria-hidden />;
+  return <XCircleIcon className={cn("text-destructive", className)} aria-hidden />;
 }
 
-function MetricTile({
-  label,
-  value,
-  hint,
-  highlight = false,
-}: {
-  label: string;
-  value: string | number;
-  hint: string;
-  highlight?: boolean;
-}) {
+function StatusSkeleton() {
   return (
-    <Card className={cn("min-w-0", highlight && "border-primary/30 bg-primary/5")}>
-      <CardContent className="space-y-1 p-3 sm:p-4">
-        <p className="truncate text-xs text-muted-foreground">{label}</p>
-        <p className="truncate text-xl font-semibold tabular-nums tracking-tight text-foreground sm:text-2xl">
-          {value}
-        </p>
-        <p className="line-clamp-2 text-[11px] leading-snug text-muted-foreground sm:text-xs">
-          {hint}
-        </p>
-      </CardContent>
-    </Card>
+    <div
+      className="h-80 animate-pulse rounded-md border border-border bg-muted/40"
+      aria-busy="true"
+      aria-label="Loading system status"
+    />
   );
 }
 
-function ServiceStatusCard({
-  icon: Icon,
-  title,
-  subtitle,
-  healthy,
-  statusLabel,
-  rows,
-}: {
-  icon: typeof ServerIcon;
-  title: string;
-  subtitle: string;
-  healthy: boolean;
-  statusLabel: string;
-  rows: Array<{ label: string; value: string; tone?: StatusTone }>;
-}) {
-  return (
-    <Card className="min-w-0">
-      <CardHeader className="gap-4 p-4 sm:p-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40">
-              <Icon className="size-5 text-foreground" aria-hidden />
-            </div>
-            <div className="min-w-0">
-              <CardTitle className="text-base sm:text-lg">{title}</CardTitle>
-              <CardDescription className="mt-1 line-clamp-2">{subtitle}</CardDescription>
-            </div>
-          </div>
-          <StatusBadge
-            label={statusLabel}
-            tone={healthy ? "ok" : "bad"}
-            className="shrink-0 self-start sm:self-center"
-          />
-        </div>
-      </CardHeader>
+function buildServiceColumns(status: SystemStatusResponse) {
+  const { server, automationWorker, taskWorker } = status;
 
-      <CardContent className="space-y-4 px-4 pb-4 sm:px-6 sm:pb-6">
-        <dl className="space-y-3">
-          {rows.map((row) => (
-            <div
-              key={row.label}
-              className="flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4"
-            >
-              <dt className="shrink-0 text-muted-foreground">{row.label}</dt>
-              <dd className="min-w-0 sm:text-right">
-                {row.tone ? (
-                  <StatusBadge label={row.value} tone={row.tone} className="max-w-full" />
-                ) : (
-                  <span className="font-medium tabular-nums text-foreground">{row.value}</span>
-                )}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </CardContent>
-    </Card>
-  );
+  return [
+    {
+      icon: ServerIcon,
+      title: "Server",
+      ok: server.ok,
+      rows: [
+        {
+          label: "Reachability",
+          value: server.ok ? "Online" : "Offline",
+          kind: server.ok ? ("ok" as const) : ("bad" as const),
+        },
+        { label: "API version", value: String(server.apiVersion) },
+        {
+          label: "LLM provider",
+          value: server.providerConfigured ? "Configured" : "Not configured",
+          kind: server.providerConfigured ? ("ok" as const) : ("warn" as const),
+        },
+      ],
+    },
+    {
+      icon: WorkflowIcon,
+      title: "Automation worker",
+      ok: automationWorker.ok,
+      rows: [
+        {
+          label: "Scheduler",
+          value: automationWorker.running ? "Running" : "Stopped",
+          kind: automationWorker.running ? ("ok" as const) : ("bad" as const),
+        },
+        { label: "Scheduled jobs", value: String(automationWorker.scheduledJobs) },
+        {
+          label: "Active runs",
+          value: String(automationWorker.activeRuns),
+          kind: automationWorker.activeRuns > 0 ? ("active" as const) : ("neutral" as const),
+        },
+        {
+          label: "LLM provider",
+          value: automationWorker.providerConfigured ? "Ready" : "Not configured",
+          kind: automationWorker.providerConfigured ? ("ok" as const) : ("warn" as const),
+        },
+      ],
+    },
+    {
+      icon: KanbanIcon,
+      title: "Task worker",
+      ok: taskWorker.ok,
+      rows: [
+        {
+          label: "Active runs",
+          value: String(taskWorker.activeRuns),
+          kind: taskWorker.activeRuns > 0 ? ("active" as const) : ("neutral" as const),
+        },
+        {
+          label: "LLM provider",
+          value: taskWorker.providerConfigured ? "Ready" : "Not configured",
+          kind: taskWorker.providerConfigured ? ("ok" as const) : ("warn" as const),
+        },
+      ],
+    },
+  ];
 }
 
-function StatusBadge({
-  label,
-  tone,
-  className,
-}: {
-  label: string;
-  tone: StatusTone | "neutral";
-  className?: string;
-}) {
-  const toneClass =
-    tone === "ok"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-200"
-      : tone === "bad"
-        ? "border-red-200 bg-red-50 text-red-800 dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-200"
-        : tone === "warn"
-          ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200"
-          : "border-border bg-muted text-muted-foreground";
-
-  const Icon =
-    tone === "ok"
-      ? CheckCircle2Icon
-      : tone === "bad"
-        ? XCircleIcon
-        : tone === "warn"
-          ? AlertTriangleIcon
-          : null;
-
-  return (
-    <span
-      className={cn(
-        "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium",
-        toneClass,
-        className,
-      )}
-    >
-      {Icon ? <Icon className="size-3.5 shrink-0" aria-hidden /> : null}
-      <span className="truncate">{label}</span>
-    </span>
-  );
-}
-
-function StatusPageSkeleton() {
-  return (
-    <div className="space-y-4" aria-busy="true" aria-label="Loading system status">
-      <div className="h-24 animate-pulse rounded-md border border-border bg-muted/40" />
-      <div className={METRICS_GRID_CLASS}>
-        {Array.from({ length: 3 }).map((_, index) => (
-          <div
-            key={index}
-            className="h-24 animate-pulse rounded-md border border-border bg-muted/40 sm:h-28"
-          />
-        ))}
-      </div>
-      <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {Array.from({ length: 3 }).map((_, index) => (
-          <div
-            key={index}
-            className="h-72 animate-pulse rounded-md border border-border bg-muted/40"
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-type StatusTone = "ok" | "bad" | "warn";
-
-function deriveOverallHealth(status: import("@tinyclaw/core/contract").SystemStatusResponse | null): {
+function deriveSummary(status: SystemStatusResponse): {
   tone: StatusTone;
   title: string;
   description: string;
 } {
-  if (!status) {
+  if (!status.server.ok) {
     return {
       tone: "bad",
-      title: "Status unavailable",
-      description: "Unable to determine system health.",
+      title: "Server offline",
+      description: "Restart TinyClaw and check your connection.",
     };
   }
 
-  const serverOk = status.server.ok;
-  const workerOk = status.automationWorker.ok;
-  const providerReady =
-    status.server.providerConfigured && status.automationWorker.providerConfigured;
-
-  if (serverOk && workerOk && providerReady) {
+  if (!status.automationWorker.ok) {
     return {
-      tone: "ok",
-      title: "All systems operational",
-      description: "Server and automation worker are healthy with a configured LLM provider.",
+      tone: "bad",
+      title: "Automation worker stopped",
+      description: "Restart the server to resume scheduled runs.",
     };
   }
 
-  if (!serverOk || !workerOk) {
+  if (!status.server.providerConfigured || !status.automationWorker.providerConfigured) {
     return {
-      tone: "bad",
-      title: "Action required",
-      description: !serverOk
-        ? "The server is offline or unreachable. Restart TinyClaw and check your connection."
-        : "The automation scheduler is stopped. Restart the TinyClaw server to resume scheduled runs.",
+      tone: "warn",
+      title: "Running with warnings",
+      description: "Configure an LLM provider before chat or automation runs can succeed.",
     };
   }
 
   return {
-    tone: "warn",
-    title: "Running with warnings",
-    description: status.server.providerConfigured
-      ? "Automations may fail until an LLM provider is configured in Settings."
-      : "Configure an LLM provider in Settings before chat or automation runs can succeed.",
+    tone: "ok",
+    title: "All systems operational",
+    description: "Server and workers are healthy.",
   };
 }
 
