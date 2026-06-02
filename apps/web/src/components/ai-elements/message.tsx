@@ -79,10 +79,10 @@ const MessageResponseBody = memo(
 MessageResponseBody.displayName = "MessageResponseBody";
 
 export function MessageResponse(props: MessageResponseProps) {
-  const { theme } = useTheme();
+  const { resolvedTheme } = useTheme();
   const shikiTheme =
     props.shikiTheme ??
-    (theme === "dark"
+    (resolvedTheme === "dark"
       ? (["github-dark", "github-dark"] as const)
       : (["github-light", "github-light"] as const));
 

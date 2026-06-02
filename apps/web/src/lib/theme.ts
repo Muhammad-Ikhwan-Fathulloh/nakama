@@ -1,9 +1,11 @@
-export type Theme = "light" | "dark";
+export type Theme = "light" | "dark" | "system";
+
+export type ResolvedTheme = "light" | "dark";
 
 export const THEME_STORAGE_KEY = "tinyclaw-theme";
 
-export function isTheme(value: string | null): value is Theme {
-  return value === "light" || value === "dark";
+export function isTheme(value: string | null | undefined): value is Theme {
+  return value === "light" || value === "dark" || value === "system";
 }
 
 export function getStoredTheme(): Theme | null {
@@ -15,11 +17,28 @@ export function getStoredTheme(): Theme | null {
   }
 }
 
+export function getSystemTheme(): ResolvedTheme {
+  if (typeof window === "undefined") {
+    return "dark";
+  }
+
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+export function resolveTheme(theme: Theme): ResolvedTheme {
+  if (theme === "system") {
+    return getSystemTheme();
+  }
+
+  return theme;
+}
+
 export function getInitialTheme(): Theme {
   return getStoredTheme() ?? "dark";
 }
 
 export function applyTheme(theme: Theme): void {
-  document.documentElement.classList.toggle("dark", theme === "dark");
-  document.documentElement.style.colorScheme = theme;
+  const resolved = resolveTheme(theme);
+  document.documentElement.classList.toggle("dark", resolved === "dark");
+  document.documentElement.style.colorScheme = resolved;
 }

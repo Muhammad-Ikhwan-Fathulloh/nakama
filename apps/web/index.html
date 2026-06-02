@@ -8,9 +8,16 @@
     <script>
       (function () {
         var stored = localStorage.getItem("tinyclaw-theme");
-        var theme = stored === "light" || stored === "dark" ? stored : "dark";
-        document.documentElement.classList.toggle("dark", theme === "dark");
-        document.documentElement.style.colorScheme = theme;
+        var resolved = "dark";
+        if (stored === "light" || stored === "dark") {
+          resolved = stored;
+        } else if (stored === "system") {
+          resolved = window.matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light";
+        }
+        document.documentElement.classList.toggle("dark", resolved === "dark");
+        document.documentElement.style.colorScheme = resolved;
       })();
     </script>
   </head>

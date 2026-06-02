@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
-import { ChevronRightIcon, UserIcon } from "lucide-react";
 import { TinyClawApiError } from "@tinyclaw/core/api-error";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -27,7 +27,8 @@ function formatUserContextError(error: unknown): string {
   return formatError(error);
 }
 
-export function UserContextCard() {
+/** USER.md editor row for Settings — render inside a parent card. */
+export function UserContextSettings() {
   const {
     data: status,
     isLoading,
@@ -39,6 +40,7 @@ export function UserContextCard() {
 
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
+  const [editorOpen, setEditorOpen] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -56,6 +58,14 @@ export function UserContextCard() {
     }
   }, [status]);
 
+  function handleEditorOpenChange(open: boolean) {
+    setEditorOpen(open);
+    if (!open) {
+      setContent(savedContent);
+      setFormError(null);
+    }
+  }
+
   async function handleInit() {
     setFormError(null);
     setHint(null);
@@ -63,6 +73,9 @@ export function UserContextCard() {
     try {
       const result = await initMutation.mutateAsync();
       await refetch();
+      if (result.created) {
+        setEditorOpen(true);
+      }
       setHint(result.created ? "Template created." : "USER.md already exists.");
     } catch (error) {
       setFormError(formatUserContextError(error));
@@ -76,147 +89,116 @@ export function UserContextCard() {
     try {
       await writeMutation.mutateAsync(content);
       setSavedContent(content);
-      setHint("Saved. Start a new chat session to apply changes.");
+      setHint("Saved. Start a new chat to apply.");
+      setEditorOpen(false);
       await refetch();
     } catch (error) {
       setFormError(formatUserContextError(error));
     }
   }
 
+  const statusLine =
+    hint ??
+    (formError && !editorOpen ? formError : null) ??
+    (loadError ? formatError(loadError) : null);
+
   return (
-    <Card className="w-full">
-      <CardHeader className="pb-2">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="space-y-1">
-            <CardTitle className="flex items-center gap-2">
-              <UserIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-              About you (USER.md)
-            </CardTitle>
-            <CardDescription>
-              Stable context about you — name, preferences, projects. Separate from Soul, which
-              defines who the agent is.
-            </CardDescription>
-          </div>
-          <span
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs font-medium",
-              isActive
-                ? "border-emerald-800/60 bg-emerald-950/40 text-emerald-200"
-                : "border-border bg-muted text-muted-foreground",
-            )}
-          >
-            {isActive ? "Configured" : "Not set"}
-          </span>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {isLoading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner />
-            Loading…
-          </div>
-        ) : loadError ? (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3">
-            <p className="text-sm text-destructive" role="alert">
-              {formatError(loadError)}
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div className="min-w-0 space-y-0.5">
+          <p className="text-sm font-medium text-foreground">About you</p>
+          {statusLine ? (
+            <p
+              className={cn(
+                "text-xs",
+                formError || loadError ? "text-destructive" : "text-emerald-200",
+              )}
+              role={formError || loadError ? "alert" : "status"}
+            >
+              {statusLine}
             </p>
-          </div>
-        ) : (
-          <>
-            {isActive && status?.path ? (
-              <p className="text-xs text-muted-foreground break-all">{status.path}</p>
-            ) : null}
+          ) : (
+            <p className="text-xs text-muted-foreground">USER.md — who you are</p>
+          )}
+        </div>
 
-            {!isActive ? (
-              <div className="rounded-md border border-dashed border-border/80 bg-muted/20 px-4 py-4">
-                <p className="text-sm text-muted-foreground">
-                  No USER.md yet. Add a short file so the agent knows who you are — your name,
-                  preferences, and current projects.
-                </p>
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <Button type="button" size="sm" disabled={busy} onClick={() => void handleInit()}>
-                    {initMutation.isPending ? (
-                      <>
-                        <Spinner className="mr-2" />
-                        Initializing…
-                      </>
-                    ) : (
-                      "Initialize template"
-                    )}
-                  </Button>
-                </div>
-                <p className="mt-3 text-xs text-muted-foreground">
-                  Or create USER.md manually in your TinyClaw config directory.
-                </p>
-              </div>
+        {isLoading ? (
+          <Spinner />
+        ) : loadError ? null : !isActive ? (
+          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void handleInit()}>
+            {initMutation.isPending ? (
+              <>
+                <Spinner className="mr-2" />
+                Creating…
+              </>
             ) : (
-              <details className="group text-sm">
-                <summary className="flex cursor-pointer list-none items-center gap-2 py-1 font-medium text-foreground transition-colors marker:content-none hover:text-primary [&::-webkit-details-marker]:hidden">
-                  <ChevronRightIcon
-                    className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90 group-open:text-foreground"
-                    aria-hidden="true"
-                  />
-                  <span>View and edit content</span>
-                  {isDirty ? (
-                    <span className="text-xs font-normal text-muted-foreground">Unsaved changes</span>
-                  ) : (
-                    <span className="text-xs font-normal text-muted-foreground group-open:hidden">
-                      Expand to edit USER.md
-                    </span>
-                  )}
-                </summary>
-                <div className="mt-3 space-y-4">
-                  <Textarea
-                    value={content}
-                    disabled={busy}
-                    rows={14}
-                    className="font-mono text-sm"
-                    aria-label="USER.md content"
-                    onChange={(event) => {
-                      setContent(event.target.value);
-                      setHint(null);
-                      if (formError) {
-                        setFormError(null);
-                      }
-                    }}
-                  />
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      disabled={busy || !isDirty}
-                      onClick={() => void handleSave()}
-                    >
-                      {writeMutation.isPending ? (
-                        <>
-                          <Spinner className="mr-2" />
-                          Saving…
-                        </>
-                      ) : (
-                        "Save"
-                      )}
-                    </Button>
-                    {isDirty ? (
-                      <span className="text-xs text-muted-foreground">Unsaved changes</span>
-                    ) : null}
-                  </div>
-                </div>
-              </details>
+              "Create"
             )}
-
-            {hint ? (
-              <p className="text-xs text-emerald-200" role="status">
-                {hint}
-              </p>
-            ) : null}
-            {formError ? (
-              <p className="text-sm text-destructive" role="alert">
-                {formError}
-              </p>
-            ) : null}
-          </>
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => setEditorOpen(true)}
+          >
+            {isDirty ? "Edit · unsaved" : "Edit"}
+          </Button>
         )}
-      </CardContent>
-    </Card>
+      </div>
+
+      <Dialog open={editorOpen} onOpenChange={handleEditorOpenChange}>
+        <DialogContent className="flex max-h-[min(90dvh,40rem)] w-[calc(100%-1.5rem)] flex-col sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>About you (USER.md)</DialogTitle>
+            <DialogDescription>
+              Name, preferences, and projects. Start a new chat after saving to apply changes.
+            </DialogDescription>
+          </DialogHeader>
+
+          <Textarea
+            value={content}
+            disabled={busy}
+            className="min-h-[min(50dvh,20rem)] flex-1 font-mono text-sm"
+            aria-label="USER.md content"
+            onChange={(event) => {
+              setContent(event.target.value);
+              setHint(null);
+              if (formError) {
+                setFormError(null);
+              }
+            }}
+          />
+
+          {formError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {formError}
+            </p>
+          ) : null}
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => handleEditorOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="button" disabled={busy || !isDirty} onClick={() => void handleSave()}>
+              {writeMutation.isPending ? (
+                <>
+                  <Spinner className="mr-2" />
+                  Saving…
+                </>
+              ) : (
+                "Save"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

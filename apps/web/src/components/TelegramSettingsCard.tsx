@@ -1,15 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { UpdateTelegramSettingsRequest } from "@tinyclaw/core/contract";
 import { CopyIcon, EyeIcon, EyeOffIcon, RefreshCwIcon } from "lucide-react";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   InputGroup,
   InputGroupAddon,
@@ -31,6 +25,7 @@ import {
   useTelegramSettings,
 } from "@/hooks/use-telegram-settings";
 import { formatError } from "@/lib/client";
+import { cn } from "@/lib/utils";
 
 interface TelegramSettingsCardProps {
   embedded?: boolean;
@@ -38,9 +33,29 @@ interface TelegramSettingsCardProps {
   onSaveSuccess?: () => void;
 }
 
+function SettingsRow({
+  label,
+  description,
+  children,
+}: {
+  label: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div className="min-w-0 space-y-0.5">
+        <p className="text-sm font-medium text-foreground">{label}</p>
+        {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 export function TelegramSettingsCard({
   embedded = false,
-  submitLabel = "Save Telegram settings",
+  submitLabel = "Save",
   onSaveSuccess,
 }: TelegramSettingsCardProps) {
   const { data: settings, isLoading, error: loadError } = useTelegramSettings();
@@ -50,7 +65,6 @@ export function TelegramSettingsCard({
 
   const [botToken, setBotToken] = useState("");
   const [showBotToken, setShowBotToken] = useState(false);
-  const [allowedUserIds, setAllowedUserIds] = useState("");
   const [profileId, setProfileId] = useState("profile_default");
   const [hint, setHint] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -60,22 +74,36 @@ export function TelegramSettingsCard({
       return;
     }
 
-    setAllowedUserIds(settings.allowedUserIds.join(", "));
     setProfileId(settings.profileId);
     setBotToken("");
   }, [settings]);
 
   const configured = settings?.configured === true;
+  const isPaired = (settings?.pairedUserIds.length ?? 0) > 0;
+  const pairingCode = settings?.handshakeCode ?? null;
   const canSave = configured || botToken.trim().length > 0;
 
+  const statusLine =
+    hint ?? (formError ? formError : null) ?? (loadError ? formatError(loadError) : null);
+
+  const headerSubtitle = !configured
+    ? "Step 1: paste a bot token from @BotFather"
+    : isPaired
+      ? "Your Telegram is connected to TinyClaw"
+      : pairingCode
+        ? "Step 2: send your pairing code to the bot in Telegram"
+        : "Step 2: generate a pairing code and send it to your bot";
+
+  const statusBadge = !configured ? "Not set up" : isPaired ? "Connected" : "Awaiting link";
+
   async function copyHandshakeCode() {
-    if (!settings?.handshakeCode) {
+    if (!pairingCode) {
       return;
     }
 
     try {
-      await navigator.clipboard.writeText(settings.handshakeCode);
-      setHint("Pairing code copied.");
+      await navigator.clipboard.writeText(pairingCode);
+      setHint("Code copied — paste it in Telegram.");
     } catch {
       setHint("Copy the code manually.");
     }
@@ -93,19 +121,15 @@ export function TelegramSettingsCard({
       request.botToken = botToken.trim();
     }
 
-    if (allowedUserIds.trim()) {
-      request.allowedUserIds = allowedUserIds.trim();
-    }
-
     saveMutation.mutate(request, {
       onSuccess: (saved) => {
         setBotToken("");
-        if (saved.handshakeCode) {
-          setHint("Saved. Send this pairing code to your bot once.");
+        if (saved.handshakeCode && saved.pairedUserIds.length === 0) {
+          setHint("Saved. Send the pairing code to your bot.");
         } else if (saved.pairedUserIds.length > 0) {
-          setHint(`Saved · ${saved.pairedUserIds.length} linked chat(s)`);
-        } else {
           setHint("Saved.");
+        } else {
+          setHint("Saved. Get a pairing code if you still need to link.");
         }
         onSaveSuccess?.();
       },
@@ -121,7 +145,7 @@ export function TelegramSettingsCard({
 
     regenerateMutation.mutate(undefined, {
       onSuccess: () => {
-        setHint("New pairing code generated. Send it to your bot once.");
+        setHint("New code ready — send it to your bot in Telegram.");
       },
       onError: (err) => {
         setFormError(formatError(err));
@@ -130,122 +154,173 @@ export function TelegramSettingsCard({
   }
 
   if (isLoading) {
+    const skeleton = (
+      <div className="h-16 animate-pulse rounded-lg bg-muted px-4" aria-hidden="true" />
+    );
+
     if (embedded) {
-      return (
-        <div className="h-24 animate-pulse rounded-lg bg-muted" aria-hidden="true" />
-      );
+      return skeleton;
     }
 
     return (
       <Card className="w-full">
-        <CardHeader>
-          <CardTitle>Telegram</CardTitle>
-          <CardDescription>Bridge settings for the Telegram bot.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="h-24 animate-pulse rounded-lg bg-muted" aria-hidden="true" />
-        </CardContent>
+        <CardContent className="py-3">{skeleton}</CardContent>
       </Card>
     );
   }
 
   const content = (
-    <div className={embedded ? "space-y-4" : "max-w-md space-y-4"}>
-        {loadError ? (
-          <p className="text-sm text-destructive" role="alert">
-            {formatError(loadError)}
-          </p>
-        ) : null}
-
-        <div className="space-y-4">
-          <label htmlFor="telegram-bot-token" className="block text-sm font-medium text-foreground">
-            Bot token
-          </label>
-          <InputGroup>
-            <InputGroupInput
-              id="telegram-bot-token"
-              type={showBotToken ? "text" : "password"}
-              autoComplete="off"
-              placeholder={
-                configured && settings?.botTokenMasked
-                  ? `Configured (${settings.botTokenMasked})`
-                  : "From @BotFather"
-              }
-              value={botToken}
-              disabled={saveMutation.isPending}
-              onChange={(event) => {
-                setBotToken(event.target.value);
-                setHint(null);
-                if (formError) {
-                  setFormError(null);
-                }
-              }}
-            />
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton
-                type="button"
-                size="icon-xs"
-                aria-label={showBotToken ? "Hide token" : "Show token"}
-                onClick={() => setShowBotToken((current) => !current)}
-              >
-                {showBotToken ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}
-              </InputGroupButton>
-            </InputGroupAddon>
-          </InputGroup>
+    <div className="divide-y divide-border">
+      {!embedded ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="min-w-0 space-y-0.5">
+            <p className="text-sm font-medium text-foreground">Telegram</p>
+            <p className="text-xs text-muted-foreground">{headerSubtitle}</p>
+          </div>
+          <span
+            className={cn(
+              "shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-medium",
+              isPaired
+                ? "border-emerald-800/60 bg-emerald-950/40 text-emerald-200"
+                : configured
+                  ? "border-amber-800/50 bg-amber-950/30 text-amber-100"
+                  : "border-border bg-muted text-muted-foreground",
+            )}
+          >
+            {statusBadge}
+          </span>
         </div>
+      ) : null}
 
-        {configured && settings?.handshakeCode ? (
-          <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
-            <p className="text-sm font-medium text-foreground">Pairing code</p>
-            <p className="text-xs text-muted-foreground">
-              Message your bot on Telegram and paste this code once to link your account.
-            </p>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 rounded bg-background px-2 py-1.5 text-sm tracking-widest">
-                {settings.handshakeCode}
-              </code>
-              <Button type="button" size="icon-sm" variant="outline" onClick={() => void copyHandshakeCode()}>
-                <CopyIcon className="size-4" />
-                <span className="sr-only">Copy pairing code</span>
-              </Button>
-            </div>
-          </div>
-        ) : null}
-
-        {configured ? (
-          <div className="flex flex-wrap gap-2">
-            <Button
+      <SettingsRow label="Bot token" description="From @BotFather">
+        <InputGroup className="w-full min-w-[12rem] sm:w-[16rem]">
+          <InputGroupInput
+            id="telegram-bot-token"
+            type={showBotToken ? "text" : "password"}
+            autoComplete="off"
+            placeholder={
+              configured && settings?.botTokenMasked
+                ? `Saved (${settings.botTokenMasked})`
+                : "Paste token"
+            }
+            value={botToken}
+            disabled={saveMutation.isPending}
+            onChange={(event) => {
+              setBotToken(event.target.value);
+              setHint(null);
+              if (formError) {
+                setFormError(null);
+              }
+            }}
+          />
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton
               type="button"
-              size="sm"
-              variant="outline"
-              disabled={regenerateMutation.isPending || saveMutation.isPending}
-              onClick={handleRegenerateHandshake}
+              size="icon-xs"
+              aria-label={showBotToken ? "Hide token" : "Show token"}
+              onClick={() => setShowBotToken((current) => !current)}
             >
-              {regenerateMutation.isPending ? (
-                <>
-                  <Spinner className="mr-2" />
-                  Generating…
-                </>
-              ) : (
-                <>
-                  <RefreshCwIcon className="mr-2 size-4" />
-                  New pairing code
-                </>
-              )}
-            </Button>
-          </div>
-        ) : null}
+              {showBotToken ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
+      </SettingsRow>
 
-        {settings && settings.pairedUserIds.length > 0 ? (
-          <p className="text-xs text-muted-foreground">
-            Linked Telegram user IDs: {settings.pairedUserIds.join(", ")}
-          </p>
-        ) : null}
+      {configured ? (
+        <div
+          className={cn(
+            "divide-y divide-border",
+            !isPaired && "bg-muted/20",
+          )}
+        >
+          <SettingsRow
+            label="Pairing code"
+            description={
+              isPaired
+                ? "Telegram is linked. Generate a new code to link another account."
+                : pairingCode
+                  ? "Send this code to your bot in Telegram to finish linking."
+                  : "Generate a code, then message it to your bot once."
+            }
+          >
+            {isPaired ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={regenerateMutation.isPending || saveMutation.isPending}
+                onClick={handleRegenerateHandshake}
+              >
+                {regenerateMutation.isPending ? (
+                  <Spinner />
+                ) : (
+                  <>
+                    <RefreshCwIcon className="size-3.5" aria-hidden="true" />
+                    New code
+                  </>
+                )}
+              </Button>
+            ) : pairingCode ? (
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <code className="rounded-md border border-border bg-background px-2.5 py-1 text-sm tracking-widest">
+                  {pairingCode}
+                </code>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void copyHandshakeCode()}
+                >
+                  <CopyIcon className="size-4" />
+                  Copy
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={regenerateMutation.isPending || saveMutation.isPending}
+                  onClick={handleRegenerateHandshake}
+                >
+                  {regenerateMutation.isPending ? (
+                    <Spinner />
+                  ) : (
+                    <>
+                      <RefreshCwIcon className="size-3.5" aria-hidden="true" />
+                      New code
+                    </>
+                  )}
+                </Button>
+              </div>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                disabled={regenerateMutation.isPending || saveMutation.isPending}
+                onClick={handleRegenerateHandshake}
+              >
+                {regenerateMutation.isPending ? (
+                  <>
+                    <Spinner className="mr-2" />
+                    Generating…
+                  </>
+                ) : (
+                  "Generate pairing code"
+                )}
+              </Button>
+            )}
+          </SettingsRow>
 
-        <div className="space-y-4">
-          <label htmlFor="telegram-profile" className="block text-sm font-medium text-foreground">
-            Bot profile
-          </label>
+          {!isPaired && pairingCode ? (
+            <ol className="list-decimal space-y-1 px-4 py-3 pl-8 text-xs text-muted-foreground">
+              <li>Open your bot in the Telegram app</li>
+              <li>Paste or type the pairing code as a message</li>
+            </ol>
+          ) : null}
+        </div>
+      ) : null}
+
+      {configured ? (
+        <SettingsRow label="Reply as" description="Which agent answers on Telegram">
           <Select
             value={profileId}
             disabled={saveMutation.isPending || profiles.length === 0}
@@ -256,10 +331,10 @@ export function TelegramSettingsCard({
               }
             }}
           >
-            <SelectTrigger id="telegram-profile" className="w-full">
-              <SelectValue placeholder="Select profile" />
+            <SelectTrigger id="telegram-profile" className="w-[11rem] sm:w-[13rem]">
+              <SelectValue placeholder="Profile" />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent align="end">
               {profiles.map((profile) => (
                 <SelectItem key={profile.id} value={profile.id}>
                   <span className="flex items-center gap-2">
@@ -270,45 +345,27 @@ export function TelegramSettingsCard({
               ))}
             </SelectContent>
           </Select>
-        </div>
+        </SettingsRow>
+      ) : null}
 
-        <details className="text-sm">
-          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-            Advanced: pre-approve user IDs (optional)
-          </summary>
-          <div className="mt-2 space-y-2">
-            <InputGroup>
-              <InputGroupInput
-                id="telegram-allowed-users"
-                type="text"
-                autoComplete="off"
-                placeholder="123456789"
-                value={allowedUserIds}
-                disabled={saveMutation.isPending}
-                onChange={(event) => {
-                  setAllowedUserIds(event.target.value);
-                  setHint(null);
-                }}
-              />
-            </InputGroup>
-            <p className="text-xs text-muted-foreground">
-              Skip pairing for these numeric IDs (comma-separated). Most users can leave this empty.
-            </p>
-          </div>
-        </details>
-
-        {formError ? (
-          <p className="text-sm text-destructive" role="alert">
-            {formError}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        {statusLine ? (
+          <p
+            className={cn(
+              "min-w-0 text-xs",
+              formError || loadError ? "text-destructive" : "text-emerald-200",
+            )}
+            role={formError || loadError ? "alert" : "status"}
+          >
+            {statusLine}
           </p>
-        ) : null}
-
-        {hint ? (
-          <p className="text-xs text-emerald-200" role="status">
-            {hint}
+        ) : configured ? (
+          <p className="min-w-0 text-xs text-muted-foreground">
+            Restart the Telegram bot after you change the token.
           </p>
-        ) : null}
-
+        ) : (
+          <span className="text-xs text-muted-foreground" />
+        )}
         <Button
           type="button"
           size="sm"
@@ -324,28 +381,22 @@ export function TelegramSettingsCard({
             submitLabel
           )}
         </Button>
+      </div>
     </div>
   );
 
   if (embedded) {
-    return content;
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-muted-foreground">{headerSubtitle}</p>
+        {content}
+      </div>
+    );
   }
 
   return (
     <Card className="w-full">
-      <CardHeader>
-        <CardTitle>Telegram</CardTitle>
-        <CardDescription>
-          Link your Telegram account with a one-time pairing code. Saved to{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-xs">
-            ~/.tinyclaw/telegram/config.ini
-          </code>
-          . Restart{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-xs">bun run dev:telegram</code>{" "}
-          after saving.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>{content}</CardContent>
+      <CardContent className="p-0">{content}</CardContent>
     </Card>
   );
 }

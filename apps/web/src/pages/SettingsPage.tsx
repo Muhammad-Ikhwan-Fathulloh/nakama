@@ -3,15 +3,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
-  ChevronRightIcon,
   EyeIcon,
   EyeOffIcon,
   KeyRoundIcon,
 } from "lucide-react";
-import { ProviderOptionCards, ProviderSetupForm } from "@/components/ProviderSetupForm";
+import { ProviderSelect, ProviderSetupForm } from "@/components/ProviderSetupForm";
 import { TelegramSettingsCard } from "@/components/TelegramSettingsCard";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { UserContextCard } from "@/components/UserContextCard";
+import { UserContextSettings } from "@/components/UserContextCard";
 import { TimezoneSelect } from "@/components/TimezoneSelect";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,7 +33,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { FormField } from "@/components/ui/form-field";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/context/app-context";
 import { useModelsQuery } from "@/hooks/use-app-queries";
 import {
@@ -281,129 +282,128 @@ export function SettingsPage() {
   return (
     <div className="space-y-8 max-w-3xl mx-auto">
       <Card className="w-full">
-        <CardHeader className="pb-2">
-          <CardTitle>Appearance</CardTitle>
-          <CardDescription>Interface color theme.</CardDescription>
-        </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3">
+          <div className="space-y-0.5">
+            <p className="text-sm font-medium text-foreground">Appearance</p>
+            <p className="text-xs text-muted-foreground">Color theme</p>
+          </div>
           <ThemeToggle />
         </CardContent>
       </Card>
 
       <Card className="w-full">
-        <CardHeader className="pb-2">
-          <CardTitle>Timezone</CardTitle>
-          <CardDescription>Default for scheduled automations.</CardDescription>
-        </CardHeader>
-        <CardContent className="max-w-md space-y-2">
-          <div className="flex items-center gap-2">
-            <TimezoneSelect
-              id="timezone"
-              className="min-w-0 flex-1"
-              value={timezone}
-              disabled={saveTimezoneMutation.isPending}
-              emptyLabel="Select timezone"
-              onValueChange={(nextTimezone) => {
-                if (nextTimezone) {
-                  setTimezone(nextTimezone);
-                  setTimezoneHint(null);
-                }
-              }}
-            />
-            <Button
-              type="button"
-              size="sm"
-              disabled={saveTimezoneMutation.isPending || !timezone.trim()}
-              onClick={handleSaveTimezone}
-            >
-              {saveTimezoneMutation.isPending ? (
-                <>
-                  <Spinner className="mr-2" />
-                  Saving…
-                </>
+        <CardContent className="divide-y divide-border p-0">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <div className="min-w-0 space-y-0.5">
+              <p className="text-sm font-medium text-foreground">Timezone</p>
+              {timezoneHint ? (
+                <p className="text-xs text-emerald-200" role="status">
+                  {timezoneHint}
+                </p>
               ) : (
-                "Save"
+                <p className="text-xs text-muted-foreground">For scheduled automations</p>
               )}
-            </Button>
+            </div>
+            <div className="flex items-center gap-2">
+              <TimezoneSelect
+                id="timezone"
+                className="w-[11rem] min-w-0 sm:w-[13rem]"
+                value={timezone}
+                disabled={saveTimezoneMutation.isPending}
+                emptyLabel="Select timezone"
+                onValueChange={(nextTimezone) => {
+                  if (nextTimezone) {
+                    setTimezone(nextTimezone);
+                    setTimezoneHint(null);
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                size="sm"
+                disabled={saveTimezoneMutation.isPending || !timezone.trim()}
+                onClick={handleSaveTimezone}
+              >
+                {saveTimezoneMutation.isPending ? (
+                  <>
+                    <Spinner className="mr-2" />
+                    Saving…
+                  </>
+                ) : (
+                  "Save"
+                )}
+              </Button>
+            </div>
           </div>
-          {timezoneHint ? (
-            <p className="text-xs text-emerald-200" role="status">
-              {timezoneHint}
-            </p>
-          ) : null}
+
+          <UserContextSettings />
         </CardContent>
       </Card>
 
       <Card className="w-full">
-        <CardHeader className="pb-2">
-          <CardTitle>Extended thinking</CardTitle>
-          <CardDescription>
-            Show the model&apos;s reasoning while it works. Uses more tokens when enabled.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="max-w-md space-y-4">
-          <label className="flex cursor-pointer items-center gap-3">
-            <input
-              type="checkbox"
-              className="size-4 rounded border-border"
-              checked={thinkingEnabled}
-              disabled={saveThinkingMutation.isPending}
-              onChange={(event) => {
-                setThinkingEnabled(event.target.checked);
-                setThinkingHint(null);
-              }}
-            />
-            <span className="text-sm text-foreground">Enable thinking in chat</span>
-          </label>
-
-          <div className="space-y-2">
-            <p className="text-xs text-muted-foreground">Reasoning depth</p>
-            <Select
-              value={thinkingEffort}
-              disabled={!thinkingEnabled || saveThinkingMutation.isPending}
-              onValueChange={(value) => {
-                if (isThinkingEffort(value)) {
-                  setThinkingEffort(value);
+        <CardContent className="p-0">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <div className="min-w-0 space-y-0.5">
+              <p className="text-sm font-medium text-foreground">Extended thinking</p>
+              {thinkingHint ? (
+                <p className="text-xs text-emerald-200" role="status">
+                  {thinkingHint}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Show reasoning in chat · uses more tokens
+                </p>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <Switch
+                id="thinking-enabled"
+                checked={thinkingEnabled}
+                disabled={saveThinkingMutation.isPending}
+                aria-label="Enable thinking in chat"
+                onCheckedChange={(enabled) => {
+                  setThinkingEnabled(enabled);
                   setThinkingHint(null);
-                }
-              }}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="low">Low</SelectItem>
-                <SelectItem value="medium">Medium</SelectItem>
-                <SelectItem value="high">High</SelectItem>
-              </SelectContent>
-            </Select>
+                }}
+              />
+              <Select
+                value={thinkingEffort}
+                disabled={!thinkingEnabled || saveThinkingMutation.isPending}
+                onValueChange={(value) => {
+                  if (isThinkingEffort(value)) {
+                    setThinkingEffort(value);
+                    setThinkingHint(null);
+                  }
+                }}
+              >
+                <SelectTrigger className="w-[7.25rem]" aria-label="Reasoning depth">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  <SelectItem value="low">Low</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                size="sm"
+                disabled={saveThinkingMutation.isPending}
+                onClick={handleSaveThinking}
+              >
+                {saveThinkingMutation.isPending ? (
+                  <>
+                    <Spinner className="mr-2" />
+                    Saving…
+                  </>
+                ) : (
+                  "Save"
+                )}
+              </Button>
+            </div>
           </div>
-
-          <Button
-            type="button"
-            size="sm"
-            disabled={saveThinkingMutation.isPending}
-            onClick={handleSaveThinking}
-          >
-            {saveThinkingMutation.isPending ? (
-              <>
-                <Spinner className="mr-2" />
-                Saving…
-              </>
-            ) : (
-              "Save"
-            )}
-          </Button>
-
-          {thinkingHint ? (
-            <p className="text-xs text-emerald-200" role="status">
-              {thinkingHint}
-            </p>
-          ) : null}
         </CardContent>
       </Card>
-
-      <UserContextCard />
 
       <TelegramSettingsCard />
 
@@ -473,39 +473,28 @@ export function SettingsPage() {
         </div>
       ) : null}
 
-      <details className="group border-t border-border pt-8">
-        <summary className="flex cursor-pointer list-none items-center gap-2 py-1 font-medium text-foreground transition-colors marker:content-none hover:text-primary [&::-webkit-details-marker]:hidden">
-          <ChevronRightIcon
-            className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90 group-open:text-foreground"
-            aria-hidden="true"
-          />
-          <span>Advanced</span>
-          <span className="text-sm font-normal text-muted-foreground group-open:hidden">
-            Show storage and provider options
-          </span>
-        </summary>
-        <div className="mt-6 space-y-8">
-          <p className="max-w-2xl leading-relaxed">
-            Credentials are saved to{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-xs">~/.tinyclaw/config.ini</code>{" "}
-            on the server. In Docker, this persists on the config volume.
-          </p>
-
-          {isConfigured && models?.provider ? (
-            <div className="border-t border-border pt-8">
-              <SwitchProviderSection
-                currentProvider={models.provider as SelectedProvider}
-                catalog={catalog}
-                configureProvider={configureProvider}
-                onSuccess={(message) => {
-                  setSuccessMessage(message);
-                  setFormError(null);
-                }}
-              />
-            </div>
-          ) : null}
-        </div>
-      </details>
+      {isConfigured && models?.provider ? (
+        <Card className="w-full">
+          <CardHeader className="pb-1">
+            <CardTitle>Switch provider</CardTitle>
+            <CardDescription>
+              Currently on {formatProviderLabel(models.provider)}. Chat history resets when you
+              change providers.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 pt-2">
+            <SwitchProviderSection
+              currentProvider={models.provider as SelectedProvider}
+              catalog={catalog}
+              configureProvider={configureProvider}
+              onSuccess={(message) => {
+                setSuccessMessage(message);
+                setFormError(null);
+              }}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }
@@ -633,36 +622,60 @@ function SwitchProviderSection({
   };
 
   return (
-    <form className="space-y-6" onSubmit={(event) => void handleSubmit(event)}>
-      <div className="space-y-2">
-        <h3 className="text-sm font-medium text-foreground">Switch provider</h3>
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          Move from {formatProviderLabel(currentProvider)} to{" "}
-          {formatProviderLabel(targetProvider)} with a new API key and default model. Chat history
-          resets when you switch providers.
-        </p>
+    <form className="space-y-4" onSubmit={(event) => void handleSubmit(event)}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <ProviderSelect
+          id="switch-provider"
+          selectedProvider={targetProvider}
+          excludeProvider={currentProvider}
+          density="compact"
+          disabled={busy}
+          onSelect={(provider) => {
+            setTargetProvider(provider);
+            setLocalError(null);
+            if (provider !== "openrouter") {
+              setCustomModel("");
+              setCustomModelError(null);
+            }
+            if (apiKeyTouched && apiKey.trim()) {
+              setApiKeyError(validateApiKeyForProvider(apiKey));
+            }
+          }}
+        />
+
+        <FormField id="switch-model" label="Model" density="compact">
+          <Select
+            value={selectedModel}
+            disabled={busy || targetModels.length === 0}
+            onValueChange={(value) => setSelectedModel(value != null ? String(value) : "")}
+          >
+            <SelectTrigger id="switch-model" className="w-full">
+              <SelectValue placeholder="Select a model" />
+            </SelectTrigger>
+            <SelectContent>
+              {targetModels.map((model) => (
+                <SelectItem key={model.id} value={model.id}>
+                  {model.name}
+                  {model.default ? " (default)" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </FormField>
       </div>
 
-      <ProviderOptionCards
-        selectedProvider={targetProvider}
-        disabled={busy}
-        onSelect={(provider) => {
-          setTargetProvider(provider);
-          setLocalError(null);
-          if (provider !== "openrouter") {
-            setCustomModel("");
-            setCustomModelError(null);
-          }
-          if (apiKeyTouched && apiKey.trim()) {
-            setApiKeyError(validateApiKeyForProvider(apiKey));
-          }
-        }}
-      />
-
-      <div className="space-y-2">
-        <label htmlFor="switch-api-key" className="text-sm font-medium text-foreground">
-          API key
-        </label>
+      <FormField
+        id="switch-api-key"
+        label="API key"
+        density="compact"
+        footer={
+          apiKeyError ? (
+            <p id="switch-api-key-error" className="text-sm text-destructive" role="alert">
+              {apiKeyError}
+            </p>
+          ) : null
+        }
+      >
         <InputGroup>
           <InputGroupInput
             id="switch-api-key"
@@ -672,7 +685,7 @@ function SwitchProviderSection({
             value={apiKey}
             disabled={busy}
             aria-invalid={apiKeyError != null}
-            aria-describedby={apiKeyError ? "switch-api-key-error" : "switch-api-key-hint"}
+            aria-describedby={apiKeyError ? "switch-api-key-error" : undefined}
             onBlur={() => {
               setApiKeyTouched(true);
               if (!apiKey.trim()) {
@@ -702,45 +715,29 @@ function SwitchProviderSection({
             </InputGroupButton>
           </InputGroupAddon>
         </InputGroup>
-        {apiKeyError ? (
-          <p id="switch-api-key-error" className="text-sm text-destructive" role="alert">
-            {apiKeyError}
-          </p>
-        ) : (
-          <p id="switch-api-key-hint" className="text-xs text-muted-foreground">
-            Paste the API key from your {formatProviderLabel(targetProvider)} dashboard.
-          </p>
-        )}
-      </div>
-
-      <div className="space-y-2">
-        <label htmlFor="switch-model" className="text-sm font-medium text-foreground">
-          Model
-        </label>
-        <Select
-          value={selectedModel}
-          disabled={busy || targetModels.length === 0}
-          onValueChange={(value) => setSelectedModel(value != null ? String(value) : "")}
-        >
-          <SelectTrigger id="switch-model" className="w-full sm:max-w-sm">
-            <SelectValue placeholder="Select a model" />
-          </SelectTrigger>
-          <SelectContent>
-            {targetModels.map((model) => (
-              <SelectItem key={model.id} value={model.id}>
-                {model.name}
-                {model.default ? " (default)" : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      </FormField>
 
       {targetProvider === "openrouter" ? (
-        <div className="space-y-2">
-          <label htmlFor="switch-custom-model" className="text-sm font-medium text-foreground">
-            Custom model ID <span className="font-normal text-muted-foreground">(optional)</span>
-          </label>
+        <FormField
+          id="switch-custom-model"
+          density="compact"
+          label={
+            <>
+              Custom model ID <span className="font-normal text-muted-foreground">(optional)</span>
+            </>
+          }
+          footer={
+            customModelError ? (
+              <p id="switch-custom-model-error" className="text-sm text-destructive" role="alert">
+                {customModelError}
+              </p>
+            ) : (
+              <p id="switch-custom-model-hint" className="text-xs text-muted-foreground">
+                Overrides the catalog selection when set.
+              </p>
+            )
+          }
+        >
           <InputGroup>
             <InputGroupInput
               id="switch-custom-model"
@@ -760,16 +757,7 @@ function SwitchProviderSection({
               }}
             />
           </InputGroup>
-          {customModelError ? (
-            <p id="switch-custom-model-error" className="text-sm text-destructive" role="alert">
-              {customModelError}
-            </p>
-          ) : (
-            <p id="switch-custom-model-hint" className="text-xs text-muted-foreground">
-              Overrides the catalog selection when set.
-            </p>
-          )}
-        </div>
+        </FormField>
       ) : null}
 
       {localError ? (
@@ -778,18 +766,16 @@ function SwitchProviderSection({
         </p>
       ) : null}
 
-      <div className="pt-1">
-        <Button type="submit" size="sm" disabled={busy || !apiKey.trim()}>
-          {busy ? (
-            <>
-              <Spinner className="mr-2" />
-              Switching…
-            </>
-          ) : (
-            `Switch to ${formatProviderLabel(targetProvider)}`
-          )}
-        </Button>
-      </div>
+      <Button type="submit" size="sm" disabled={busy || !apiKey.trim()}>
+        {busy ? (
+          <>
+            <Spinner className="mr-2" />
+            Switching…
+          </>
+        ) : (
+          `Switch to ${formatProviderLabel(targetProvider)}`
+        )}
+      </Button>
     </form>
   );
 }
@@ -841,10 +827,22 @@ function ConnectedProviderSection({
 
   return (
     <>
-      <div className="space-y-3">
-        <label htmlFor="connected-model" className="block text-sm font-medium text-foreground">
-          Model
-        </label>
+      <FormField
+        id="connected-model"
+        label="Model"
+        footer={
+          <>
+            <p className="text-xs text-muted-foreground">
+              Chat history resets when the model changes.
+            </p>
+            {formError && !replaceKeyOpen ? (
+              <p className="text-sm text-destructive" role="alert">
+                {formError}
+              </p>
+            ) : null}
+          </>
+        }
+      >
         <div className="flex flex-wrap items-center gap-2">
           <Select
             value={modelDraft}
@@ -886,15 +884,7 @@ function ConnectedProviderSection({
             </span>
           ) : null}
         </div>
-        <p className="text-xs text-muted-foreground">
-          Chat history resets when the model changes.
-        </p>
-        {formError && !replaceKeyOpen ? (
-          <p className="text-sm text-destructive" role="alert">
-            {formError}
-          </p>
-        ) : null}
-      </div>
+      </FormField>
 
       <div className="border-t border-border pt-4">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">

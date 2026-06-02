@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { FormField } from "@/components/ui/form-field";
 import { Spinner } from "@/components/ui/spinner";
 import { useProviderSetupForm } from "@/hooks/use-provider-setup-form";
 import {
@@ -21,7 +22,6 @@ import {
   type SelectedProvider,
   PROVIDER_OPTIONS,
 } from "@/lib/models";
-import { cn } from "@/lib/utils";
 
 interface ProviderSetupFormProps {
   submitLabel?: string;
@@ -47,16 +47,30 @@ export function ProviderSetupForm({
         </div>
       ) : null}
 
-      <ProviderOptionCards
+      <ProviderSelect
         selectedProvider={form.selectedProvider}
         disabled={form.busy}
         onSelect={form.handleProviderSelect}
       />
 
-      <div className="space-y-3">
-        <label htmlFor="api-key" className="block text-sm font-medium text-foreground">
-          API key
-        </label>
+      <FormField
+        id="api-key"
+        label="API key"
+        footer={
+          form.apiKeyError ? (
+            <p id="api-key-error" className="text-sm text-destructive" role="alert">
+              {form.apiKeyError}
+            </p>
+          ) : (
+            <p id="api-key-hint" className="text-xs text-muted-foreground">
+              Paste the API key from your{" "}
+              {PROVIDER_OPTIONS.find((option) => option.id === form.selectedProvider)?.label ??
+                "provider"}{" "}
+              dashboard.
+            </p>
+          )
+        }
+      >
         <InputGroup>
           <InputGroupInput
             id="api-key"
@@ -80,21 +94,9 @@ export function ProviderSetupForm({
             </InputGroupButton>
           </InputGroupAddon>
         </InputGroup>
-        {form.apiKeyError ? (
-          <p id="api-key-error" className="text-sm text-destructive" role="alert">
-            {form.apiKeyError}
-          </p>
-        ) : (
-          <p id="api-key-hint" className="text-xs text-muted-foreground">
-            Paste the API key from your {PROVIDER_OPTIONS.find((option) => option.id === form.selectedProvider)?.label ?? "provider"} dashboard.
-          </p>
-        )}
-      </div>
+      </FormField>
 
-      <div className="space-y-3">
-        <label htmlFor="model" className="block text-sm font-medium text-foreground">
-          Model
-        </label>
+      <FormField id="model" label="Model">
         <Select
           value={form.selectedModel}
           disabled={form.busy || form.filteredModels.length === 0}
@@ -112,13 +114,28 @@ export function ProviderSetupForm({
             ))}
           </SelectContent>
         </Select>
-      </div>
+      </FormField>
 
       {form.selectedProvider === "openrouter" ? (
-        <div className="space-y-2">
-          <label htmlFor="custom-model" className="text-sm font-medium text-foreground">
-            Custom model ID <span className="font-normal text-muted-foreground">(optional)</span>
-          </label>
+        <FormField
+          id="custom-model"
+          label={
+            <>
+              Custom model ID <span className="font-normal text-muted-foreground">(optional)</span>
+            </>
+          }
+          footer={
+            form.customModelError ? (
+              <p id="custom-model-error" className="text-sm text-destructive" role="alert">
+                {form.customModelError}
+              </p>
+            ) : (
+              <p id="custom-model-hint" className="text-xs text-muted-foreground">
+                Overrides the catalog selection when set. Use vendor/model format from OpenRouter.
+              </p>
+            )
+          }
+        >
           <InputGroup>
             <InputGroupInput
               id="custom-model"
@@ -134,16 +151,7 @@ export function ProviderSetupForm({
               onChange={(event) => form.handleCustomModelChange(event.target.value)}
             />
           </InputGroup>
-          {form.customModelError ? (
-            <p id="custom-model-error" className="text-sm text-destructive" role="alert">
-              {form.customModelError}
-            </p>
-          ) : (
-            <p id="custom-model-hint" className="text-xs text-muted-foreground">
-              Overrides the catalog selection when set. Use vendor/model format from OpenRouter.
-            </p>
-          )}
-        </div>
+        </FormField>
       ) : null}
 
       {form.formError ? (
@@ -168,48 +176,57 @@ export function ProviderSetupForm({
   );
 }
 
-export function ProviderOptionCards({
+function isSelectedProvider(value: string): value is SelectedProvider {
+  return PROVIDER_OPTIONS.some((option) => option.id === value);
+}
+
+export function ProviderSelect({
+  id = "provider",
+  label = "Provider",
   selectedProvider,
   disabled,
+  excludeProvider,
+  density = "default",
   onSelect,
 }: {
+  id?: string;
+  label?: string;
   selectedProvider: SelectedProvider;
   disabled?: boolean;
+  density?: "default" | "compact";
+  /** Hide one provider (e.g. the active one when switching). */
+  excludeProvider?: SelectedProvider;
   onSelect: (provider: SelectedProvider) => void;
 }) {
-  return (
-    <fieldset className="space-y-2">
-      <legend className="text-sm font-medium text-foreground">Provider</legend>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        {PROVIDER_OPTIONS.map((option) => {
-          const active = selectedProvider === option.id;
-          const subtitle =
-            option.id === "openai"
-              ? "GPT models"
-              : option.id === "anthropic"
-                ? "Claude models"
-                : "Many models via one key";
+  const options = excludeProvider
+    ? PROVIDER_OPTIONS.filter((option) => option.id !== excludeProvider)
+    : PROVIDER_OPTIONS;
 
-          return (
-            <button
-              key={option.id}
-              type="button"
-              aria-pressed={active}
-              disabled={disabled}
-              onClick={() => onSelect(option.id)}
-              className={cn(
-                "rounded-lg border p-4 text-left transition-colors",
-                active
-                  ? "border-primary bg-primary/10 ring-2 ring-primary/30"
-                  : "border-border bg-background hover:bg-muted/50",
-              )}
-            >
-              <p className="text-sm font-medium text-foreground">{option.label}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
-            </button>
-          );
-        })}
-      </div>
-    </fieldset>
+  return (
+    <FormField id={id} label={label} density={density}>
+      <Select
+        value={selectedProvider}
+        disabled={disabled}
+        onValueChange={(value) => {
+          if (value != null && isSelectedProvider(String(value))) {
+            onSelect(String(value));
+          }
+        }}
+      >
+        <SelectTrigger
+          id={id}
+          className={density === "compact" ? "w-full" : "w-full sm:max-w-sm"}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.id} value={option.id}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </FormField>
   );
 }
