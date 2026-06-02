@@ -17,6 +17,7 @@ import {
   PlayIcon,
   RefreshCwIcon,
   SearchIcon,
+  Trash2Icon,
   XCircleIcon,
   XIcon,
 } from "lucide-react";
@@ -298,20 +299,11 @@ export function AutomationsPage() {
 
           <div className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[240px_minmax(0,1fr)]">
             <aside className="hidden min-h-0 min-w-0 flex-col border-b border-border lg:flex lg:border-r lg:border-b-0">
-              <div className="shrink-0 space-y-4 border-b border-border p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3">
-                    <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40">
-                      <BotIcon className="size-5 text-foreground" aria-hidden />
-                    </div>
-                    <div>
-                      <h2 className="text-sm font-semibold tracking-tight text-foreground">Saved</h2>
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        {automations.length} automation{automations.length === 1 ? "" : "s"}
-                      </p>
-                    </div>
-                  </div>
-
+              <div className="shrink-0 space-y-3 border-b border-border p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground">
+                    {automations.length} automation{automations.length === 1 ? "" : "s"}
+                  </p>
                   <Button
                     type="button"
                     variant="ghost"
@@ -321,9 +313,9 @@ export function AutomationsPage() {
                     onClick={() => void refresh()}
                   >
                     {automationsRefreshing ? (
-                      <Spinner className="size-4" />
+                      <Spinner className="size-3.5" />
                     ) : (
-                      <RefreshCwIcon className="size-4" aria-hidden />
+                      <RefreshCwIcon className="size-3.5" aria-hidden />
                     )}
                   </Button>
                 </div>
@@ -403,95 +395,80 @@ export function AutomationsPage() {
                       <p className="type-body mt-1 text-xs">{selectedSubtitle}</p>
                     </div>
 
-                    <div className="hidden h-9 shrink-0 flex-wrap items-center gap-2 lg:flex">
+                    <div className="hidden shrink-0 items-center gap-1 lg:flex">
                       <Button
                         type="button"
                         variant="outline"
-                        size="sm"
-                        disabled={busy || refreshing}
-                        onClick={() => void refresh()}
-                      >
-                        {refreshing ? (
-                          <Spinner className="size-4" />
-                        ) : (
-                          <RefreshCwIcon className="size-4" aria-hidden />
-                        )}
-                        Refresh
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
+                        size="icon-sm"
                         disabled={busy || runningId !== null}
+                        aria-label="Run now"
                         onClick={() => void handleRun(selected.id)}
                       >
                         {runningId === selected.id ? (
-                          <Spinner className="size-4" />
+                          <Spinner className="size-3.5" />
                         ) : (
-                          <>
-                            <PlayIcon className="size-4" aria-hidden />
-                            Run now
-                          </>
+                          <PlayIcon className="size-3.5" aria-hidden />
                         )}
                       </Button>
                       <Button
                         type="button"
                         variant="outline"
-                        size="sm"
+                        size="icon-sm"
                         disabled={busy}
+                        aria-label="Edit"
                         onClick={() => openEdit(selected)}
                       >
-                        <PencilIcon className="size-4" aria-hidden />
-                        Edit
+                        <PencilIcon className="size-3.5" aria-hidden />
                       </Button>
                       <Button
                         type="button"
                         variant="outline"
-                        size="sm"
+                        size="icon-sm"
                         disabled={busy}
+                        aria-label="Delete"
                         className="text-destructive hover:text-destructive"
                         onClick={() => setDeleteTarget(selected)}
                       >
-                        Delete
+                        <Trash2Icon className="size-3.5" aria-hidden />
                       </Button>
                     </div>
                   </div>
 
-                  <div className="mb-5 flex h-9 shrink-0 flex-wrap items-center gap-2 lg:hidden">
+                  <div className="mb-5 flex shrink-0 items-center gap-1 lg:hidden">
                     <Button
                       type="button"
                       variant="outline"
-                      size="sm"
+                      size="icon-sm"
                       disabled={busy || runningId !== null}
+                      aria-label="Run now"
                       onClick={() => void handleRun(selected.id)}
                     >
                       {runningId === selected.id ? (
-                        <Spinner className="size-4" />
+                        <Spinner className="size-3.5" />
                       ) : (
-                        <>
-                          <PlayIcon className="size-4" aria-hidden />
-                          Run now
-                        </>
+                        <PlayIcon className="size-3.5" aria-hidden />
                       )}
                     </Button>
                     <Button
                       type="button"
                       variant="outline"
-                      size="sm"
+                      size="icon-sm"
                       disabled={busy}
+                      aria-label="Edit"
                       onClick={() => openEdit(selected)}
                     >
-                      Edit
+                      <PencilIcon className="size-3.5" aria-hidden />
                     </Button>
                     <Button
                       type="button"
                       variant="outline"
-                      size="sm"
+                      size="icon-sm"
                       disabled={busy}
+                      aria-label="Delete"
                       className="text-destructive hover:text-destructive"
                       onClick={() => setDeleteTarget(selected)}
                     >
-                      Delete
+                      <Trash2Icon className="size-3.5" aria-hidden />
                     </Button>
                   </div>
 
@@ -650,53 +627,31 @@ function AutomationListItem({
       type="button"
       aria-current={selected ? "true" : undefined}
       className={cn(
-        "flex w-full items-start gap-3 rounded-md px-3 py-3 text-left transition",
-        "hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-        selected && "bg-primary/5 ring-1 ring-primary/20",
+        "flex w-full items-start gap-3 rounded-md px-3 py-3 text-left transition-colors",
+        "hover:bg-muted/40 focus-visible:outline-none focus-visible:bg-muted/40",
+        selected && "bg-muted/40",
       )}
       onClick={onSelect}
     >
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40">
-        <TriggerIcon className="size-4 text-muted-foreground" aria-hidden />
-      </div>
+      <TriggerIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
 
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 space-y-1">
         <p className="truncate text-sm font-medium text-foreground">{automation.name}</p>
-        <p className="mt-1 truncate text-xs text-muted-foreground">
+        <p className="truncate text-xs text-muted-foreground">
           {formatTrigger(automation.trigger)}
         </p>
-        <div className="mt-2">
-          <StatusBadge
-            label={automation.enabled ? "Enabled" : "Disabled"}
-            tone={automation.enabled ? "ok" : "neutral"}
-          />
-        </div>
+        <p
+          className={cn(
+            "text-xs font-medium",
+            automation.enabled
+              ? "text-emerald-700 dark:text-emerald-300"
+              : "text-muted-foreground",
+          )}
+        >
+          {automation.enabled ? "Enabled" : "Disabled"}
+        </p>
       </div>
     </button>
-  );
-}
-
-function StatusBadge({
-  label,
-  tone,
-}: {
-  label: string;
-  tone: "ok" | "neutral";
-}) {
-  const toneClass =
-    tone === "ok"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-200"
-      : "border-border bg-muted text-muted-foreground";
-
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium",
-        toneClass,
-      )}
-    >
-      {label}
-    </span>
   );
 }
 
@@ -709,11 +664,11 @@ function AutomationListSkeleton() {
     >
       {Array.from({ length: 5 }).map((_, index) => (
         <div key={index} className="flex items-start gap-3 rounded-md px-3 py-3">
-          <div className="size-8 shrink-0 animate-pulse rounded-md bg-muted/50" />
+          <div className="mt-0.5 size-4 shrink-0 animate-pulse rounded bg-muted/50" />
           <div className="min-w-0 flex-1 space-y-2">
             <div className="h-4 w-2/3 animate-pulse rounded bg-muted/50" />
             <div className="h-3 w-1/2 animate-pulse rounded bg-muted/40" />
-            <div className="h-5 w-16 animate-pulse rounded-full bg-muted/35" />
+            <div className="h-3 w-14 animate-pulse rounded bg-muted/35" />
           </div>
         </div>
       ))}
@@ -1001,7 +956,7 @@ function RunHistoryItem({
   const hasOutput = Boolean(run.output?.trim());
   const hasError = Boolean(run.error?.trim());
   const hasBody = hasOutput || hasError || isRunning;
-  const preview = runPreviewContent(run);
+  const previewText = runPreviewText(run);
   const duration = formatRunDuration(run.startedAt, run.completedAt);
   const copyText = [hasError ? run.error : null, hasOutput ? run.output : null]
     .filter(Boolean)
@@ -1025,7 +980,6 @@ function RunHistoryItem({
         className={cn(
           "overflow-hidden rounded-md border bg-card shadow-sm transition-shadow",
           runHistoryShellClass(run.status),
-          expanded && "ring-1 ring-ring/25",
         )}
       >
         <button
@@ -1050,7 +1004,7 @@ function RunHistoryItem({
         >
           <RunStatusIcon status={run.status} />
 
-          <div className="min-w-0 flex-1 space-y-2.5">
+          <div className="min-w-0 flex-1 space-y-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <RunStatusBadge status={run.status} />
               <span className="text-xs text-muted-foreground" aria-hidden>
@@ -1073,36 +1027,15 @@ function RunHistoryItem({
               ) : null}
             </div>
 
-            {preview ? (
-              <div
+            {previewText ? (
+              <p
                 className={cn(
-                  "rounded-md border px-3 py-2.5",
-                  run.status === "failed"
-                    ? "border-destructive/25 bg-destructive/5"
-                    : "border-border/80 bg-muted/30",
+                  "line-clamp-2 text-sm leading-relaxed",
+                  run.status === "failed" ? "text-destructive" : "text-muted-foreground",
                 )}
               >
-                {preview.headline ? (
-                  <p
-                    className={cn(
-                      "text-sm font-medium leading-snug",
-                      run.status === "failed" ? "text-destructive" : "text-foreground",
-                    )}
-                  >
-                    {preview.headline}
-                  </p>
-                ) : null}
-                {preview.excerpt ? (
-                  <p
-                    className={cn(
-                      "line-clamp-2 text-sm leading-relaxed text-muted-foreground",
-                      preview.headline && "mt-1.5",
-                    )}
-                  >
-                    {preview.excerpt}
-                  </p>
-                ) : null}
-              </div>
+                {previewText}
+              </p>
             ) : null}
           </div>
 
@@ -1124,7 +1057,7 @@ function RunHistoryItem({
           )}
         >
           <div className="overflow-hidden">
-            <div className="border-t border-border bg-muted/20 px-3 py-3">
+            <div className="border-t border-border px-3 py-3">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <p className="type-code text-muted-foreground" title={formatSessionTimestamp(run.startedAt)}>
                   {formatSessionTimestamp(run.startedAt)}
@@ -1158,27 +1091,15 @@ function RunHistoryItem({
                 </div>
               ) : null}
 
-              {hasError ? (
-                <div className={hasOutput ? "mb-3" : undefined}>
-                  <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-destructive">
-                    Error
-                  </p>
-                  <pre className="max-h-48 overflow-auto rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-destructive">
-                    {run.error}
-                  </pre>
-                </div>
+              {hasError && hasOutput ? (
+                <p className="mb-3 whitespace-pre-wrap break-words text-sm text-destructive">
+                  {run.error}
+                </p>
               ) : null}
 
               {hasOutput ? (
-                <div>
-                  {hasError ? (
-                    <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Output
-                    </p>
-                  ) : null}
-                  <div className="max-h-[min(70vh,28rem)] overflow-auto rounded-md border border-border bg-background px-3 py-3">
-                    <MessageResponse>{run.output ?? ""}</MessageResponse>
-                  </div>
+                <div className="max-h-[min(70vh,28rem)] overflow-auto">
+                  <MessageResponse>{run.output ?? ""}</MessageResponse>
                 </div>
               ) : null}
 
@@ -1194,50 +1115,27 @@ function RunHistoryItem({
 }
 
 function RunStatusIcon({ status }: { status: AutomationRunStatus }) {
-  const className = "mt-0.5 size-8 shrink-0 rounded-md border p-1.5";
+  const className = "mt-0.5 size-4 shrink-0";
 
   if (status === "completed") {
-    return (
-      <span
-        className={cn(
-          className,
-          "border-emerald-200/80 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-300",
-        )}
-      >
-        <CheckCircle2Icon className="size-full" aria-hidden />
-      </span>
-    );
+    return <CheckCircle2Icon className={cn(className, "text-emerald-600 dark:text-emerald-400")} aria-hidden />;
   }
 
   if (status === "failed") {
-    return (
-      <span
-        className={cn(
-          className,
-          "border-destructive/30 bg-destructive/10 text-destructive dark:bg-destructive/20",
-        )}
-      >
-        <XCircleIcon className="size-full" aria-hidden />
-      </span>
-    );
+    return <XCircleIcon className={cn(className, "text-destructive")} aria-hidden />;
   }
 
-  return (
-    <span className={cn(className, "border-border bg-muted/50 text-muted-foreground")}>
-      <Loader2Icon className="size-full animate-spin" aria-hidden />
-    </span>
-  );
+  return <Loader2Icon className={cn(className, "animate-spin text-muted-foreground")} aria-hidden />;
 }
 
 function RunStatusBadge({ status }: { status: AutomationRunStatus }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize",
-        status === "completed" && "scope-badge scope-badge-active",
-        status === "failed" &&
-          "border border-destructive/30 bg-destructive/10 text-destructive dark:bg-destructive/20",
-        status === "running" && "border border-border bg-muted text-muted-foreground",
+        "text-xs font-medium capitalize",
+        status === "completed" && "text-emerald-700 dark:text-emerald-300",
+        status === "failed" && "text-destructive",
+        status === "running" && "text-muted-foreground",
       )}
     >
       {status}
@@ -1245,56 +1143,32 @@ function RunStatusBadge({ status }: { status: AutomationRunStatus }) {
   );
 }
 
-function runHistoryShellClass(status: AutomationRunStatus): string {
-  if (status === "completed") {
-    return "border-emerald-200/70 dark:border-emerald-900/50";
-  }
-
-  if (status === "failed") {
-    return "border-destructive/35 dark:border-destructive/40";
-  }
-
+function runHistoryShellClass(_status: AutomationRunStatus): string {
   return "border-border";
 }
 
-function runPreviewContent(
-  run: AutomationRunRecord,
-): { headline: string | null; excerpt: string | null } | null {
+function runPreviewText(run: AutomationRunRecord): string | null {
   if (run.status === "running" && !run.output?.trim() && !run.error?.trim()) {
-    return {
-      headline: "In progress",
-      excerpt: "The agent is working on this automation run.",
-    };
+    return "Run in progress…";
   }
 
-  const source = run.error?.trim() || run.output?.trim();
+  if (run.status === "failed" && run.error?.trim()) {
+    return run.error.trim();
+  }
+
+  const source = run.output?.trim() || run.error?.trim();
 
   if (!source) {
     return null;
   }
 
-  const lines = source
+  const plain = source
     .split("\n")
     .map((line) => stripMarkdownForPreview(line))
-    .filter(Boolean);
+    .filter(Boolean)
+    .join(" ");
 
-  const headline = lines[0] ? truncatePlainText(lines[0], 120) : null;
-  const fullExcerpt = truncatePlainText(
-    lines.slice(1).join(" ") || lines[0] || "",
-    280,
-  );
-  const excerpt =
-    lines.length > 1
-      ? fullExcerpt
-      : headline && source.length > (lines[0]?.length ?? 0)
-        ? truncatePlainText(stripMarkdownForPreview(source), 280)
-        : null;
-
-  if (!headline && !excerpt) {
-    return null;
-  }
-
-  return { headline, excerpt: excerpt && excerpt !== headline ? excerpt : null };
+  return truncatePlainText(plain, 200);
 }
 
 function stripMarkdownForPreview(line: string): string {
