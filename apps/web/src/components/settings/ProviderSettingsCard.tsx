@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangleIcon, CheckCircle2Icon } from "lucide-react";
 import { ProviderSetupForm } from "@/components/ProviderSetupForm";
 import {
@@ -13,12 +13,9 @@ import { useModelsQuery } from "@/hooks/use-app-queries";
 import { useOpenRouterModels } from "@/hooks/use-openrouter-models";
 import { formatError } from "@/lib/client";
 import {
-  buildConfigureProviderRequest,
   filterModelsByProvider,
   formatProviderLabel,
-  getModelDisplayName,
   type SelectedProvider,
-  validateApiKeyForProvider,
 } from "@/lib/models";
 import {
   mergeOpenRouterModelOptions,
@@ -39,15 +36,6 @@ export function ProviderSettingsCard({ formError, onFormError }: ProviderSetting
   const { data: openRouterRows = [] } = useOpenRouterModels();
   const catalog = catalogResponse?.models ?? [];
 
-  const [apiKey, setApiKey] = useState("");
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [apiKeyTouched, setApiKeyTouched] = useState(false);
-  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [modelBusy, setModelBusy] = useState(false);
-  const [replaceKeyOpen, setReplaceKeyOpen] = useState(false);
-  const [modelDraft, setModelDraft] = useState("");
-  const [modelSaveHint, setModelSaveHint] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const isConfigured = health?.providerConfigured === true && models != null;
@@ -57,18 +45,6 @@ export function ProviderSettingsCard({ formError, onFormError }: ProviderSetting
       onFormError(formatError(catalogQueryError));
     }
   }, [catalogQueryError, onFormError]);
-
-  useEffect(() => {
-    if (models?.provider) {
-      setModelDraft(models.currentModel ?? "");
-    }
-  }, [models?.provider, models?.currentModel]);
-
-  useEffect(() => {
-    if (isConfigured) {
-      setReplaceKeyOpen(false);
-    }
-  }, [isConfigured]);
 
   const configuredModels = useMemo(() => {
     const filtered = filterModelsByProvider(catalog, models?.provider);
@@ -81,122 +57,6 @@ export function ProviderSettingsCard({ formError, onFormError }: ProviderSetting
     }
     return filtered;
   }, [catalog, models?.provider, models?.currentModel, openRouterRows]);
-
-  const clearFieldErrors = useCallback(() => {
-    setApiKeyError(null);
-    onFormError(null);
-  }, [onFormError]);
-
-  const handleApiKeyBlur = useCallback(() => {
-    setApiKeyTouched(true);
-
-    if (!apiKey.trim()) {
-      setApiKeyError(null);
-      return;
-    }
-
-    setApiKeyError(
-      validateApiKeyForProvider(apiKey, models?.provider as SelectedProvider),
-    );
-  }, [apiKey, models?.provider]);
-
-  const handleApiKeyChange = useCallback(
-    (value: string) => {
-      setApiKey(value);
-      setSuccessMessage(null);
-
-      if (formError) {
-        onFormError(null);
-      }
-
-      if (apiKeyTouched && value.trim()) {
-        setApiKeyError(
-          validateApiKeyForProvider(value, models?.provider as SelectedProvider),
-        );
-      } else if (apiKeyError) {
-        setApiKeyError(null);
-      }
-    },
-    [apiKeyTouched, apiKeyError, formError, models?.provider, onFormError],
-  );
-
-  const handleSubmitReplaceKey = useCallback(
-    async (event: React.FormEvent) => {
-      event.preventDefault();
-
-      const trimmedKey = apiKey.trim();
-      const nextApiKeyError = validateApiKeyForProvider(
-        trimmedKey,
-        models!.provider as SelectedProvider,
-      );
-
-      setApiKeyTouched(true);
-      setApiKeyError(nextApiKeyError);
-
-      if (nextApiKeyError) {
-        document.getElementById("replace-api-key")?.focus();
-        return;
-      }
-
-      const modelToSave = models?.currentModel ?? "";
-
-      setBusy(true);
-      onFormError(null);
-      setSuccessMessage(null);
-      setModelSaveHint(null);
-
-      try {
-        await configureProvider(
-          buildConfigureProviderRequest({
-            apiKey: trimmedKey,
-            provider: models!.provider as SelectedProvider,
-            model: modelToSave || undefined,
-            displayName: models?.displayName ?? undefined,
-            baseUrl: models?.baseUrl ?? undefined,
-            customModels: models?.customModels,
-          }),
-        );
-        setApiKey("");
-        setApiKeyTouched(false);
-        setShowApiKey(false);
-        setReplaceKeyOpen(false);
-        setSuccessMessage("API key updated.");
-      } catch (err) {
-        onFormError(formatError(err));
-        document.getElementById("replace-api-key")?.focus();
-      } finally {
-        setBusy(false);
-      }
-    },
-    [apiKey, configureProvider, models, onFormError],
-  );
-
-  const closeReplaceKeyForm = useCallback(() => {
-    setReplaceKeyOpen(false);
-    setApiKey("");
-    setApiKeyTouched(false);
-    setApiKeyError(null);
-    clearFieldErrors();
-  }, [clearFieldErrors]);
-
-  const handleSaveModel = useCallback(async () => {
-    if (!modelDraft || modelDraft === models?.currentModel) {
-      return;
-    }
-
-    setModelBusy(true);
-    onFormError(null);
-    setModelSaveHint(null);
-
-    try {
-      await setModel(modelDraft);
-      setModelSaveHint(`Saved · ${getModelDisplayName(catalog, modelDraft)}`);
-    } catch (err) {
-      onFormError(formatError(err));
-    } finally {
-      setModelBusy(false);
-    }
-  }, [modelDraft, models?.currentModel, setModel, catalog, onFormError]);
 
   if (catalogLoading) {
     return <ProviderSettingsSkeleton />;
@@ -233,34 +93,12 @@ export function ProviderSettingsCard({ formError, onFormError }: ProviderSetting
               models={models}
               configureProvider={configureProvider}
               configuredModels={configuredModels}
-              modelDraft={modelDraft}
-              modelBusy={modelBusy}
-              modelDirty={modelDraft !== models.currentModel}
-              modelSaveHint={modelSaveHint}
+              catalog={catalog}
+              setModel={setModel}
               formError={formError}
-              replaceKeyOpen={replaceKeyOpen}
-              apiKey={apiKey}
-              showApiKey={showApiKey}
-              apiKeyError={apiKeyError}
-              replaceKeyBusy={busy}
-              onModelDraftChange={(value) => {
-                setModelDraft(value);
-                setModelSaveHint(null);
-                if (formError) {
-                  onFormError(null);
-                }
-              }}
-              onSaveModel={() => void handleSaveModel()}
-              onOpenReplaceKey={() => {
-                setReplaceKeyOpen(true);
-                setSuccessMessage(null);
-                clearFieldErrors();
-              }}
-              onCancelReplaceKey={closeReplaceKeyForm}
-              onApiKeyChange={handleApiKeyChange}
-              onApiKeyBlur={handleApiKeyBlur}
-              onToggleShowApiKey={() => setShowApiKey((current) => !current)}
-              onSubmitReplaceKey={(event) => void handleSubmitReplaceKey(event)}
+              onFormError={onFormError}
+              onReplaceKeyOpen={() => setSuccessMessage(null)}
+              onReplaceKeySuccess={() => setSuccessMessage("API key updated.")}
             />
           )}
         </CardContent>

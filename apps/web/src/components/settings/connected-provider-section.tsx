@@ -1,5 +1,7 @@
 import type { ProviderModelOption } from "@tinyclaw/core/contract";
 import { useEffect, useState } from "react";
+import { useConnectedModelDraft } from "@/hooks/use-connected-model-draft";
+import { useReplaceApiKeyForm } from "@/hooks/use-replace-api-key-form";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { OpenRouterProviderModelFields } from "@/components/OpenRouterProviderModelFields";
 import {
@@ -50,47 +52,55 @@ export function ConnectedProviderSection({
   models,
   configureProvider,
   configuredModels,
-  modelDraft,
-  modelBusy,
-  modelDirty,
-  modelSaveHint,
+  catalog,
+  setModel,
   formError,
-  replaceKeyOpen,
-  apiKey,
-  showApiKey,
-  apiKeyError,
-  replaceKeyBusy,
-  onModelDraftChange,
-  onSaveModel,
-  onOpenReplaceKey,
-  onCancelReplaceKey,
-  onApiKeyChange,
-  onApiKeyBlur,
-  onToggleShowApiKey,
-  onSubmitReplaceKey,
+  onFormError,
+  onReplaceKeyOpen,
+  onReplaceKeySuccess,
 }: {
   models: NonNullable<ReturnType<typeof useAppContext>["models"]>;
   configureProvider: ReturnType<typeof useAppContext>["configureProvider"];
   configuredModels: ProviderModelOption[];
-  modelDraft: string;
-  modelBusy: boolean;
-  modelDirty: boolean;
-  modelSaveHint: string | null;
+  catalog: ProviderModelOption[];
+  setModel: ReturnType<typeof useAppContext>["setModel"];
   formError: string | null;
-  replaceKeyOpen: boolean;
-  apiKey: string;
-  showApiKey: boolean;
-  apiKeyError: string | null;
-  replaceKeyBusy: boolean;
-  onModelDraftChange: (value: string) => void;
-  onSaveModel: () => void;
-  onOpenReplaceKey: () => void;
-  onCancelReplaceKey: () => void;
-  onApiKeyChange: (value: string) => void;
-  onApiKeyBlur: () => void;
-  onToggleShowApiKey: () => void;
-  onSubmitReplaceKey: (event: React.FormEvent) => void;
+  onFormError: (error: string | null) => void;
+  onReplaceKeyOpen?: () => void;
+  onReplaceKeySuccess?: () => void;
 }) {
+  const {
+    draft: modelDraft,
+    busy: modelBusy,
+    saveHint: modelSaveHint,
+    dirty: modelDirty,
+    handleDraftChange: onModelDraftChange,
+    handleSave: onSaveModel,
+  } = useConnectedModelDraft({
+    models,
+    catalog,
+    setModel,
+    onFormError,
+  });
+
+  const {
+    open: replaceKeyOpen,
+    apiKey,
+    showApiKey,
+    error: apiKeyError,
+    busy: replaceKeyBusy,
+    openForm: onOpenReplaceKey,
+    reset: onCancelReplaceKey,
+    handleBlur: onApiKeyBlur,
+    handleChange: onApiKeyChange,
+    handleSubmit: onSubmitReplaceKey,
+    toggleShowApiKey: onToggleShowApiKey,
+  } = useReplaceApiKeyForm({
+    models,
+    configureProvider,
+    onFormError,
+    onSuccess: onReplaceKeySuccess,
+  });
   const currentProvider = models.provider as SelectedProvider;
   const isCompatible = currentProvider === "openai_compatible";
   const isOpenRouter = currentProvider === "openrouter";
@@ -292,7 +302,9 @@ export function ConnectedProviderSection({
             <Select
               value={modelDraft}
               disabled={modelBusy || configuredModels.length === 0}
-              onValueChange={(value) => onModelDraftChange(value != null ? String(value) : "")}
+              onValueChange={(value) =>
+                onModelDraftChange(value != null ? String(value) : "")
+              }
             >
               <SelectTrigger id="connected-model" className="w-44 sm:w-52">
                 <SelectValue placeholder="Select model" />
@@ -310,7 +322,7 @@ export function ConnectedProviderSection({
               type="button"
               size="sm"
               disabled={modelBusy || !modelDraft || !modelDirty}
-              onClick={onSaveModel}
+              onClick={() => void onSaveModel()}
             >
               {modelBusy ? (
                 <>
@@ -326,7 +338,12 @@ export function ConnectedProviderSection({
       )}
 
       <SettingsRow label="API key" description="Saved on the server">
-        <Button type="button" size="sm" variant="outline" onClick={onOpenReplaceKey}>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => onOpenReplaceKey(onReplaceKeyOpen)}
+        >
           Replace key
         </Button>
       </SettingsRow>
@@ -340,7 +357,7 @@ export function ConnectedProviderSection({
         }}
       >
         <DialogContent className="sm:max-w-md">
-          <form className="space-y-4" onSubmit={onSubmitReplaceKey}>
+          <form className="space-y-4" onSubmit={(event) => void onSubmitReplaceKey(event)}>
             <DialogHeader>
               <DialogTitle>
                 Replace API key
