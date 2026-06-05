@@ -1,5 +1,9 @@
 import type { LucideIcon } from "lucide-react";
-import { ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
+import {
+  ChevronsLeftIcon,
+  ChevronsRightIcon,
+} from "lucide-react";
+import type { SVGProps } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { ConnectionBar } from "@/components/ConnectionBar";
 import { Button } from "@/components/ui/button";
@@ -23,6 +27,8 @@ import {
   SETTINGS_NAV_ITEM,
   type NavItem,
 } from "@/lib/navigation";
+
+const GITHUB_REPO_URL = "https://github.com/ahmadrosid/tinyclaw";
 
 export function Layout() {
   const location = useLocation();
@@ -59,6 +65,7 @@ export function Layout() {
             {!collapsed ? (
               <p className="type-brand min-w-0 flex-1 truncate">TinyClaw</p>
             ) : null}
+            {!collapsed ? <GitHubRepoButton /> : null}
             <SidebarCollapseButton collapsed={collapsed} onToggle={toggle} />
           </div>
 
@@ -148,6 +155,29 @@ export function Layout() {
         </div>
       </div>
     </TooltipProvider>
+  );
+}
+
+function GitHubRepoButton() {
+  return (
+    <a
+      href={GITHUB_REPO_URL}
+      target="_blank"
+      rel="noreferrer"
+      aria-label="Open GitHub repository"
+      title="Open GitHub repository"
+      className="inline-flex size-7 shrink-0 items-center justify-center rounded-[min(var(--radius-md),12px)] text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
+    >
+      <GitHubMark className="sidebar-nav-icon" aria-hidden="true" />
+    </a>
+  );
+}
+
+function GitHubMark(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
+      <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.38 7.86 10.9.58.11.79-.25.79-.56v-2.02c-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.2 1.77 1.2 1.03 1.76 2.69 1.25 3.34.96.1-.75.4-1.25.72-1.54-2.56-.29-5.24-1.28-5.24-5.71 0-1.26.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.19 1.18a11.1 11.1 0 0 1 5.8 0c2.22-1.49 3.18-1.18 3.18-1.18.64 1.58.24 2.75.12 3.04.74.8 1.19 1.82 1.19 3.08 0 4.44-2.69 5.42-5.25 5.71.41.36.77 1.07.77 2.16v3.2c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
+    </svg>
   );
 }
 
