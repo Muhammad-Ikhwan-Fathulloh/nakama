@@ -15,6 +15,18 @@ Short guide to what works today.
   - **CLI** — `@/path/to/image.png [optional message]`, `/paste` for clipboard images, or Ctrl+V / empty paste when the terminal supports it
   - **Telegram** — send a photo or image document (optional caption)
 
+## LLM providers
+
+TinyClaw currently supports these providers:
+
+- **OpenAI**
+- **Anthropic**
+- **Google Gemini**
+- **OpenRouter**
+- **OpenAI-compatible custom providers** via a custom `baseUrl`
+
+Provider selection and API keys can be configured in the web dashboard under **Settings**.
+
 ## Bot profiles
 
 A **profile** is a bot config: name, system prompt, and allowed tools.

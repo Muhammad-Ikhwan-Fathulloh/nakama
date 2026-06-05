@@ -45,7 +45,7 @@ See [apps/platform/telegram/README.md](./apps/platform/telegram/README.md) for s
 
 On first run, the server prompts for a provider and API key if none is configured. Settings are saved to `~/.tinyclaw/config.ini`.
 
-The server listens on `http://127.0.0.1:4310` by default. See [FEATURES.md](./FEATURES.md#api) for interactive API docs.
+The server listens on `http://127.0.0.1:4310` by default. Interactive API docs are available at `http://127.0.0.1:4310/docs`.
 
 ## License
 
