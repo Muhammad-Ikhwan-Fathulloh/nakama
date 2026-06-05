@@ -63,3 +63,30 @@ export function seedManageModelRows(
     default: model.default,
   }));
 }
+
+export function seedOpenRouterManageModelRows(
+  customModels: CustomModelEntry[] | undefined,
+  currentModel?: string | null,
+  currentModelName?: string | null,
+): ModelListRow[] {
+  if (customModels?.length) {
+    return customModels.map((model) => ({
+      id: model.id,
+      name: model.name ?? model.id,
+      default: model.default,
+    }));
+  }
+
+  const trimmed = currentModel?.trim();
+  if (trimmed) {
+    return [
+      {
+        id: trimmed,
+        name: currentModelName?.trim() || trimmed,
+        default: true,
+      },
+    ];
+  }
+
+  return [{ id: "", name: "" }];
+}

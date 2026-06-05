@@ -103,42 +103,6 @@ export function OpenRouterModelPicker({
         <p className="text-sm text-muted-foreground">No model selected</p>
       )}
 
-      {catalogModels.length > 0 ? (
-        <FormField
-          id={`${idPrefix}-quick-model`}
-          label="Quick pick"
-          density={density}
-        >
-          <Select
-            value={
-              customModel.trim()
-                ? ""
-                : catalogModels.some((model) => model.id === selectedModel)
-                  ? selectedModel
-                  : ""
-            }
-            disabled={disabled || catalogModels.length === 0}
-            onValueChange={(value) => {
-              if (value) {
-                handleQuickPick(String(value));
-              }
-            }}
-          >
-            <SelectTrigger id={`${idPrefix}-quick-model`} className="w-full">
-              <SelectValue placeholder="Catalog default models" />
-            </SelectTrigger>
-            <SelectContent>
-              {catalogModels.map((model) => (
-                <SelectItem key={model.id} value={model.id}>
-                  {model.name}
-                  {model.default ? " (default)" : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </FormField>
-      ) : null}
-
       <Button
         type="button"
         size="sm"
@@ -182,7 +146,7 @@ export function OpenRouterModelPicker({
                   id={`${idPrefix}-custom-model-hint`}
                   className="text-xs text-muted-foreground"
                 >
-                  Overrides quick pick when set. Use vendor/model format from OpenRouter.
+                  Use vendor/model format from OpenRouter, e.g. anthropic/claude-sonnet-4-6.
                 </p>
               )
             }

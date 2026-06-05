@@ -14,6 +14,7 @@ interface OpenRouterProviderModelFieldsProps {
   density?: "default" | "compact";
   modelsError?: string | null;
   onCustomModelsChange: (models: ModelListRow[]) => void;
+  onBrowseModelAdded?: (row: OpenRouterModelRow) => void;
 }
 
 export function OpenRouterProviderModelFields({
@@ -22,6 +23,7 @@ export function OpenRouterProviderModelFields({
   density = "default",
   modelsError,
   onCustomModelsChange,
+  onBrowseModelAdded,
 }: OpenRouterProviderModelFieldsProps) {
   const [isBrowsing, setIsBrowsing] = useState(false);
 
@@ -33,6 +35,7 @@ export function OpenRouterProviderModelFields({
     }
 
     onCustomModelsChange([...customModels, nextModel]);
+    onBrowseModelAdded?.(row);
     setIsBrowsing(false);
   };
 

@@ -1,10 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import { getModelsForConfiguredProvider, mergeOpenRouterCatalog } from "./compatible-models";
-import { AVAILABLE_MODELS } from "./models";
 
 describe("mergeOpenRouterCatalog", () => {
   test("merges custom display names over static entries", () => {
-    const staticModels = AVAILABLE_MODELS.filter((model) => model.provider === "openrouter");
+    const staticModels = [
+      {
+        id: "anthropic/claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        provider: "openrouter" as const,
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
+      },
+      {
+        id: "openai/gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openrouter" as const,
+        contextWindow: 128_000,
+        maxOutputTokens: 8_192,
+      },
+    ];
     const merged = mergeOpenRouterCatalog(staticModels, [
       { id: "anthropic/claude-sonnet-4-6", name: "My Sonnet" },
       { id: "google/gemini-2.5-pro-preview", name: "Gemini Pro" },
@@ -14,6 +28,7 @@ describe("mergeOpenRouterCatalog", () => {
       "My Sonnet",
     );
     expect(merged.some((model) => model.id === "openai/gpt-5.4")).toBe(true);
+    expect(merged.some((model) => model.id === "google/gemini-2.5-pro-preview")).toBe(true);
   });
 });
 
@@ -31,12 +46,15 @@ describe("getModelsForConfiguredProvider openrouter", () => {
     expect(models.some((model) => model.id === "openai/gpt-5.4")).toBe(false);
   });
 
-  test("falls back to built-in catalog when no shortlist", () => {
+  test("includes only the active model when no shortlist is saved", () => {
     const models = getModelsForConfiguredProvider("openrouter", {
       provider: "openrouter",
       apiKey: "sk-test",
+      model: "google/gemma-4-31b-it:free",
     });
 
-    expect(models.some((model) => model.id === "openai/gpt-5.4")).toBe(true);
+    expect(models).toHaveLength(1);
+    expect(models[0]?.id).toBe("google/gemma-4-31b-it:free");
+    expect(models.some((model) => model.id === "openai/gpt-5.4")).toBe(false);
   });
 });

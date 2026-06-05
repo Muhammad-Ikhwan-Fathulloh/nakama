@@ -10,7 +10,6 @@ import { formatError } from "@/lib/client";
 import {
   appendOpenRouterModelRow,
   buildConfigureProviderRequest,
-  catalogToOpenRouterModelRows,
   defaultModelForProvider,
   filterModelsByProvider,
   formatProviderLabel,
@@ -117,7 +116,7 @@ export function useProviderSetupForm(options: UseProviderSetupFormOptions = {}) 
       setSelectedProvider(provider);
 
       if (provider === "openrouter" && openRouterModels.length === 0) {
-        setOpenRouterModels(catalogToOpenRouterModelRows(catalog));
+        setOpenRouterModels([{ id: "", name: "" }]);
       }
 
       if (provider !== "openrouter") {
@@ -132,18 +131,18 @@ export function useProviderSetupForm(options: UseProviderSetupFormOptions = {}) 
         setModelsError(null);
       }
     },
-    [catalog, openRouterModels.length],
+    [openRouterModels.length],
   );
 
   const selectOpenRouterModel = useCallback(
     (modelId: string, modelName: string) => {
       setOpenRouterModels((current) =>
-        appendOpenRouterModelRow(current, modelId, modelName, catalog),
+        appendOpenRouterModelRow(current, modelId, modelName),
       );
       setSelectedModel(modelId);
       setOpenRouterModelsError(null);
     },
-    [catalog],
+    [],
   );
 
   const handleBrowseSelect = useCallback(

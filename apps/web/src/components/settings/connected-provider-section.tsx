@@ -1,7 +1,6 @@
 import type { ProviderModelOption } from "@tinyclaw/core/contract";
 import { useEffect, useState } from "react";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
-import { OpenRouterModelsBrowseList } from "@/components/OpenRouterModelsBrowseList";
 import { OpenRouterProviderModelFields } from "@/components/OpenRouterProviderModelFields";
 import {
   CustomCompatibleProviderFields,
@@ -9,6 +8,7 @@ import {
 } from "@/components/CustomCompatibleProviderFields";
 import type { ModelListRow } from "@/components/ModelListEditor";
 import { Button } from "@/components/ui/button";
+import { FormField } from "@/components/ui/form-field";
 import {
   Dialog,
   DialogContent,
@@ -40,7 +40,11 @@ import {
   type SelectedProvider,
   validateOpenRouterModelsInput,
 } from "@/lib/models";
-import { seedManageModelRows, SettingsRow } from "./provider-settings-shared";
+import {
+  seedManageModelRows,
+  seedOpenRouterManageModelRows,
+  SettingsRow,
+} from "./provider-settings-shared";
 
 export function ConnectedProviderSection({
   models,
@@ -90,9 +94,9 @@ export function ConnectedProviderSection({
   const currentProvider = models.provider as SelectedProvider;
   const isCompatible = currentProvider === "openai_compatible";
   const isOpenRouter = currentProvider === "openrouter";
-  const [browseOpen, setBrowseOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
+  const [activeModelDraft, setActiveModelDraft] = useState("");
   const [editDisplayName, setEditDisplayName] = useState(models.displayName ?? "");
   const [editBaseUrl, setEditBaseUrl] = useState(models.baseUrl ?? "");
   const [manageModels, setManageModels] = useState<ModelListRow[]>(
@@ -107,15 +111,30 @@ export function ConnectedProviderSection({
   const [dialogBusy, setDialogBusy] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (isCompatible || isOpenRouter) {
-      setManageModels(seedManageModelRows(models.customModels, configuredModels));
-    }
-  }, [models.customModels, configuredModels, isCompatible, isOpenRouter]);
-
   const currentModelName =
     configuredModels.find((model) => model.id === models.currentModel)?.name ??
     models.currentModel;
+
+  useEffect(() => {
+    if (isCompatible) {
+      setManageModels(seedManageModelRows(models.customModels, configuredModels));
+    } else if (isOpenRouter) {
+      setManageModels(
+        seedOpenRouterManageModelRows(
+          models.customModels,
+          models.currentModel,
+          currentModelName,
+        ),
+      );
+    }
+  }, [
+    models.customModels,
+    models.currentModel,
+    configuredModels,
+    isCompatible,
+    isOpenRouter,
+    currentModelName,
+  ]);
 
   const saveCompatibleConfig = async (patch: {
     displayName?: string;
@@ -145,10 +164,31 @@ export function ConnectedProviderSection({
     }
   };
 
+  const openOpenRouterManage = () => {
+    setDialogError(null);
+    setManageModels(
+      seedOpenRouterManageModelRows(
+        models.customModels,
+        models.currentModel,
+        currentModelName,
+      ),
+    );
+    setActiveModelDraft(models.currentModel ?? "");
+    setManageOpen(true);
+  };
+
   const saveOpenRouterConfig = async () => {
     const modelsError = validateOpenRouterModelsInput(manageModels);
     if (modelsError) {
       setDialogError(modelsError);
+      return;
+    }
+
+    const modelIds = manageModels.map((row) => row.id.trim()).filter(Boolean);
+    const activeModel = activeModelDraft.trim();
+
+    if (!activeModel || !modelIds.includes(activeModel)) {
+      setDialogError("Choose an active model from your list.");
       return;
     }
 
@@ -160,7 +200,7 @@ export function ConnectedProviderSection({
         buildConfigureProviderRequest({
           apiKey: "",
           provider: "openrouter",
-          model: models.currentModel ?? undefined,
+          model: activeModel,
           customModels: toCustomModelEntries(manageModels),
         }),
       );
@@ -191,16 +231,10 @@ export function ConnectedProviderSection({
         </SettingsRow>
       ) : null}
 
-      {isCompatible || isOpenRouter ? (
+      {isCompatible ? (
         <SettingsRow
           label="Models"
-          description={
-            isOpenRouter
-              ? models.customModels?.length
-                ? `${models.customModels.length} in shortlist`
-                : `${configuredModels.length} built-in models`
-              : `${models.customModels?.length ?? 0} models configured`
-          }
+          description={`${models.customModels?.length ?? 0} models configured`}
         >
           <Button
             type="button"
@@ -217,84 +251,79 @@ export function ConnectedProviderSection({
         </SettingsRow>
       ) : null}
 
-      <SettingsRow
-        label="Model"
-        description={
-          modelSaveHint ? (
-            <span className="text-emerald-200" role="status">
-              {modelSaveHint}
-            </span>
-          ) : (
-            "Chat history resets when you change models"
-          )
-        }
-      >
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Select
-            value={modelDraft}
-            disabled={modelBusy || configuredModels.length === 0}
-            onValueChange={(value) => onModelDraftChange(value != null ? String(value) : "")}
-          >
-            <SelectTrigger id="connected-model" className="w-44 sm:w-52">
-              <SelectValue placeholder="Select model" />
-            </SelectTrigger>
-            <SelectContent align="end">
-              {configuredModels.map((model) => (
-                <SelectItem key={model.id} value={model.id}>
-                  {model.name}
-                  {model.default ? " (default)" : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {isOpenRouter ? (
+      {isOpenRouter ? (
+        <SettingsRow
+          label="Model"
+          description={
+            modelSaveHint ? (
+              <span className="text-emerald-200" role="status">
+                {modelSaveHint}
+              </span>
+            ) : (
+              <>
+                <span className="block font-mono text-[11px] text-foreground/90">
+                  {models.currentModel}
+                </span>
+                <span className="mt-0.5 block">
+                  Chat history resets when you change models
+                </span>
+              </>
+            )
+          }
+        >
+          <Button type="button" size="sm" variant="outline" onClick={openOpenRouterManage}>
+            Manage
+          </Button>
+        </SettingsRow>
+      ) : (
+        <SettingsRow
+          label="Model"
+          description={
+            modelSaveHint ? (
+              <span className="text-emerald-200" role="status">
+                {modelSaveHint}
+              </span>
+            ) : (
+              "Chat history resets when you change models"
+            )
+          }
+        >
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Select
+              value={modelDraft}
+              disabled={modelBusy || configuredModels.length === 0}
+              onValueChange={(value) => onModelDraftChange(value != null ? String(value) : "")}
+            >
+              <SelectTrigger id="connected-model" className="w-44 sm:w-52">
+                <SelectValue placeholder="Select model" />
+              </SelectTrigger>
+              <SelectContent align="end">
+                {configuredModels.map((model) => (
+                  <SelectItem key={model.id} value={model.id}>
+                    {model.name}
+                    {model.default ? " (default)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Button
               type="button"
               size="sm"
-              variant="outline"
-              disabled={modelBusy}
-              onClick={() => setBrowseOpen(true)}
+              disabled={modelBusy || !modelDraft || !modelDirty}
+              onClick={onSaveModel}
             >
-              Browse
+              {modelBusy ? (
+                <>
+                  <Spinner className="mr-2" />
+                  Saving…
+                </>
+              ) : (
+                "Save"
+              )}
             </Button>
-          ) : null}
-          <Button
-            type="button"
-            size="sm"
-            disabled={modelBusy || !modelDraft || !modelDirty}
-            onClick={onSaveModel}
-          >
-            {modelBusy ? (
-              <>
-                <Spinner className="mr-2" />
-                Saving…
-              </>
-            ) : (
-              "Save"
-            )}
-          </Button>
-        </div>
-      </SettingsRow>
-
-      {isOpenRouter ? (
-        <Dialog open={browseOpen} onOpenChange={setBrowseOpen}>
-          <DialogContent className="w-[min(96vw,42rem)] sm:max-w-xl">
-            <DialogHeader>
-              <DialogTitle>Browse OpenRouter models</DialogTitle>
-              <DialogDescription>
-                Pick a model, then click Save on the Model row to apply it.
-              </DialogDescription>
-            </DialogHeader>
-            <OpenRouterModelsBrowseList
-              onSelect={(row) => {
-                onModelDraftChange(row.id);
-                setBrowseOpen(false);
-              }}
-              className="h-80 rounded-md border border-border"
-            />
-          </DialogContent>
-        </Dialog>
-      ) : null}
+          </div>
+        </SettingsRow>
+      )}
 
       <SettingsRow label="API key" description="Saved on the server">
         <Button type="button" size="sm" variant="outline" onClick={onOpenReplaceKey}>
@@ -479,23 +508,62 @@ export function ConnectedProviderSection({
         >
           <DialogContent className="w-[min(96vw,56rem)] sm:max-w-3xl">
             <DialogHeader>
-              <DialogTitle>Manage models</DialogTitle>
+              <DialogTitle>Manage model</DialogTitle>
               <DialogDescription>
-                Add or remove models from your shortlist. After you save, only these models appear
-                in the model picker.
+                Choose the active model and edit your shortlist. Chat history resets when the active
+                model changes.
               </DialogDescription>
             </DialogHeader>
-            <OpenRouterProviderModelFields
-              customModels={manageModels}
-              disabled={dialogBusy}
-              modelsError={dialogError}
-              onCustomModelsChange={(rows) => {
-                setManageModels(rows);
-                if (dialogError) {
-                  setDialogError(null);
-                }
-              }}
-            />
+            <div className="space-y-4">
+              <FormField id="openrouter-active-model" label="Active model">
+                <Select
+                  value={
+                    manageModels.some((row) => row.id.trim() === activeModelDraft)
+                      ? activeModelDraft
+                      : ""
+                  }
+                  disabled={
+                    dialogBusy ||
+                    manageModels.every((row) => !row.id.trim())
+                  }
+                  onValueChange={(value) => {
+                    setActiveModelDraft(value != null ? String(value) : "");
+                    if (dialogError) {
+                      setDialogError(null);
+                    }
+                  }}
+                >
+                  <SelectTrigger id="openrouter-active-model" className="w-full">
+                    <SelectValue placeholder="Select active model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {manageModels
+                      .filter((row) => row.id.trim())
+                      .map((row) => (
+                        <SelectItem key={row.id.trim()} value={row.id.trim()}>
+                          {row.name?.trim() || row.id.trim()}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </FormField>
+              <OpenRouterProviderModelFields
+                customModels={manageModels}
+                disabled={dialogBusy}
+                modelsError={dialogError}
+                onBrowseModelAdded={(row) => setActiveModelDraft(row.id)}
+                onCustomModelsChange={(rows) => {
+                  setManageModels(rows);
+                  const ids = rows.map((row) => row.id.trim()).filter(Boolean);
+                  if (activeModelDraft.trim() && !ids.includes(activeModelDraft.trim())) {
+                    setActiveModelDraft(ids[0] ?? "");
+                  }
+                  if (dialogError) {
+                    setDialogError(null);
+                  }
+                }}
+              />
+            </div>
             <DialogFooter>
               <Button type="button" variant="outline" disabled={dialogBusy} onClick={() => setManageOpen(false)}>
                 Cancel

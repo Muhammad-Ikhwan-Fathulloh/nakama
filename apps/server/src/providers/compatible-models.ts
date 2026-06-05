@@ -108,9 +108,7 @@ export function getModelsForConfiguredProvider(
 
   if (provider === "openrouter") {
     const entries = userConfig?.customModels ?? [];
-    const catalog = entries.length
-      ? openRouterCustomModelsToCatalog(entries)
-      : AVAILABLE_MODELS.filter((model) => model.provider === "openrouter");
+    const catalog = entries.length ? openRouterCustomModelsToCatalog(entries) : [];
     return ensureCurrentModelInCatalog(
       catalog,
       currentModel ?? userConfig?.model,

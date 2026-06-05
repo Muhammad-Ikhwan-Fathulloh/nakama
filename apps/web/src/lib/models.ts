@@ -165,23 +165,18 @@ export function modelsFromOpenRouterRows(
     }));
 }
 
-export function catalogToOpenRouterModelRows(
-  catalog: ProviderModelOption[],
-): Array<{ id: string; name: string; default?: boolean }> {
-  return filterModelsByProvider(catalog, "openrouter").map((model) => ({
-    id: model.id,
-    name: model.name,
-    ...(model.default ? { default: true } : {}),
-  }));
-}
-
 export function appendOpenRouterModelRow(
   rows: Array<{ id: string; name?: string; default?: boolean }>,
   modelId: string,
   modelName: string,
-  catalog: ProviderModelOption[],
 ): Array<{ id: string; name: string; default?: boolean }> {
-  const base = rows.length > 0 ? rows : catalogToOpenRouterModelRows(catalog);
+  const base = rows
+    .filter((row) => row.id.trim())
+    .map((row) => ({
+      id: row.id,
+      name: row.name ?? row.id,
+      ...(row.default ? { default: true } : {}),
+    }));
 
   if (base.some((row) => row.id === modelId)) {
     return base.map((row) => ({
