@@ -3,6 +3,7 @@ import { createGeminiProvider } from "./gemini";
 import {
   apiKeyEnvVarForProvider,
   readEnvValue,
+  resolveProvider,
   type ProviderClient,
   type ProviderName,
 } from "@tinyclaw/core";

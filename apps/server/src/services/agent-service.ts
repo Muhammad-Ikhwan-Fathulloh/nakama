@@ -65,6 +65,7 @@ import {
   loadUserTimezone,
   readEnvValue,
   regenerateTelegramHandshake,
+  resolveProvider,
   resolveSoulStackForProfile,
   saveTelegramConfig,
   loadUserThinkingSettings,
@@ -91,7 +92,6 @@ import {
   isCostEstimated,
   isOpenRouterModelSlug,
   resolveModel,
-  resolveProvider,
 } from "../providers";
 import { createSuperBotTools } from "../tools/super-bot-tools";
 import type { AutomationRunner } from "./automation-runner";
