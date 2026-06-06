@@ -12,6 +12,7 @@ Inspired by [OpenClaw](https://github.com/openclaw/openclaw) and [Hermes](https:
 
 - [FEATURES.md](./FEATURES.md) — what works today (chat, profiles, tools, API, storage)
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — system design, package layout, and data flows
+- [DEVELOPMENT.md](./DEVELOPMENT.md) — local setup, Docker (GHCR), env vars
 
 ## Quick start
 
