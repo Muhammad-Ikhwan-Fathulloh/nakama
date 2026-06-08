@@ -24,8 +24,15 @@ import type {
   ToolSourceResponse,
   ConfigureProviderRequest,
   ConfigureProviderResponse,
+  CreateProviderRequest,
+  CreateProviderResponse,
+  DeleteProviderResponse,
   ImageAttachment,
+  ListProvidersResponse,
+  SetModelRequest,
   SetModelResponse,
+  UpdateProviderRequest,
+  UpdateProviderResponse,
   SoulStackResponse,
   SoulStatusResponse,
   TelegramSettingsResponse,
@@ -38,35 +45,29 @@ import type {
   ThinkingSettings,
   ThinkingSettingsResponse,
   UpdateThinkingRequest,
-  UserProviderConfig,
   ProviderChatOptions,
   ProviderClient,
-} from "@tinyclaw/core";
-import {
-  isValidBaseUrl,
-  normalizeBaseUrl,
-  validateCustomModels,
-  validateDisplayName,
+  type UserConfig,
 } from "@tinyclaw/core";
 import {
   buildThinkingProviderOptions,
   composeSoulSystemPrompt,
   createId,
   createSessionId,
+  findProviderInstance,
+  getActiveProviderInstance,
   getProfileSoulDir,
   getResolvedSoulStatus,
   getUserContextStatus,
-  apiKeyEnvVarForProvider,
   initSoulDirectory,
   initUserContext as initializeUserContext,
+  isProviderConfigured,
   isWritableSoulFileKey,
   loadSoulStack,
   loadTelegramSettingsPublic,
   loadUserContext,
   loadUserTimezone,
-  readEnvValue,
   regenerateTelegramHandshake,
-  resolveProvider,
   resolveSoulStackForProfile,
   saveTelegramConfig,
   loadUserThinkingSettings,
@@ -84,17 +85,25 @@ import {
   type StoredTaskRunRecord,
 } from "@tinyclaw/db";
 import {
+  createProviderFromActiveConfig,
   createProviderFromSources,
   fetchRemoteOpenAIModels,
-  getDefaultModel,
+  AVAILABLE_MODELS,
   getModelById,
-  getModelsForConfiguredProvider,
-  isCompatibleModelId,
+  getModelsForProviderInstance,
   isCostEstimated,
-  isOpenRouterModelSlug,
   resolveModel,
-  validateOpenRouterCustomModels,
 } from "../providers";
+import {
+  applyProviderInstanceUpdate,
+  buildProviderInstanceFromCreateRequest,
+  countModelsForInstance,
+  mergeModelsForConfig,
+  modelExistsOnInstance,
+  resolveDefaultModelForInstance,
+  resolveInitialModel,
+  toProviderInstanceSummary,
+} from "./provider-instance-helpers";
 import { createSuperBotTools } from "../tools/super-bot-tools";
 import { createTodoTools } from "../tools/todo-tools";
 import { AgentTodoState } from "./agent-todo-state";
@@ -123,7 +132,7 @@ interface StoredSession {
 
 export class AgentService {
   private harness: AgentHarness;
-  private userConfig: UserProviderConfig | null;
+  private userConfig: UserConfig | null;
   private readonly db: DatabaseAdapter;
   private readonly profileService: ProfileService;
   private readonly superBotSessionState = new SuperBotSessionState();
@@ -140,7 +149,7 @@ export class AgentService {
   private _providerConfigured: boolean;
 
   constructor(
-    userConfig: UserProviderConfig | null,
+    userConfig: UserConfig | null,
     provider: ProviderClient | null,
     db: DatabaseAdapter,
     private readonly llmUsageTracker?: LlmUsageTracker,
@@ -156,7 +165,7 @@ export class AgentService {
     this.agentTodoState = new AgentTodoState(db);
     this.todoTools = createTodoTools(this.agentTodoState);
     this.superBotTools = createSuperBotTools(this.profileService, this.superBotSessionState);
-    this._providerConfigured = provider !== null;
+    this._providerConfigured = isProviderConfigured(userConfig) && provider !== null;
     this.harness = this.createHarness(provider);
   }
 
@@ -257,9 +266,9 @@ export class AgentService {
   private resolveChatProviderOptions(
     overrides?: Partial<ProviderChatOptions>,
   ): ProviderChatOptions | undefined {
-    const providerName = resolveProvider({ env: process.env, configuredProvider: this.userConfig?.provider });
+    const active = getActiveProviderInstance(this.userConfig);
     const thinking =
-      providerName === "openai_compatible"
+      active?.type === "openai_compatible"
         ? undefined
         : buildThinkingProviderOptions(this.userConfig);
     const webSearch = overrides?.webSearch;
@@ -634,81 +643,229 @@ export class AgentService {
 
   async discoverModels(baseUrl: string, apiKey = ""): Promise<ModelsResponse> {
     const entries = await fetchRemoteOpenAIModels(baseUrl, apiKey);
-    const models = getModelsForConfiguredProvider("openai_compatible", {
-      provider: "openai_compatible",
+    const probeInstance = {
+      id: "discover",
+      type: "openai_compatible" as const,
+      label: "Discover",
       apiKey,
       baseUrl,
       customModels: entries,
-    });
+      createdAt: new Date(0).toISOString(),
+    };
+    const models = getModelsForProviderInstance(probeInstance);
 
     return {
-      provider: "openai_compatible",
+      currentProviderId: null,
       currentModel: null,
       defaultModel: entries[0]?.id ?? null,
-      displayName: null,
+      providers: [],
       models,
+      provider: "openai_compatible",
+      displayName: null,
+      customModels: entries,
     };
   }
 
-  async getModels(options: { source?: "catalog" | "remote" } = {}): Promise<ModelsResponse> {
-    const provider = resolveProvider({ env: process.env, configuredProvider: this.userConfig?.provider });
-    const currentModel =
-      provider && this.userConfig
-        ? resolveModel(
-            provider,
-            this.userConfig.model,
-            this.userConfig.customModels,
-          )
-        : null;
-    const defaultModel = provider
-      ? getDefaultModel(provider, this.userConfig?.customModels)
-      : "gpt-5.4";
-    const displayName =
-      provider === "openai_compatible" ? (this.userConfig?.displayName ?? null) : null;
-    const baseUrl =
-      provider === "openai_compatible" ? (this.userConfig?.baseUrl ?? null) : null;
-    const customModels =
-      provider === "openai_compatible" || provider === "openrouter"
-        ? (this.userConfig?.customModels ?? [])
-        : undefined;
+  async listProviders(): Promise<ListProvidersResponse> {
+    const providers = this.userConfig?.providers ?? [];
 
-    let models = getModelsForConfiguredProvider(
-      provider,
-      this.userConfig,
-      currentModel,
-    );
+    return {
+      providers: providers.map((instance) =>
+        toProviderInstanceSummary(instance, countModelsForInstance(instance)),
+      ),
+      defaultProviderId: this.userConfig?.defaultProviderId ?? null,
+      defaultModel: this.userConfig?.defaultModel ?? null,
+    };
+  }
 
-    if (
-      options.source === "remote" &&
-      provider === "openai_compatible" &&
-      this.userConfig?.baseUrl
-    ) {
-      const remote = fetchRemoteOpenAIModels(
-        this.userConfig.baseUrl,
-        this.userConfig.apiKey,
-      );
-      return {
-        provider,
-        currentModel,
-        defaultModel,
-        displayName,
-        baseUrl,
-        customModels: await remote,
-        models: getModelsForConfiguredProvider(provider, {
-          ...this.userConfig,
-          customModels: await remote,
-        }),
-      };
+  async createProvider(request: CreateProviderRequest): Promise<CreateProviderResponse> {
+    const existing = this.userConfig?.providers ?? [];
+    const instance = buildProviderInstanceFromCreateRequest(request, existing);
+    const model = resolveInitialModel(instance, request.model);
+    const providers = [...existing, instance];
+    const isFirst = providers.length === 1;
+    const thinking = await this.resolveThinkingSettings();
+    const baseConfig = this.userConfig ?? {
+      defaultProviderId: null,
+      defaultModel: null,
+      providers: [],
+      thinkingEnabled: thinking.enabled,
+      thinkingEffort: thinking.effort,
+    };
+
+    this.userConfig = {
+      ...baseConfig,
+      providers,
+      defaultProviderId:
+        isFirst || !baseConfig.defaultProviderId ? instance.id : baseConfig.defaultProviderId,
+      defaultModel: isFirst || !baseConfig.defaultModel ? model : baseConfig.defaultModel,
+    };
+
+    await saveUserConfig(this.userConfig);
+    this.refreshHarness();
+
+    if (isFirst) {
+      await this.ensureSoulScaffolded();
     }
 
     return {
-      provider,
-      currentModel,
+      provider: toProviderInstanceSummary(instance, countModelsForInstance(instance)),
+      defaultProviderId: this.userConfig.defaultProviderId!,
+      defaultModel: this.userConfig.defaultModel!,
+    };
+  }
+
+  async updateProvider(
+    providerId: string,
+    request: UpdateProviderRequest,
+  ): Promise<UpdateProviderResponse> {
+    if (!this.userConfig) {
+      throw new Error("Provider is not configured.");
+    }
+
+    const current = findProviderInstance(this.userConfig, providerId);
+
+    if (!current) {
+      throw new Error("Provider not found.");
+    }
+
+    const updated = applyProviderInstanceUpdate(current, request);
+    const providers = this.userConfig.providers.map((instance) =>
+      instance.id === providerId ? updated : instance,
+    );
+
+    this.userConfig = { ...this.userConfig, providers };
+    await saveUserConfig(this.userConfig);
+    this.refreshHarness();
+
+    return {
+      provider: toProviderInstanceSummary(updated, countModelsForInstance(updated)),
+    };
+  }
+
+  async deleteProvider(providerId: string): Promise<DeleteProviderResponse> {
+    if (!this.userConfig) {
+      throw new Error("Provider is not configured.");
+    }
+
+    const providers = this.userConfig.providers.filter((instance) => instance.id !== providerId);
+
+    if (providers.length === this.userConfig.providers.length) {
+      throw new Error("Provider not found.");
+    }
+
+    let defaultProviderId = this.userConfig.defaultProviderId;
+    let defaultModel = this.userConfig.defaultModel;
+
+    if (defaultProviderId === providerId) {
+      const next = providers[0];
+
+      if (next) {
+        defaultProviderId = next.id;
+        defaultModel = resolveDefaultModelForInstance(next);
+      } else {
+        defaultProviderId = null;
+        defaultModel = null;
+      }
+    }
+
+    this.userConfig = {
+      ...this.userConfig,
+      providers,
+      defaultProviderId,
       defaultModel,
-      displayName,
-      baseUrl,
-      customModels,
+    };
+
+    await saveUserConfig(this.userConfig);
+    this.refreshHarness();
+
+    return { defaultProviderId, defaultModel };
+  }
+
+  async getModels(options: { source?: "catalog" | "remote" } = {}): Promise<ModelsResponse> {
+    const active = getActiveProviderInstance(this.userConfig);
+    const currentProviderId = this.userConfig?.defaultProviderId ?? null;
+    const currentModel = this.userConfig?.defaultModel ?? null;
+    const configuredProviders = this.userConfig?.providers ?? [];
+    const providers = configuredProviders.map((instance) =>
+      toProviderInstanceSummary(instance, countModelsForInstance(instance)),
+    );
+
+    if (configuredProviders.length === 0) {
+      return this.buildModelsResponse({
+        active: null,
+        currentProviderId: null,
+        currentModel: null,
+        providers: [],
+        models: AVAILABLE_MODELS,
+      });
+    }
+
+    if (
+      options.source === "remote" &&
+      active?.type === "openai_compatible" &&
+      active.baseUrl
+    ) {
+      const remote = await fetchRemoteOpenAIModels(active.baseUrl, active.apiKey);
+      const remoteInstance = { ...active, customModels: remote };
+      const models = mergeModelsForConfig(
+        (this.userConfig?.providers ?? []).map((instance) =>
+          instance.id === active.id ? remoteInstance : instance,
+        ),
+        currentProviderId,
+        currentModel,
+      );
+
+      return this.buildModelsResponse({
+        active,
+        currentProviderId,
+        currentModel,
+        providers,
+        models,
+        customModels: remote,
+      });
+    }
+
+    const models = mergeModelsForConfig(
+      this.userConfig?.providers ?? [],
+      currentProviderId,
+      currentModel,
+    );
+
+    return this.buildModelsResponse({
+      active,
+      currentProviderId,
+      currentModel,
+      providers,
       models,
+    });
+  }
+
+  private buildModelsResponse(options: {
+    active: ReturnType<typeof getActiveProviderInstance>;
+    currentProviderId: string | null;
+    currentModel: string | null;
+    providers: ReturnType<typeof toProviderInstanceSummary>[];
+    models: ModelsResponse["models"];
+    customModels?: ModelsResponse["customModels"];
+  }): ModelsResponse {
+    const { active, currentProviderId, currentModel, providers, models, customModels } =
+      options;
+
+    return {
+      currentProviderId,
+      currentModel,
+      defaultModel: currentModel,
+      providers,
+      models,
+      provider: active?.type ?? null,
+      displayName: active?.type === "openai_compatible" ? active.label : null,
+      baseUrl: active?.type === "openai_compatible" ? (active.baseUrl ?? null) : null,
+      customModels:
+        customModels ??
+        (active && (active.type === "openrouter" || active.type === "openai_compatible")
+          ? active.customModels
+          : undefined),
     };
   }
 
@@ -725,186 +882,65 @@ export class AgentService {
     );
   }
 
-  async setModel(model: string): Promise<SetModelResponse> {
+  async setModel(request: SetModelRequest): Promise<SetModelResponse> {
     if (!this.userConfig) {
       throw new Error("Provider is not configured.");
     }
 
-    const trimmedModel = model.trim();
-    const option = getModelById(trimmedModel);
-    let targetProvider = option?.provider;
-    let targetModel = option?.id;
+    const instance = findProviderInstance(this.userConfig, request.providerId);
 
-    if (!option) {
-      if (isOpenRouterModelSlug(trimmedModel)) {
-        targetProvider = "openrouter";
-        targetModel = trimmedModel;
-      } else if (
-        this.userConfig.provider === "openai_compatible" &&
-        isCompatibleModelId(trimmedModel, this.userConfig.customModels)
-      ) {
-        targetProvider = "openai_compatible";
-        targetModel = trimmedModel;
-      } else {
-        throw new Error(`Unknown model: ${model}`);
-      }
+    if (!instance) {
+      throw new Error("Provider not found.");
     }
 
-    const nextConfig = {
+    const trimmedModel = request.model.trim();
+
+    if (!modelExistsOnInstance(instance, trimmedModel)) {
+      throw new Error(`Unknown model: ${request.model}`);
+    }
+
+    this.userConfig = {
       ...this.userConfig,
-      provider: targetProvider!,
-      model: targetModel!,
+      defaultProviderId: instance.id,
+      defaultModel: trimmedModel,
     };
 
-    const currentProvider = resolveProvider({ env: process.env, configuredProvider: this.userConfig?.provider });
-
-    if (targetProvider !== currentProvider) {
-      const apiKey = readEnvValue(process.env, apiKeyEnvVarForProvider(targetProvider!));
-
-      if (!apiKey) {
-        throw new Error(
-          `Switching to ${targetProvider} requires ${apiKeyEnvVarForProvider(targetProvider!)}.`,
-        );
-      }
-
-      nextConfig.apiKey = apiKey;
-    }
-
-    this.userConfig = nextConfig;
     await saveUserConfig(this.userConfig);
-
-    const nextProvider = createProviderFromSources(process.env, this.userConfig);
-
-    if (!nextProvider) {
-      throw new Error(`Could not configure provider for ${targetProvider}.`);
-    }
-
-    this._providerConfigured = true;
-    this.harness = this.createHarness(nextProvider);
-    this.sessions.clear();
+    this.refreshHarness();
 
     return {
-      provider: targetProvider!,
-      currentModel: targetModel!,
+      providerId: instance.id,
+      provider: instance.type,
+      currentModel: trimmedModel,
     };
   }
 
   async configureProvider(
     request: ConfigureProviderRequest,
   ): Promise<ConfigureProviderResponse> {
-    const provider = request.provider;
-    const trimmedKey = request.apiKey.trim();
-    const apiKey =
-      trimmedKey ||
-      (provider === "openai_compatible" || provider === "openrouter"
-        ? (this.userConfig?.apiKey ?? "")
-        : "");
+    const result = await this.createProvider({
+      type: request.provider,
+      apiKey: request.apiKey,
+      model: request.model,
+      label: request.displayName,
+      baseUrl: request.baseUrl,
+      customModels: request.customModels,
+    });
 
-    if (!apiKey && provider !== "openai_compatible") {
-      throw new Error("API key is required.");
-    }
-
-    const providerFields: Pick<
-      UserProviderConfig,
-      "displayName" | "baseUrl" | "customModels"
-    > =
-      provider === "openai_compatible"
-        ? this.buildCompatibleProviderFields(request)
-        : provider === "openrouter"
-          ? this.buildOpenRouterProviderFields(request)
-          : this.buildNativeBaseUrlFields(request);
-
-    const customModels =
-      providerFields.customModels ??
-      (provider === "openrouter" ? this.userConfig?.customModels : undefined);
-    const selectedModel = request.model?.trim()
-      ? resolveModel(provider, request.model.trim(), customModels)
-      : getDefaultModel(provider, customModels);
-    const option = getModelById(selectedModel);
-    const thinking = await this.resolveThinkingSettings();
-    const nextConfig: UserProviderConfig = {
-      provider: option?.provider ?? provider,
-      apiKey,
-      model: selectedModel,
-      ...providerFields,
-      ...(this.userConfig?.timezone ? { timezone: this.userConfig.timezone } : {}),
-      thinkingEnabled: thinking.enabled,
-      thinkingEffort: thinking.effort,
-    };
-
-    this.userConfig = nextConfig;
-    await saveUserConfig(this.userConfig);
-
-    const nextProvider = createProviderFromSources(process.env, this.userConfig);
-
-    if (!nextProvider) {
-      throw new Error(`Could not configure provider for ${provider}.`);
-    }
-
-    this._providerConfigured = true;
-    this.harness = this.createHarness(nextProvider);
-    this.sessions.clear();
-    await this.ensureSoulScaffolded();
+    const instance = findProviderInstance(this.userConfig, result.defaultProviderId);
 
     return {
-      provider: nextConfig.provider,
-      currentModel: selectedModel,
+      provider: result.provider.type,
+      currentModel: result.defaultModel,
       displayName:
-        nextConfig.provider === "openai_compatible"
-          ? (nextConfig.displayName ?? null)
-          : null,
+        instance?.type === "openai_compatible" ? (instance.label ?? null) : null,
     };
   }
 
-  private buildCompatibleProviderFields(
-    request: ConfigureProviderRequest,
-  ): Pick<UserProviderConfig, "displayName" | "baseUrl" | "customModels"> {
-    const displayName = validateDisplayName(request.displayName ?? "");
-    const baseUrl = normalizeBaseUrl(request.baseUrl ?? "");
-
-    if (!isValidBaseUrl(baseUrl)) {
-      throw new Error("A valid http(s) base URL is required.");
-    }
-
-    let customModels = request.customModels?.length
-      ? validateCustomModels(request.customModels)
-      : undefined;
-
-    if (!customModels?.length && request.model?.trim()) {
-      customModels = validateCustomModels([{ id: request.model.trim(), default: true }]);
-    }
-
-    if (!customModels?.length) {
-      throw new Error("At least one model is required.");
-    }
-
-    return { displayName, baseUrl, customModels };
-  }
-
-  private buildOpenRouterProviderFields(
-    request: ConfigureProviderRequest,
-  ): Pick<UserProviderConfig, "customModels"> {
-    if (!request.customModels?.length) {
-      return {};
-    }
-
-    return { customModels: validateOpenRouterCustomModels(request.customModels) };
-  }
-
-  private buildNativeBaseUrlFields(
-    request: ConfigureProviderRequest,
-  ): Pick<UserProviderConfig, "baseUrl"> {
-    const raw = request.baseUrl?.trim();
-    if (!raw) {
-      return {};
-    }
-
-    const normalized = normalizeBaseUrl(raw);
-    if (!isValidBaseUrl(normalized)) {
-      throw new Error("A valid http(s) base URL is required.");
-    }
-
-    return { baseUrl: normalized };
+  private refreshHarness(): void {
+    const provider = createProviderFromActiveConfig(this.userConfig);
+    this._providerConfigured = isProviderConfigured(this.userConfig);
+    this.harness = this.createHarness(provider);
   }
 
   async listProfiles(): Promise<ListProfilesResponse> {
@@ -1063,17 +1099,13 @@ export class AgentService {
   }
 
   private createHarness(provider: ProviderClient | null): AgentHarness {
-    const providerName = resolveProvider({ env: process.env, configuredProvider: this.userConfig?.provider });
+    const active = getActiveProviderInstance(this.userConfig);
     const modelId =
-      provider && providerName && this.userConfig
-        ? resolveModel(
-            providerName,
-            this.userConfig.model,
-            this.userConfig.customModels,
-          )
+      provider && active && this.userConfig?.defaultModel
+        ? resolveModel(active.type, this.userConfig.defaultModel, active.customModels)
         : null;
 
-    this.syncUsagePricingContext(providerName);
+    this.syncUsagePricingContext(active);
 
     const trackedProvider =
       provider && this.llmUsageTracker && modelId
@@ -1087,11 +1119,11 @@ export class AgentService {
   }
 
   private syncUsagePricingContext(
-    provider: ReturnType<typeof resolveProvider>,
+    active: ReturnType<typeof getActiveProviderInstance>,
   ): void {
     this.llmUsageTracker?.setPricingContext({
-      provider,
-      userConfig: this.userConfig,
+      provider: active?.type ?? null,
+      providerInstance: active,
     });
   }
 
@@ -1099,20 +1131,12 @@ export class AgentService {
     displayName: string | null;
     costEstimated: boolean;
   } {
-    const provider = resolveProvider({ env: process.env, configuredProvider: this.userConfig?.provider });
-    const currentModel =
-      provider && this.userConfig
-        ? resolveModel(
-            provider,
-            this.userConfig.model,
-            this.userConfig.customModels,
-          )
-        : null;
+    const active = getActiveProviderInstance(this.userConfig);
+    const currentModel = this.userConfig?.defaultModel ?? null;
 
     return {
-      displayName:
-        provider === "openai_compatible" ? (this.userConfig?.displayName ?? null) : null,
-      costEstimated: isCostEstimated(provider, currentModel, this.userConfig),
+      displayName: active?.type === "openai_compatible" ? (active.label ?? null) : null,
+      costEstimated: isCostEstimated(active?.type ?? null, currentModel, active),
     };
   }
 
@@ -1224,13 +1248,17 @@ export class AgentService {
       return undefined;
     }
 
-    const provider = resolveProvider({ env: process.env, configuredProvider: this.userConfig?.provider });
+    const active = getActiveProviderInstance(this.userConfig);
 
-    if (!provider) {
+    if (!active) {
       return undefined;
     }
 
-    const modelId = resolveModel(provider, profile.model ?? this.userConfig.model);
+    const modelId = resolveModel(
+      active.type,
+      profile.model ?? this.userConfig.defaultModel ?? "",
+      active.customModels,
+    );
     const model = getModelById(modelId);
 
     if (!model) {

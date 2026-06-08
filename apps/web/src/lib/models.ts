@@ -1,4 +1,8 @@
-import type { ConfigureProviderRequest, ProviderModelOption } from "@tinyclaw/core/contract";
+import type {
+  ConfigureProviderRequest,
+  CreateProviderRequest,
+  ProviderModelOption,
+} from "@tinyclaw/core/contract";
 import { formatConfiguredProviderLabel } from "@tinyclaw/core/provider-label";
 import type { UserProviderName } from "@tinyclaw/core/provider-resolution";
 
@@ -311,6 +315,26 @@ export function resolveModelForProvider(
   return catalogModel;
 }
 
+export function buildCreateProviderRequest(options: {
+  apiKey: string;
+  provider: SelectedProvider;
+  model?: string;
+  displayName?: string;
+  baseUrl?: string;
+  customModels?: ConfigureProviderRequest["customModels"];
+}): CreateProviderRequest {
+  const request = buildConfigureProviderRequest(options);
+
+  return {
+    type: request.provider,
+    apiKey: request.apiKey,
+    ...(request.model ? { model: request.model } : {}),
+    ...(options.displayName?.trim() ? { label: options.displayName.trim() } : {}),
+    ...(request.baseUrl ? { baseUrl: request.baseUrl } : {}),
+    ...(request.customModels ? { customModels: request.customModels } : {}),
+  };
+}
+
 export function buildConfigureProviderRequest(options: {
   apiKey: string;
   provider: SelectedProvider;
@@ -347,6 +371,57 @@ export function buildConfigureProviderRequest(options: {
   }
 
   return request;
+}
+
+export function encodeModelSelection(providerId: string, modelId: string): string {
+  return `${providerId}::${modelId}`;
+}
+
+export function decodeModelSelection(
+  value: string,
+): { providerId: string; modelId: string } | null {
+  const separator = value.indexOf("::");
+
+  if (separator <= 0) {
+    return null;
+  }
+
+  return {
+    providerId: value.slice(0, separator),
+    modelId: value.slice(separator + 2),
+  };
+}
+
+export function groupModelsByProvider(
+  models: ProviderModelOption[],
+): Array<{
+  providerId: string;
+  providerLabel: string;
+  models: ProviderModelOption[];
+}> {
+  const groups = new Map<
+    string,
+    { providerId: string; providerLabel: string; models: ProviderModelOption[] }
+  >();
+
+  for (const model of models) {
+    const providerId = model.providerId ?? model.provider;
+    const providerLabel = model.providerLabel ?? formatProviderLabel(model.provider);
+    const existing = groups.get(providerId);
+
+    if (existing) {
+      existing.models.push(model);
+      continue;
+    }
+
+    groups.set(providerId, {
+      providerId,
+      providerLabel,
+      models: [model],
+    });
+  }
+
+  return [...groups.values()];
 }
 
 export function modelsFromCustomRows(

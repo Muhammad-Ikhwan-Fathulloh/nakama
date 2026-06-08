@@ -1,5 +1,5 @@
 import { hasActiveAgentTodos } from "@tinyclaw/core/agent-todo";
-import type { AgentTodo, ProfileSummary } from "@tinyclaw/core/contract";
+import type { AgentTodo, ProviderModelOption, ProfileSummary } from "@tinyclaw/core/contract";
 import type { ChatStatus } from "ai";
 import type { FileUIPart } from "ai";
 import { ArrowUpIcon, FileTextIcon, PlusIcon, WifiOffIcon, XIcon } from "lucide-react";
@@ -76,10 +76,14 @@ interface ChatComposerFullProps extends ChatComposerBaseProps {
   showOfflineHint?: boolean;
   providerConfigured?: boolean;
   onNavigateSetup?: () => void;
-  providerModels: Array<{ id: string; name: string }>;
-  currentModel: string | null;
-  onModelChange: (modelId: string) => void;
-  renderModelLabel: (modelId: string | null) => string | null;
+  providerModelGroups: Array<{
+    providerId: string;
+    providerLabel: string;
+    models: ProviderModelOption[];
+  }>;
+  currentModelSelection: string | null;
+  onModelChange: (selection: string) => void;
+  renderModelLabel: (selection: string | null) => string | null;
 }
 
 export type ChatComposerProps = ChatComposerMinimalProps | ChatComposerFullProps;
@@ -276,8 +280,10 @@ function ChatComposerFullFooter({
 
         {props.providerConfigured ? (
           <PromptInputSelect
-            value={props.currentModel ?? ""}
-            disabled={!props.providerModels.length || busy}
+            value={props.currentModelSelection ?? ""}
+            disabled={
+              !props.providerModelGroups.some((group) => group.models.length > 0) || busy
+            }
             onValueChange={(value) =>
               void props.onModelChange(value != null ? String(value) : "")
             }
@@ -285,8 +291,8 @@ function ChatComposerFullFooter({
             <PromptInputSelectTrigger
               className="h-8 w-auto max-w-[min(16rem,52vw)] rounded-full bg-muted px-2.5 text-[11px] font-medium leading-none text-foreground hover:bg-muted/80 sm:max-w-[min(20rem,60vw)] sm:text-xs"
               title={
-                props.currentModel
-                  ? (props.renderModelLabel(props.currentModel) ?? undefined)
+                props.currentModelSelection
+                  ? (props.renderModelLabel(props.currentModelSelection) ?? undefined)
                   : undefined
               }
             >
@@ -299,14 +305,25 @@ function ChatComposerFullFooter({
               alignItemWithTrigger={false}
               className="w-max max-w-[min(24rem,92vw)] text-xs"
             >
-              {props.providerModels.map((model) => (
-                <PromptInputSelectItem
-                  key={model.id}
-                  value={model.id}
-                  label={model.name}
-                >
-                  {model.name}
-                </PromptInputSelectItem>
+              {props.providerModelGroups.map((group) => (
+                <div key={group.providerId}>
+                  <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">
+                    {group.providerLabel}
+                  </div>
+                  {group.models.map((model) => {
+                    const providerId = model.providerId ?? group.providerId;
+
+                    return (
+                      <PromptInputSelectItem
+                        key={`${providerId}:${model.id}`}
+                        value={`${providerId}::${model.id}`}
+                        label={model.name}
+                      >
+                        {model.name}
+                      </PromptInputSelectItem>
+                    );
+                  })}
+                </div>
               ))}
             </PromptInputSelectContent>
           </PromptInputSelect>

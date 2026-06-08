@@ -405,6 +405,8 @@ export interface ProviderModelOption {
   id: string;
   name: string;
   provider: ProviderName;
+  providerId?: string;
+  providerLabel?: string;
   contextWindow?: number;
   maxOutputTokens?: number;
   default?: boolean;
@@ -413,14 +415,64 @@ export interface ProviderModelOption {
   outputPerMillionUsd?: number;
 }
 
+export interface ProviderInstanceSummary {
+  id: string;
+  type: ProviderName;
+  label: string;
+  hasApiKey: boolean;
+  baseUrl?: string | null;
+  customModels?: CustomModelEntry[];
+  modelCount: number;
+  createdAt: string;
+}
+
+export interface ListProvidersResponse {
+  providers: ProviderInstanceSummary[];
+  defaultProviderId: string | null;
+  defaultModel: string | null;
+}
+
+export interface CreateProviderRequest {
+  type: ProviderName;
+  label?: string;
+  apiKey: string;
+  model?: string;
+  baseUrl?: string;
+  customModels?: CustomModelEntry[];
+}
+
+export interface CreateProviderResponse {
+  provider: ProviderInstanceSummary;
+  defaultProviderId: string;
+  defaultModel: string;
+}
+
+export interface UpdateProviderRequest {
+  label?: string;
+  apiKey?: string;
+  baseUrl?: string;
+  customModels?: CustomModelEntry[];
+}
+
+export interface UpdateProviderResponse {
+  provider: ProviderInstanceSummary;
+}
+
+export interface DeleteProviderResponse {
+  defaultProviderId: string | null;
+  defaultModel: string | null;
+}
+
 export interface ModelsResponse {
-  provider: ProviderName | null;
+  currentProviderId: string | null;
   currentModel: string | null;
   defaultModel: string | null;
+  providers: ProviderInstanceSummary[];
+  models: ProviderModelOption[];
+  provider: ProviderName | null;
   displayName: string | null;
   baseUrl?: string | null;
   customModels?: CustomModelEntry[];
-  models: ProviderModelOption[];
 }
 
 export interface DiscoverModelsRequest {
@@ -429,10 +481,12 @@ export interface DiscoverModelsRequest {
 }
 
 export interface SetModelRequest {
+  providerId: string;
   model: string;
 }
 
 export interface SetModelResponse {
+  providerId: string;
   provider: ProviderName;
   currentModel: string;
 }

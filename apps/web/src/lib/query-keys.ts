@@ -1,6 +1,7 @@
 export const queryKeys = {
   health: ["health"] as const,
   models: ["models"] as const,
+  providers: ["providers"] as const,
   systemStatus: ["systemStatus"] as const,
   profiles: {
     all: ["profiles"] as const,

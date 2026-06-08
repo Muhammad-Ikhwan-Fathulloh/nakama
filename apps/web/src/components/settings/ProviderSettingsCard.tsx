@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangleIcon, CheckCircle2Icon } from "lucide-react";
+import { useState } from "react";
+import { AlertTriangleIcon, CheckCircle2Icon, PlusIcon } from "lucide-react";
 import { ProviderSetupForm } from "@/components/ProviderSetupForm";
 import {
   Card,
@@ -8,21 +8,21 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { useAppContext } from "@/context/app-context";
-import { useModelsQuery } from "@/hooks/use-app-queries";
-import { useOpenRouterModels } from "@/hooks/use-openrouter-models";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  useDeleteProviderMutation,
+  useModelsQuery,
+  useProvidersQuery,
+  useUpdateProviderMutation,
+} from "@/hooks/use-app-queries";
 import { formatError } from "@/lib/client";
-import {
-  filterModelsByProvider,
-  formatProviderLabel,
-  type SelectedProvider,
-} from "@/lib/models";
-import {
-  mergeOpenRouterModelOptions,
-  openRouterModelDisplayName,
-} from "@/lib/openrouter-models";
-import { ConnectedProviderSection } from "./connected-provider-section";
-import { SwitchProviderSection } from "./switch-provider-section";
+import { ProviderInstanceCard } from "./provider-instance-card";
 
 interface ProviderSettingsCardProps {
   formError: string | null;
@@ -30,41 +30,45 @@ interface ProviderSettingsCardProps {
 }
 
 export function ProviderSettingsCard({ formError, onFormError }: ProviderSettingsCardProps) {
-  const { health, models, configureProvider } = useAppContext();
+  const { data: providersResponse, isLoading: providersLoading } = useProvidersQuery();
   const { data: catalogResponse, isLoading: catalogLoading, error: catalogQueryError } =
-    useModelsQuery();
-  const { data: openRouterRows = [] } = useOpenRouterModels();
-  const catalog = catalogResponse?.models ?? [];
-
+    useModelsQuery({ enabled: (providersResponse?.providers.length ?? 0) > 0 });
+  const updateProviderMutation = useUpdateProviderMutation();
+  const deleteProviderMutation = useDeleteProviderMutation();
+  const [addOpen, setAddOpen] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const isConfigured = health?.providerConfigured === true && models != null;
+  const providers = providersResponse?.providers ?? [];
+  const catalog = catalogResponse?.models ?? [];
+  const isConfigured = providers.length > 0;
 
-  useEffect(() => {
-    if (catalogQueryError) {
-      onFormError(formatError(catalogQueryError));
-    }
-  }, [catalogQueryError, onFormError]);
+  if (catalogQueryError) {
+    onFormError(formatError(catalogQueryError));
+  }
 
-  const configuredModels = useMemo(() => {
-    const filtered = filterModelsByProvider(catalog, models?.provider);
-    if (models?.provider === "openrouter" && models.currentModel) {
-      return mergeOpenRouterModelOptions(
-        filtered,
-        models.currentModel,
-        openRouterModelDisplayName(openRouterRows, models.currentModel),
-      );
-    }
-    return filtered;
-  }, [catalog, models?.provider, models?.currentModel, openRouterRows]);
-
-  if (catalogLoading) {
+  if (providersLoading || catalogLoading) {
     return <ProviderSettingsSkeleton />;
   }
 
   return (
     <>
       <Card className="w-full">
+        <CardHeader className="border-b border-border pb-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <CardTitle>LLM providers</CardTitle>
+              <CardDescription>
+                Add providers and manage models. Pick any configured model in chat.
+              </CardDescription>
+            </div>
+            {isConfigured ? (
+              <Button type="button" size="sm" variant="outline" onClick={() => setAddOpen(true)}>
+                <PlusIcon className="mr-1.5 size-4" />
+                Add provider
+              </Button>
+            ) : null}
+          </div>
+        </CardHeader>
         <CardContent className="p-0">
           {!isConfigured ? (
             <>
@@ -76,31 +80,47 @@ export function ProviderSettingsCard({ formError, onFormError }: ProviderSetting
                 <div className="min-w-0 space-y-0.5">
                   <p className="text-sm font-medium text-amber-100">No provider connected</p>
                   <p className="text-xs text-amber-200/90">
-                    Chat is offline until you add an API key below.
+                    Chat is offline until you add a provider below.
                   </p>
                 </div>
               </div>
               <div className="px-4 py-4">
                 <ProviderSetupForm
                   onSuccess={() => {
-                    setSuccessMessage("Provider connected.");
+                    setSuccessMessage("Provider added.");
+                    onFormError(null);
                   }}
                 />
               </div>
             </>
           ) : (
-            <ConnectedProviderSection
-              models={models}
-              configureProvider={configureProvider}
-              configuredModels={configuredModels}
-              formError={formError}
-              onFormError={onFormError}
-              onReplaceKeyOpen={() => setSuccessMessage(null)}
-              onReplaceKeySuccess={() => setSuccessMessage("API key updated.")}
-            />
+            providers.map((instance) => (
+              <ProviderInstanceCard
+                key={instance.id}
+                instance={instance}
+                catalog={catalog}
+                onUpdate={async (providerId, request) => {
+                  await updateProviderMutation.mutateAsync({ providerId, request });
+                  setSuccessMessage("Provider updated.");
+                  onFormError(null);
+                }}
+                onDelete={async (providerId) => {
+                  await deleteProviderMutation.mutateAsync(providerId);
+                  setSuccessMessage("Provider removed.");
+                  onFormError(null);
+                }}
+                onError={onFormError}
+              />
+            ))
           )}
         </CardContent>
       </Card>
+
+      {formError ? (
+        <p className="text-sm text-destructive" role="alert">
+          {formError}
+        </p>
+      ) : null}
 
       {successMessage ? (
         <div className="flex items-start gap-3" role="status" aria-live="polite">
@@ -109,28 +129,22 @@ export function ProviderSettingsCard({ formError, onFormError }: ProviderSetting
         </div>
       ) : null}
 
-      {isConfigured && models?.provider ? (
-        <Card className="w-full">
-          <CardHeader className="border-b border-border pb-3">
-            <CardTitle>Switch provider</CardTitle>
-            <CardDescription>
-              Currently on {formatProviderLabel(models.provider, models.displayName)}. Chat
-              history resets when you change providers.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 pt-2">
-            <SwitchProviderSection
-              currentProvider={models.provider as SelectedProvider}
-              catalog={catalog}
-              configureProvider={configureProvider}
-              onSuccess={(message) => {
-                setSuccessMessage(message);
-                onFormError(null);
-              }}
-            />
-          </CardContent>
-        </Card>
-      ) : null}
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="w-[min(96vw,56rem)] sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Add provider</DialogTitle>
+          </DialogHeader>
+          <ProviderSetupForm
+            showHeading={false}
+            submitLabel="Add provider"
+            onSuccess={() => {
+              setAddOpen(false);
+              setSuccessMessage("Provider added.");
+              onFormError(null);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
@@ -144,9 +158,6 @@ function ProviderSettingsSkeleton() {
           <div className="h-4 w-48 rounded bg-muted" />
         </div>
         <div className="h-10 max-w-sm rounded-lg bg-muted" />
-        <div className="border-t border-border pt-4">
-          <div className="h-10 rounded-lg bg-muted" />
-        </div>
       </CardContent>
     </Card>
   );

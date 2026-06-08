@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getModelsForConfiguredProvider, mergeOpenRouterCatalog } from "./compatible-models";
+import { getModelsForProviderInstance, mergeOpenRouterCatalog } from "./compatible-models";
 
 describe("mergeOpenRouterCatalog", () => {
   test("merges custom display names over static entries", () => {
@@ -32,11 +32,14 @@ describe("mergeOpenRouterCatalog", () => {
   });
 });
 
-describe("getModelsForConfiguredProvider openrouter", () => {
+describe("getModelsForProviderInstance openrouter", () => {
   test("uses shortlist only when custom models are saved", () => {
-    const models = getModelsForConfiguredProvider("openrouter", {
-      provider: "openrouter",
+    const models = getModelsForProviderInstance({
+      id: "or-1",
+      type: "openrouter",
+      label: "OpenRouter",
       apiKey: "sk-test",
+      createdAt: "2026-06-07T10:00:00.000Z",
       customModels: [{ id: "meta-llama/llama-3.3-70b-instruct:free", name: "Llama Free" }],
     });
 
@@ -44,14 +47,20 @@ describe("getModelsForConfiguredProvider openrouter", () => {
       models.some((model) => model.id === "meta-llama/llama-3.3-70b-instruct:free"),
     ).toBe(true);
     expect(models.some((model) => model.id === "openai/gpt-5.4")).toBe(false);
+    expect(models[0]?.providerId).toBe("or-1");
   });
 
   test("includes only the active model when no shortlist is saved", () => {
-    const models = getModelsForConfiguredProvider("openrouter", {
-      provider: "openrouter",
-      apiKey: "sk-test",
-      model: "google/gemma-4-31b-it:free",
-    });
+    const models = getModelsForProviderInstance(
+      {
+        id: "or-1",
+        type: "openrouter",
+        label: "OpenRouter",
+        apiKey: "sk-test",
+        createdAt: "2026-06-07T10:00:00.000Z",
+      },
+      "google/gemma-4-31b-it:free",
+    );
 
     expect(models).toHaveLength(1);
     expect(models[0]?.id).toBe("google/gemma-4-31b-it:free");

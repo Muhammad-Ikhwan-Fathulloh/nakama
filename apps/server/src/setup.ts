@@ -5,7 +5,7 @@ import {
   promptForProviderConfig,
   saveUserConfig,
   type ProviderClient,
-  type UserProviderConfig,
+  type UserConfig,
 } from "@tinyclaw/core";
 import {
   createProviderFromSources,
@@ -16,7 +16,7 @@ import {
 
 export interface ProviderBootstrap {
   provider: ProviderClient | null;
-  userConfig: UserProviderConfig | null;
+  userConfig: UserConfig | null;
 }
 
 export async function ensureProviderConfigured(): Promise<ProviderBootstrap> {
@@ -43,7 +43,7 @@ export async function ensureProviderConfigured(): Promise<ProviderBootstrap> {
   return { provider, userConfig };
 }
 
-async function promptForProviderConfigWithReadline(): Promise<UserProviderConfig> {
+async function promptForProviderConfigWithReadline(): Promise<UserConfig> {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,

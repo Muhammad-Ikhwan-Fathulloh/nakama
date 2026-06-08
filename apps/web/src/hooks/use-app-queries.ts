@@ -149,6 +149,67 @@ export function useToolSourceQuery(toolId: string | null) {
   });
 }
 
+export const providersQueryOptions = queryOptions({
+  queryKey: queryKeys.providers,
+  queryFn: () => client.listProviders(),
+  staleTime: defaultStaleTime,
+});
+
+export function useProvidersQuery(options?: { enabled?: boolean }) {
+  return useQuery({
+    ...providersQueryOptions,
+    enabled: options?.enabled ?? true,
+  });
+}
+
+async function invalidateProviderQueries(queryClient: QueryClient) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.health }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.models }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.providers }),
+  ]);
+}
+
+export function useCreateProviderMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (request: Parameters<typeof client.createProvider>[0]) =>
+      client.createProvider(request),
+    onSuccess: async () => {
+      await invalidateProviderQueries(queryClient);
+    },
+  });
+}
+
+export function useUpdateProviderMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      providerId,
+      request,
+    }: {
+      providerId: string;
+      request: Parameters<typeof client.updateProvider>[1];
+    }) => client.updateProvider(providerId, request),
+    onSuccess: async () => {
+      await invalidateProviderQueries(queryClient);
+    },
+  });
+}
+
+export function useDeleteProviderMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (providerId: string) => client.deleteProvider(providerId),
+    onSuccess: async () => {
+      await invalidateProviderQueries(queryClient);
+    },
+  });
+}
+
 export function useConfigureProviderMutation() {
   const queryClient = useQueryClient();
 
@@ -156,10 +217,7 @@ export function useConfigureProviderMutation() {
     mutationFn: (request: Parameters<typeof client.configureProvider>[0]) =>
       client.configureProvider(request),
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.health }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.models }),
-      ]);
+      await invalidateProviderQueries(queryClient);
     },
   });
 }
@@ -168,7 +226,7 @@ export function useSetModelMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (model: string) => client.setModel(model),
+    mutationFn: (request: Parameters<typeof client.setModel>[0]) => client.setModel(request),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.models });
     },

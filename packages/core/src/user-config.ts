@@ -12,7 +12,7 @@ import type {
   ThinkingEffort,
   ThinkingSettings,
 } from "./contract";
-import { parseIni, readTextOrNull, writePrivateTextFile } from "./fs";
+import { readTextOrNull, writePrivateTextFile } from "./fs";
 import {
   parseProviderName,
   type UserProviderName,
@@ -25,13 +25,20 @@ export {
   resolveProvider,
 } from "./provider-resolution";
 
-export interface UserProviderConfig {
-  provider: UserProviderName;
+export interface ProviderInstance {
+  id: string;
+  type: UserProviderName;
+  label: string;
   apiKey: string;
-  model?: string;
-  displayName?: string;
   baseUrl?: string;
   customModels?: CustomModelEntry[];
+  createdAt: string;
+}
+
+export interface UserConfig {
+  defaultProviderId: string | null;
+  defaultModel: string | null;
+  providers: ProviderInstance[];
   timezone?: string;
   thinkingEnabled?: boolean;
   thinkingEffort?: ThinkingEffort;
@@ -40,6 +47,65 @@ export interface UserProviderConfig {
 export const DEFAULT_TIMEZONE = "UTC";
 export const DEFAULT_THINKING_ENABLED = true;
 export const DEFAULT_THINKING_EFFORT: ThinkingEffort = "medium";
+
+const PROVIDER_SECTION_PREFIX = "provider.";
+
+const PROVIDER_TYPE_LABELS: Record<UserProviderName, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  openrouter: "OpenRouter",
+  gemini: "Gemini",
+  openai_compatible: "Custom",
+};
+
+export function createProviderInstanceId(): string {
+  return crypto.randomUUID();
+}
+
+export function defaultProviderLabel(
+  type: UserProviderName,
+  existing: ProviderInstance[],
+): string {
+  const base = PROVIDER_TYPE_LABELS[type];
+  const sameType = existing.filter((entry) => entry.type === type);
+
+  if (sameType.length === 0) {
+    return base;
+  }
+
+  return `${base} (${sameType.length + 1})`;
+}
+
+export function findProviderInstance(
+  config: UserConfig | null | undefined,
+  providerId: string,
+): ProviderInstance | null {
+  return config?.providers.find((entry) => entry.id === providerId) ?? null;
+}
+
+export function getActiveProviderInstance(
+  config: UserConfig | null | undefined,
+): ProviderInstance | null {
+  if (!config?.defaultProviderId) {
+    return null;
+  }
+
+  return findProviderInstance(config, config.defaultProviderId);
+}
+
+export function isProviderConfigured(config: UserConfig | null | undefined): boolean {
+  const active = getActiveProviderInstance(config);
+
+  if (!active) {
+    return false;
+  }
+
+  if (active.type === "openai_compatible") {
+    return Boolean(active.baseUrl?.trim() && active.label.trim());
+  }
+
+  return Boolean(active.apiKey.trim());
+}
 
 export function isValidTimezone(timezone: string): boolean {
   try {
@@ -77,38 +143,22 @@ export function getUserConfigPath(): string {
   return join(getUserConfigDir(), "config.ini");
 }
 
-export async function loadUserConfig(): Promise<UserProviderConfig | null> {
+export async function loadUserConfig(): Promise<UserConfig | null> {
   const raw = await readTextOrNull(getUserConfigPath());
 
   if (raw === null) {
     return null;
   }
 
-  const values = parseIni(raw);
-  const provider = parseProviderName(values.provider);
-
-  if (!provider) {
-    return null;
-  }
-
-  const apiKey = values.api_key ?? "";
-
-  if (!apiKey.trim() && provider !== "openai_compatible") {
-    return null;
-  }
-
-  const model = values.model?.trim();
-  const timezone = readTimezone(values);
-  const thinking = readThinkingSettings(values);
-  const baseUrl = readBaseUrl(values);
-  const compatible = readCompatibleProviderFields(provider, values);
+  const parsed = parseIniWithSections(raw);
+  const thinking = readThinkingSettings(parsed.global);
+  const timezone = readTimezone(parsed.global);
+  const providers = loadProvidersFromSections(parsed.sections);
 
   return {
-    provider,
-    apiKey,
-    ...(model ? { model } : {}),
-    ...(baseUrl ? { baseUrl } : {}),
-    ...compatible,
+    defaultProviderId: parsed.global.default_provider_id?.trim() || null,
+    defaultModel: parsed.global.default_model?.trim() || null,
+    providers,
     ...(timezone ? { timezone } : {}),
     thinkingEnabled: thinking.enabled,
     thinkingEffort: thinking.effort,
@@ -122,7 +172,7 @@ export async function loadUserTimezone(): Promise<string> {
     return DEFAULT_TIMEZONE;
   }
 
-  return readTimezone(parseIni(raw)) ?? DEFAULT_TIMEZONE;
+  return readTimezone(parseIniWithSections(raw).global) ?? DEFAULT_TIMEZONE;
 }
 
 export async function loadUserThinkingSettings(): Promise<ThinkingSettings> {
@@ -135,7 +185,7 @@ export async function loadUserThinkingSettings(): Promise<ThinkingSettings> {
     };
   }
 
-  return readThinkingSettings(parseIni(raw));
+  return readThinkingSettings(parseIniWithSections(raw).global);
 }
 
 export async function saveUserThinkingSettings(
@@ -145,7 +195,7 @@ export async function saveUserThinkingSettings(
   const enabled = settings.enabled;
   const existing = await loadUserConfig();
 
-  if (existing?.apiKey) {
+  if (existing) {
     await saveUserConfig({
       ...existing,
       thinkingEnabled: enabled,
@@ -155,10 +205,8 @@ export async function saveUserThinkingSettings(
   }
 
   const raw = await readTextOrNull(getUserConfigPath());
-  const values = raw === null ? {} : parseIni(raw);
-  const lines = buildConfigIniLines({
-    ...values,
-    timezone: values.timezone,
+  const parsed = raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
+  const lines = buildConfigIniLines(parsed.global, parsed.sections, {
     thinking: enabled ? "on" : "off",
     thinking_effort: effort,
   });
@@ -169,7 +217,7 @@ export async function saveUserThinkingSettings(
 }
 
 export function buildThinkingProviderOptions(
-  config: Pick<UserProviderConfig, "thinkingEnabled" | "thinkingEffort"> | null,
+  config: Pick<UserConfig, "thinkingEnabled" | "thinkingEffort"> | null,
 ): ProviderChatOptions["thinking"] | undefined {
   const enabled = config?.thinkingEnabled ?? DEFAULT_THINKING_ENABLED;
 
@@ -192,15 +240,14 @@ export async function saveUserTimezone(timezone: string): Promise<void> {
 
   const existing = await loadUserConfig();
 
-  if (existing?.apiKey) {
+  if (existing) {
     await saveUserConfig({ ...existing, timezone: trimmed });
     return;
   }
 
   const raw = await readTextOrNull(getUserConfigPath());
-  const values = raw === null ? {} : parseIni(raw);
-  const lines = buildConfigIniLines({
-    ...values,
+  const parsed = raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
+  const lines = buildConfigIniLines(parsed.global, parsed.sections, {
     timezone: trimmed,
   });
 
@@ -209,72 +256,183 @@ export async function saveUserTimezone(timezone: string): Promise<void> {
   });
 }
 
-export async function saveUserConfig(config: UserProviderConfig): Promise<void> {
+export async function saveUserConfig(config: UserConfig): Promise<void> {
   const thinking = readThinkingSettings({
     thinking: config.thinkingEnabled === false ? "off" : "on",
     thinking_effort: config.thinkingEffort ?? DEFAULT_THINKING_EFFORT,
   });
-  const lines = buildConfigIniLines({
-    provider: config.provider,
-    api_key: config.apiKey,
-    model: config.model ?? "",
-    display_name: config.displayName,
-    base_url: config.baseUrl,
-    models_json:
-      config.customModels?.length ? serializeCustomModels(config.customModels) : undefined,
+
+  const global: Record<string, string | undefined> = {
+    default_provider_id: config.defaultProviderId ?? "",
+    default_model: config.defaultModel ?? "",
     timezone: config.timezone,
     thinking: thinking.enabled ? "on" : "off",
     thinking_effort: thinking.effort,
-  });
+  };
 
+  const sections: Record<string, Record<string, string>> = {};
+
+  for (const provider of config.providers) {
+    const sectionName = `${PROVIDER_SECTION_PREFIX}${provider.id}`;
+    sections[sectionName] = buildProviderSectionValues(provider);
+  }
+
+  const lines = buildConfigIniLines(global, sections);
   await writePrivateTextFile(getUserConfigPath(), lines.join("\n"), {
     ensureDir: getUserConfigDir(),
   });
 }
 
-function buildConfigIniLines(values: Record<string, string | undefined>): string[] {
+interface ParsedIniFile {
+  global: Record<string, string>;
+  sections: Record<string, Record<string, string>>;
+}
+
+export function parseIniWithSections(raw: string): ParsedIniFile {
+  const global: Record<string, string> = {};
+  const sections: Record<string, Record<string, string>> = {};
+  let currentSection: string | null = null;
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) {
+      continue;
+    }
+
+    const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
+
+    if (sectionMatch) {
+      currentSection = sectionMatch[1]!.trim();
+      sections[currentSection] ??= {};
+      continue;
+    }
+
+    const separator = trimmed.indexOf("=");
+
+    if (separator <= 0) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, separator).trim();
+    const value = trimmed.slice(separator + 1).trim();
+
+    if (currentSection) {
+      sections[currentSection]![key] = value;
+    } else {
+      global[key] = value;
+    }
+  }
+
+  return { global, sections };
+}
+
+function loadProvidersFromSections(
+  sections: Record<string, Record<string, string>>,
+): ProviderInstance[] {
+  const providers: ProviderInstance[] = [];
+
+  for (const [sectionName, values] of Object.entries(sections)) {
+    if (!sectionName.startsWith(PROVIDER_SECTION_PREFIX)) {
+      continue;
+    }
+
+    const id = sectionName.slice(PROVIDER_SECTION_PREFIX.length).trim();
+    const type = parseProviderName(values.type);
+
+    if (!id || !type) {
+      continue;
+    }
+
+    const label =
+      values.label?.trim() || defaultProviderLabel(type, providers);
+    const apiKey = values.api_key ?? "";
+    const baseUrl = values.base_url?.trim()
+      ? normalizeBaseUrl(values.base_url)
+      : undefined;
+    const customModels =
+      type === "openai_compatible" || type === "openrouter"
+        ? parseCustomModelsJson(values.models_json)
+        : undefined;
+    const createdAt = values.created_at?.trim() || new Date(0).toISOString();
+
+    providers.push({
+      id,
+      type,
+      label,
+      apiKey,
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(customModels ? { customModels } : {}),
+      createdAt,
+    });
+  }
+
+  return providers.sort((left, right) =>
+    left.createdAt.localeCompare(right.createdAt),
+  );
+}
+
+function buildProviderSectionValues(provider: ProviderInstance): Record<string, string> {
+  const values: Record<string, string> = {
+    type: provider.type,
+    label: provider.label,
+    api_key: provider.apiKey,
+    created_at: provider.createdAt,
+  };
+
+  if (provider.baseUrl?.trim()) {
+    values.base_url = normalizeBaseUrl(provider.baseUrl);
+  }
+
+  if (provider.customModels?.length) {
+    values.models_json = serializeCustomModels(provider.customModels);
+  }
+
+  return values;
+}
+
+function buildConfigIniLines(
+  global: Record<string, string | undefined>,
+  sections: Record<string, Record<string, string>>,
+  patch: Record<string, string | undefined> = {},
+): string[] {
+  const mergedGlobal = { ...global, ...patch };
   const lines = ["# TinyClaw user config"];
 
-  if (values.provider?.trim()) {
-    lines.push(`provider=${values.provider.trim()}`);
+  if (mergedGlobal.default_provider_id !== undefined) {
+    lines.push(`default_provider_id=${mergedGlobal.default_provider_id.trim()}`);
   }
 
-  if (values.api_key?.trim()) {
-    lines.push(`api_key=${values.api_key.trim()}`);
+  if (mergedGlobal.default_model !== undefined) {
+    lines.push(`default_model=${mergedGlobal.default_model.trim()}`);
   }
 
-  if (values.model !== undefined) {
-    lines.push(`model=${values.model.trim()}`);
-  }
-
-  if (values.display_name?.trim()) {
-    lines.push(`display_name=${values.display_name.trim()}`);
-  }
-
-  if (values.base_url?.trim()) {
-    lines.push(`base_url=${normalizeBaseUrl(values.base_url)}`);
-  }
-
-  if (values.models_json?.trim()) {
-    lines.push(`models_json=${values.models_json.trim()}`);
-  }
-
-  if (values.timezone?.trim()) {
-    lines.push(`timezone=${values.timezone.trim()}`);
+  if (mergedGlobal.timezone?.trim()) {
+    lines.push(`timezone=${mergedGlobal.timezone.trim()}`);
   }
 
   const thinkingEnabled =
-    values.thinking === undefined
+    mergedGlobal.thinking === undefined
       ? DEFAULT_THINKING_ENABLED
-      : values.thinking.trim().toLowerCase() !== "off";
+      : mergedGlobal.thinking.trim().toLowerCase() !== "off";
   lines.push(`thinking=${thinkingEnabled ? "on" : "off"}`);
 
   const effort = validateThinkingEffort(
-    values.thinking_effort?.trim() as ThinkingEffort | undefined,
+    mergedGlobal.thinking_effort?.trim() as ThinkingEffort | undefined,
   );
   lines.push(`thinking_effort=${effort}`);
-
   lines.push("");
+
+  for (const [sectionName, values] of Object.entries(sections)) {
+    lines.push(`[${sectionName}]`);
+
+    for (const [key, value] of Object.entries(values)) {
+      lines.push(`${key}=${value}`);
+    }
+
+    lines.push("");
+  }
+
   return lines;
 }
 
@@ -300,25 +458,23 @@ function readTimezone(values: Record<string, string>): string | undefined {
   return timezone && isValidTimezone(timezone) ? timezone : undefined;
 }
 
-function readBaseUrl(values: Record<string, string>): string | undefined {
-  return values.base_url?.trim() ? normalizeBaseUrl(values.base_url) : undefined;
-}
+export function validateProviderInstanceLabel(
+  label: string,
+  type: UserProviderName,
+): string {
+  const trimmed = label.trim();
 
-function readCompatibleProviderFields(
-  provider: UserProviderName,
-  values: Record<string, string>,
-): Pick<UserProviderConfig, "displayName" | "customModels"> {
-  if (provider !== "openai_compatible") {
-    return {};
+  if (!trimmed) {
+    if (type === "openai_compatible") {
+      throw new Error("Provider name is required.");
+    }
+
+    throw new Error("Provider label is required.");
   }
 
-  const displayName = values.display_name?.trim()
-    ? validateDisplayName(values.display_name)
-    : undefined;
-  const customModels = parseCustomModelsJson(values.models_json);
+  if (type === "openai_compatible") {
+    return validateDisplayName(trimmed);
+  }
 
-  return {
-    ...(displayName ? { displayName } : {}),
-    ...(customModels ? { customModels } : {}),
-  };
+  return trimmed;
 }

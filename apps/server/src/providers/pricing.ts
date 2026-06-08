@@ -1,5 +1,4 @@
-import { findCustomModel, type ProviderName } from "@tinyclaw/core";
-import type { UserProviderConfig } from "@tinyclaw/core";
+import { findCustomModel, type ProviderInstance, type ProviderName } from "@tinyclaw/core";
 import { getModelById } from "./models";
 
 export interface ModelPricing {
@@ -16,14 +15,14 @@ const DEFAULT_PRICING: ModelPricing = {
 
 export interface PricingContext {
   provider?: ProviderName | null;
-  userConfig?: UserProviderConfig | null;
+  providerInstance?: ProviderInstance | null;
 }
 
 function getCustomModelPricing(
   modelId: string,
   context: PricingContext,
 ): ModelPricing | null {
-  const entry = findCustomModel(context.userConfig?.customModels, modelId);
+  const entry = findCustomModel(context.providerInstance?.customModels, modelId);
 
   if (
     entry?.inputPerMillionUsd !== undefined &&
@@ -42,7 +41,7 @@ export function getModelPricing(
   modelId: string,
   context: PricingContext = {},
 ): ModelPricing | null {
-  const provider = context.provider ?? context.userConfig?.provider ?? null;
+  const provider = context.provider ?? context.providerInstance?.type ?? null;
 
   if (provider === "openai_compatible" || provider === "openrouter") {
     return getCustomModelPricing(modelId, context);
@@ -87,15 +86,11 @@ export function hasCatalogPricing(
 export function isCostEstimated(
   provider: ProviderName | null,
   modelId: string | null,
-  userConfig: UserProviderConfig | null | undefined,
+  providerInstance: ProviderInstance | null | undefined,
 ): boolean {
   if (!provider || !modelId) {
     return false;
   }
 
-  if (provider === "openai_compatible") {
-    return hasCatalogPricing(modelId, { provider, userConfig });
-  }
-
-  return hasCatalogPricing(modelId, { provider, userConfig });
+  return hasCatalogPricing(modelId, { provider, providerInstance });
 }
