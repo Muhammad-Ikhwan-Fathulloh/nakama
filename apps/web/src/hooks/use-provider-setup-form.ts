@@ -1,4 +1,4 @@
-import type { ConfigureProviderResponse, ProviderModelOption } from "@tinyclaw/core/contract";
+import type { CreateProviderResponse, ProviderModelOption } from "@tinyclaw/core/contract";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ModelListRow } from "@/components/ModelListEditor";
 import { toCustomModelEntries } from "@/components/CustomCompatibleProviderFields";
@@ -9,10 +9,9 @@ import { useModelsQuery } from "@/hooks/use-app-queries";
 import { formatError } from "@/lib/client";
 import {
   appendOpenRouterModelRow,
-  buildConfigureProviderRequest,
+  buildCreateProviderRequest,
   defaultModelForProvider,
   filterModelsByProvider,
-  formatProviderLabel,
   getModelDisplayName,
   modelsFromCustomRows,
   modelsFromOpenRouterRows,
@@ -26,11 +25,11 @@ import {
 } from "@/lib/models";
 
 interface UseProviderSetupFormOptions {
-  onSuccess?: (result: ConfigureProviderResponse) => void;
+  onSuccess?: (result: CreateProviderResponse) => void;
 }
 
 export function useProviderSetupForm(options: UseProviderSetupFormOptions = {}) {
-  const { configureProvider } = useAppContext();
+  const { createProvider } = useAppContext();
   const { data: catalogResponse, error: catalogQueryError } = useModelsQuery();
   const catalog = catalogResponse?.models ?? [];
 
@@ -265,8 +264,8 @@ export function useProviderSetupForm(options: UseProviderSetupFormOptions = {}) 
       setFormError(null);
 
       try {
-        const result = await configureProvider(
-          buildConfigureProviderRequest({
+        const result = await createProvider(
+          buildCreateProviderRequest({
             apiKey: trimmedKey,
             provider: selectedProvider,
             model: modelToSave || undefined,
@@ -300,7 +299,7 @@ export function useProviderSetupForm(options: UseProviderSetupFormOptions = {}) 
       displayName,
       selectedModel,
       selectedProvider,
-      configureProvider,
+      createProvider,
       onSuccess,
     ],
   );
@@ -335,7 +334,7 @@ export function useProviderSetupForm(options: UseProviderSetupFormOptions = {}) 
     handleBrowseSelect,
     handleOpenRouterBrowseSelect,
     handleSubmit,
-    formatSuccessMessage: (result: ConfigureProviderResponse) =>
-      `${formatProviderLabel(result.provider, result.displayName)} connected with ${getModelDisplayName(catalog, result.currentModel)}.`,
+    formatSuccessMessage: (result: CreateProviderResponse) =>
+      `${result.provider.label} connected with ${getModelDisplayName(catalog, result.defaultModel)}.`,
   };
 }

@@ -27,7 +27,11 @@ import {
   isAbortError,
 } from "@/lib/chat-stream";
 import { client, formatError } from "@/lib/client";
-import { filterModelsByProvider } from "@/lib/models";
+import {
+  decodeModelSelection,
+  encodeModelSelection,
+  groupModelsByProvider,
+} from "@/lib/models";
 import { SETUP_PATH } from "@/lib/navigation";
 
 export function ChatPage() {
@@ -73,20 +77,53 @@ export function ChatPage() {
 
   const showOfflineHint = health != null && !health.providerConfigured;
 
-  const providerModels = useMemo(
-    () => filterModelsByProvider(models?.models ?? [], models?.provider),
-    [models?.models, models?.provider],
+  const providerModelGroups = useMemo(
+    () => groupModelsByProvider(models?.models ?? []),
+    [models?.models],
   );
 
+  const currentModelSelection = useMemo(() => {
+    if (!models?.currentProviderId || !models.currentModel) {
+      return null;
+    }
+
+    return encodeModelSelection(models.currentProviderId, models.currentModel);
+  }, [models?.currentProviderId, models?.currentModel]);
+
   const renderModelLabel = useCallback(
-    (modelId: string | null) => {
-      if (!modelId) {
+    (selection: string | null) => {
+      if (!selection) {
         return null;
       }
 
-      return providerModels.find((model) => model.id === modelId)?.name ?? modelId;
+      const decoded = decodeModelSelection(selection);
+
+      if (!decoded) {
+        return selection;
+      }
+
+      const group = providerModelGroups.find(
+        (entry) => entry.providerId === decoded.providerId,
+      );
+      return (
+        group?.models.find((model) => model.id === decoded.modelId)?.name ??
+        decoded.modelId
+      );
     },
-    [providerModels],
+    [providerModelGroups],
+  );
+
+  const handleModelChange = useCallback(
+    (selection: string) => {
+      const decoded = decodeModelSelection(selection);
+
+      if (!decoded) {
+        return;
+      }
+
+      void setModel({ providerId: decoded.providerId, model: decoded.modelId });
+    },
+    [setModel],
   );
 
   const activeProfile = useMemo(
@@ -359,9 +396,9 @@ export function ChatPage() {
             showOfflineHint={showOfflineHint}
             providerConfigured={health?.providerConfigured}
             onNavigateSetup={() => navigate(SETUP_PATH)}
-            providerModels={providerModels}
-            currentModel={models?.currentModel ?? null}
-            onModelChange={setModel}
+            providerModelGroups={providerModelGroups}
+            currentModelSelection={currentModelSelection}
+            onModelChange={handleModelChange}
             renderModelLabel={renderModelLabel}
             todos={agentTodos}
             onSubmit={(text, files) => void sendMessage(text, files)}

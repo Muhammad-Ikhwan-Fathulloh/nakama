@@ -6,8 +6,10 @@ import {
 } from "./compatible-provider-config";
 import type { ProviderModelOption } from "./contract";
 import {
-  parseProviderName,
-  type UserProviderConfig,
+  createProviderInstanceId,
+  defaultProviderLabel,
+  type ProviderInstance,
+  type UserConfig,
   type UserProviderName,
 } from "./user-config";
 
@@ -29,7 +31,7 @@ const PROVIDER_CHOICES: Array<{ id: UserProviderName; label: string }> = [
 
 export async function promptForProviderConfig(
   options: ProviderSetupPromptOptions,
-): Promise<UserProviderConfig> {
+): Promise<UserConfig> {
   const { question, writeLine, getModelsForProvider, getDefaultModel, getModelById } =
     options;
 
@@ -48,7 +50,8 @@ export async function promptForProviderConfig(
     }
 
     if (provider === "openai_compatible") {
-      return promptForCompatibleProviderConfig(question, writeLine);
+      const instance = await promptForCompatibleProviderInstance(question, writeLine);
+      return buildUserConfigFromInstance(instance, instance.customModels?.[0]?.id);
     }
 
     const apiKey = (await question("API key: ")).trim();
@@ -74,19 +77,40 @@ export async function promptForProviderConfig(
       getModelsForProvider,
     });
 
-    return {
-      provider: getModelById(selectedModel)?.provider ?? provider,
+    const instance: ProviderInstance = {
+      id: createProviderInstanceId(),
+      type: getModelById(selectedModel)?.provider ?? provider,
+      label: defaultProviderLabel(provider, []),
       apiKey,
-      model: selectedModel,
+      createdAt: new Date().toISOString(),
     };
+
+    return buildUserConfigFromInstance(instance, selectedModel);
   }
 }
 
-function resolveProviderChoice(input: string): UserProviderName | null {
-  const parsed = parseProviderName(input);
+function buildUserConfigFromInstance(
+  instance: ProviderInstance,
+  model: string | undefined,
+): UserConfig {
+  return {
+    defaultProviderId: instance.id,
+    defaultModel: model ?? null,
+    providers: [instance],
+  };
+}
 
-  if (parsed) {
-    return parsed;
+function resolveProviderChoice(input: string): UserProviderName | null {
+  const normalized = input.trim().toLowerCase();
+
+  if (
+    normalized === "openai" ||
+    normalized === "anthropic" ||
+    normalized === "openrouter" ||
+    normalized === "gemini" ||
+    normalized === "openai_compatible"
+  ) {
+    return normalized;
   }
 
   const numeric = Number(input);
@@ -130,10 +154,10 @@ function resolveModelChoice(
   return options.getDefaultModel(provider);
 }
 
-async function promptForCompatibleProviderConfig(
+async function promptForCompatibleProviderInstance(
   question: (prompt: string) => Promise<string>,
   writeLine: (line: string) => void,
-): Promise<UserProviderConfig> {
+): Promise<ProviderInstance> {
   while (true) {
     const displayName = validateDisplayName(await question("Provider name: "));
     const baseUrlInput = (await question("Base URL: ")).trim();
@@ -163,12 +187,13 @@ async function promptForCompatibleProviderConfig(
     );
 
     return {
-      provider: "openai_compatible",
+      id: createProviderInstanceId(),
+      type: "openai_compatible",
+      label: displayName,
       apiKey,
-      displayName,
       baseUrl,
       customModels,
-      model: customModels.find((model) => model.default)?.id ?? customModels[0]!.id,
+      createdAt: new Date().toISOString(),
     };
   }
 }

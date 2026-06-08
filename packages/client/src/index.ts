@@ -23,11 +23,18 @@ import type {
   ToolSourceResponse,
   ListSessionsResponse,
   ModelsResponse,
+  CreateProviderRequest,
+  CreateProviderResponse,
+  DeleteProviderResponse,
+  ListProvidersResponse,
+  UpdateProviderRequest,
+  UpdateProviderResponse,
   ProfileResponse,
   ProfileSummary,
   SendMessageInput,
   SendMessageResponse,
   SessionMessagesResponse,
+  SetModelRequest,
   SetModelResponse,
   ConfigureProviderRequest,
   ConfigureProviderResponse,
@@ -153,10 +160,41 @@ export class TinyClawClient {
     });
   }
 
-  async setModel(model: string): Promise<SetModelResponse> {
+  async listProviders(): Promise<ListProvidersResponse> {
+    return this.request<ListProvidersResponse>("/v1/providers");
+  }
+
+  async createProvider(request: CreateProviderRequest): Promise<CreateProviderResponse> {
+    return this.request<CreateProviderResponse>("/v1/providers", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  async updateProvider(
+    providerId: string,
+    request: UpdateProviderRequest,
+  ): Promise<UpdateProviderResponse> {
+    return this.request<UpdateProviderResponse>(
+      `/v1/providers/${encodeURIComponent(providerId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  async deleteProvider(providerId: string): Promise<DeleteProviderResponse> {
+    return this.request<DeleteProviderResponse>(
+      `/v1/providers/${encodeURIComponent(providerId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  async setModel(request: SetModelRequest): Promise<SetModelResponse> {
     return this.request<SetModelResponse>("/v1/settings/model", {
       method: "PUT",
-      body: JSON.stringify({ model }),
+      body: JSON.stringify(request),
     });
   }
 

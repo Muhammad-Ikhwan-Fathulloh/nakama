@@ -43,6 +43,12 @@ import {
   type SetModelResponse,
   type ConfigureProviderRequest,
   type ConfigureProviderResponse,
+  type CreateProviderRequest,
+  type CreateProviderResponse,
+  type DeleteProviderResponse,
+  type ListProvidersResponse,
+  type UpdateProviderRequest,
+  type UpdateProviderResponse,
   type DiscoverModelsRequest,
   type CompactSessionRequest,
   type CompactionResponse,
@@ -167,9 +173,31 @@ export function createApp(options: ServerOptions) {
           return json<ModelsResponse>(result);
         }
 
+        if (request.method === "GET" && url.pathname === "/v1/providers") {
+          return json<ListProvidersResponse>(await agent.listProviders());
+        }
+
+        if (request.method === "POST" && url.pathname === "/v1/providers") {
+          const body = await readJson<CreateProviderRequest>(request);
+          return json<CreateProviderResponse>(await agent.createProvider(body));
+        }
+
+        const providerRoute = matchProviderRoute(url.pathname);
+
+        if (providerRoute && request.method === "PATCH") {
+          const body = await readJson<UpdateProviderRequest>(request);
+          return json<UpdateProviderResponse>(
+            await agent.updateProvider(providerRoute, body),
+          );
+        }
+
+        if (providerRoute && request.method === "DELETE") {
+          return json<DeleteProviderResponse>(await agent.deleteProvider(providerRoute));
+        }
+
         if (request.method === "PUT" && url.pathname === "/v1/settings/model") {
           const body = await readJson<SetModelRequest>(request);
-          const result = await agent.setModel(body.model);
+          const result = await agent.setModel(body);
 
           return json<SetModelResponse>(result);
         }
@@ -961,4 +989,9 @@ function readTodosFromToolResult(result: unknown): AgentTodo[] | null {
   }
 
   return parsed;
+}
+
+function matchProviderRoute(pathname: string): string | null {
+  const match = pathname.match(/^\/v1\/providers\/([^/]+)$/);
+  return match?.[1] ?? null;
 }

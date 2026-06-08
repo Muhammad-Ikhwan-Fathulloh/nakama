@@ -1,6 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import { estimateUsageCostUsd, getModelPricing, hasCatalogPricing } from "./pricing";
 
+const openRouterInstance = {
+  id: "or-1",
+  type: "openrouter" as const,
+  label: "OpenRouter",
+  apiKey: "sk-test",
+  createdAt: "2026-06-07T10:00:00.000Z",
+};
+
+const compatibleInstance = {
+  id: "cmp-1",
+  type: "openai_compatible" as const,
+  label: "Ollama",
+  apiKey: "k",
+  baseUrl: "http://localhost:11434/v1",
+  createdAt: "2026-06-07T10:00:00.000Z",
+};
+
 describe("estimateUsageCostUsd", () => {
   test("computes cost from catalog pricing", () => {
     const cost = estimateUsageCostUsd("claude-sonnet-4-6", 1_000_000, 1_000_000);
@@ -16,9 +33,8 @@ describe("estimateUsageCostUsd", () => {
   test("uses saved pricing for openrouter custom models", () => {
     const cost = estimateUsageCostUsd("anthropic/claude-sonnet-4-6", 1_000_000, 1_000_000, {
       provider: "openrouter",
-      userConfig: {
-        provider: "openrouter",
-        apiKey: "sk-test",
+      providerInstance: {
+        ...openRouterInstance,
         customModels: [
           {
             id: "anthropic/claude-sonnet-4-6",
@@ -36,9 +52,8 @@ describe("estimateUsageCostUsd", () => {
     expect(
       getModelPricing("anthropic/claude-sonnet-4-6", {
         provider: "openrouter",
-        userConfig: {
-          provider: "openrouter",
-          apiKey: "sk-test",
+        providerInstance: {
+          ...openRouterInstance,
           customModels: [{ id: "anthropic/claude-sonnet-4-6" }],
         },
       }),
@@ -46,9 +61,8 @@ describe("estimateUsageCostUsd", () => {
     expect(
       estimateUsageCostUsd("anthropic/claude-sonnet-4-6", 1_000, 500, {
         provider: "openrouter",
-        userConfig: {
-          provider: "openrouter",
-          apiKey: "sk-test",
+        providerInstance: {
+          ...openRouterInstance,
           customModels: [{ id: "anthropic/claude-sonnet-4-6" }],
         },
       }),
@@ -58,9 +72,8 @@ describe("estimateUsageCostUsd", () => {
   test("does not estimate compatible models without user pricing", () => {
     const pricing = getModelPricing("llama3.2", {
       provider: "openai_compatible",
-      userConfig: {
-        provider: "openai_compatible",
-        apiKey: "k",
+      providerInstance: {
+        ...compatibleInstance,
         customModels: [{ id: "llama3.2" }],
       },
     });
@@ -69,9 +82,8 @@ describe("estimateUsageCostUsd", () => {
     expect(
       estimateUsageCostUsd("llama3.2", 1_000, 500, {
         provider: "openai_compatible",
-        userConfig: {
-          provider: "openai_compatible",
-          apiKey: "k",
+        providerInstance: {
+          ...compatibleInstance,
           customModels: [{ id: "llama3.2" }],
         },
       }),
@@ -79,9 +91,8 @@ describe("estimateUsageCostUsd", () => {
     expect(
       hasCatalogPricing("llama3.2", {
         provider: "openai_compatible",
-        userConfig: {
-          provider: "openai_compatible",
-          apiKey: "k",
+        providerInstance: {
+          ...compatibleInstance,
           customModels: [
             {
               id: "llama3.2",

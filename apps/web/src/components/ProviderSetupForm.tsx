@@ -1,4 +1,4 @@
-import type { ConfigureProviderResponse } from "@tinyclaw/core/contract";
+import type { CreateProviderResponse } from "@tinyclaw/core/contract";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { useState } from "react";
 import { ModelsBrowseList } from "@/components/ModelsBrowseList";
@@ -32,7 +32,7 @@ interface ProviderSetupFormProps {
   submitLabel?: string;
   showHeading?: boolean;
   density?: "default" | "compact";
-  onSuccess?: (result: ConfigureProviderResponse) => void;
+  onSuccess?: (result: CreateProviderResponse) => void;
 }
 
 export function ProviderSetupForm({

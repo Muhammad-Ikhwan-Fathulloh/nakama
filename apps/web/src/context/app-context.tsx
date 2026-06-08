@@ -1,6 +1,9 @@
 import type {
   ConfigureProviderRequest,
   ConfigureProviderResponse,
+  CreateProviderRequest,
+  CreateProviderResponse,
+  SetModelRequest,
 } from "@tinyclaw/core/contract";
 import {
   createContext,
@@ -11,6 +14,7 @@ import {
 } from "react";
 import {
   useConfigureProviderMutation,
+  useCreateProviderMutation,
   useHealthQuery,
   useModelsQuery,
   useSetModelMutation,
@@ -22,7 +26,8 @@ interface AppContextValue {
   models: ReturnType<typeof useModelsQuery>["data"] | null;
   loading: boolean;
   error: string | null;
-  setModel: (modelId: string) => Promise<void>;
+  setModel: (request: SetModelRequest) => Promise<void>;
+  createProvider: (request: CreateProviderRequest) => Promise<CreateProviderResponse>;
   configureProvider: (
     request: ConfigureProviderRequest,
   ) => Promise<ConfigureProviderResponse>;
@@ -35,13 +40,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const providerConfigured = healthQuery.data?.providerConfigured === true;
   const modelsQuery = useModelsQuery({ enabled: providerConfigured });
   const configureProviderMutation = useConfigureProviderMutation();
+  const createProviderMutation = useCreateProviderMutation();
   const setModelMutation = useSetModelMutation();
 
   const setModel = useCallback(
-    async (modelId: string) => {
-      await setModelMutation.mutateAsync(modelId);
+    async (request: SetModelRequest) => {
+      await setModelMutation.mutateAsync(request);
     },
     [setModelMutation],
+  );
+
+  const createProvider = useCallback(
+    async (request: CreateProviderRequest) => {
+      return createProviderMutation.mutateAsync(request);
+    },
+    [createProviderMutation],
   );
 
   const configureProvider = useCallback(
@@ -73,6 +86,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       loading,
       error,
       setModel,
+      createProvider,
       configureProvider,
     }),
     [
@@ -81,6 +95,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       loading,
       error,
       setModel,
+      createProvider,
       configureProvider,
     ],
   );

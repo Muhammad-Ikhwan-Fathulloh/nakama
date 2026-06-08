@@ -119,6 +119,156 @@
         }
       }
     },
+    "/v1/providers": {
+      "get": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "List configured provider instances",
+        "operationId": "listProviders",
+        "responses": {
+          "200": {
+            "description": "Provider instances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListProvidersResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Add a provider instance",
+        "operationId": "createProvider",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProviderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provider created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateProviderResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/providers/{providerId}": {
+      "patch": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Update a provider instance",
+        "operationId": "updateProvider",
+        "parameters": [
+          {
+            "name": "providerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProviderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provider updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateProviderResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Remove a provider instance",
+        "operationId": "deleteProvider",
+        "parameters": [
+          {
+            "name": "providerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteProviderResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/settings/model": {
       "put": {
         "tags": [
@@ -3377,6 +3527,12 @@
               "openai_compatible"
             ]
           },
+          "providerId": {
+            "type": "string"
+          },
+          "providerLabel": {
+            "type": "string"
+          },
           "default": {
             "type": "boolean"
           },
@@ -3388,16 +3544,210 @@
           }
         }
       },
+      "ProviderInstanceSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "label",
+          "hasApiKey",
+          "modelCount",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "anthropic",
+              "openrouter",
+              "gemini",
+              "openai_compatible"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "hasApiKey": {
+            "type": "boolean"
+          },
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customModels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomModelEntry"
+            }
+          },
+          "modelCount": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        }
+      },
+      "ListProvidersResponse": {
+        "type": "object",
+        "required": [
+          "providers",
+          "defaultProviderId",
+          "defaultModel"
+        ],
+        "properties": {
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderInstanceSummary"
+            }
+          },
+          "defaultProviderId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "defaultModel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CreateProviderRequest": {
+        "type": "object",
+        "required": [
+          "type",
+          "apiKey"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "anthropic",
+              "openrouter",
+              "gemini",
+              "openai_compatible"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "customModels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomModelEntry"
+            }
+          }
+        }
+      },
+      "CreateProviderResponse": {
+        "type": "object",
+        "required": [
+          "provider",
+          "defaultProviderId",
+          "defaultModel"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderInstanceSummary"
+          },
+          "defaultProviderId": {
+            "type": "string"
+          },
+          "defaultModel": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateProviderRequest": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "customModels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomModelEntry"
+            }
+          }
+        }
+      },
+      "UpdateProviderResponse": {
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderInstanceSummary"
+          }
+        }
+      },
+      "DeleteProviderResponse": {
+        "type": "object",
+        "required": [
+          "defaultProviderId",
+          "defaultModel"
+        ],
+        "properties": {
+          "defaultProviderId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "defaultModel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ModelsResponse": {
         "type": "object",
         "required": [
+          "currentProviderId",
           "provider",
           "currentModel",
           "defaultModel",
           "displayName",
+          "providers",
           "models"
         ],
         "properties": {
+          "currentProviderId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "provider": {
             "type": [
               "string",
@@ -3430,6 +3780,12 @@
               "null"
             ]
           },
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderInstanceSummary"
+            }
+          },
           "models": {
             "type": "array",
             "items": {
@@ -3441,9 +3797,13 @@
       "SetModelRequest": {
         "type": "object",
         "required": [
+          "providerId",
           "model"
         ],
         "properties": {
+          "providerId": {
+            "type": "string"
+          },
           "model": {
             "type": "string"
           }
@@ -3452,10 +3812,14 @@
       "SetModelResponse": {
         "type": "object",
         "required": [
+          "providerId",
           "provider",
           "currentModel"
         ],
         "properties": {
+          "providerId": {
+            "type": "string"
+          },
           "provider": {
             "type": "string",
             "enum": [

@@ -5,7 +5,6 @@ import {
 } from "lucide-react";
 import type { SVGProps } from "react";
 import { Outlet, useLocation } from "react-router-dom";
-import { ConnectionBar } from "@/components/ConnectionBar";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -131,9 +130,8 @@ export function Layout() {
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           {page !== "chat" && page !== "status" ? (
-            <header className="app-shell-header justify-between gap-4 bg-card px-6">
+            <header className="app-shell-header gap-4 bg-card px-6">
               <h1 className="type-brand min-w-0 truncate">{activeNav?.label}</h1>
-              <ConnectionBar />
             </header>
           ) : null}
 

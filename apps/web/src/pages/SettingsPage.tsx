@@ -41,7 +41,8 @@ export function SettingsPage() {
   const [thinkingEffort, setThinkingEffort] = useState<"low" | "medium" | "high">("medium");
   const [thinkingHint, setThinkingHint] = useState<string | null>(null);
 
-  const isCompatibleProvider = models?.provider === "openai_compatible";
+  const isCompatibleProvider =
+    models?.providers?.some((provider) => provider.type === "openai_compatible") ?? false;
 
   useEffect(() => {
     if (savedTimezone) {

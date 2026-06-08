@@ -32,13 +32,15 @@ export async function ensureProviderConfiguredViaCli(
       ...modelHelpers,
     });
 
+    const instance = config.providers[0]!;
+
     const result = await client.configureProvider({
-      apiKey: config.apiKey,
-      model: config.model,
-      provider: config.provider,
-      displayName: config.displayName,
-      baseUrl: config.baseUrl,
-      customModels: config.customModels,
+      apiKey: instance.apiKey,
+      model: config.defaultModel ?? undefined,
+      provider: instance.type,
+      displayName: instance.type === "openai_compatible" ? instance.label : undefined,
+      baseUrl: instance.baseUrl,
+      customModels: instance.customModels,
     });
 
     console.log(

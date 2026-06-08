@@ -109,6 +109,63 @@ export function buildOpenApiSpec() {
           },
         },
       },
+      "/v1/providers": {
+        get: {
+          tags: ["Models"],
+          summary: "List configured provider instances",
+          operationId: "listProviders",
+          responses: {
+            "200": jsonResponse("ListProvidersResponse", "Provider instances"),
+          },
+        },
+        post: {
+          tags: ["Models"],
+          summary: "Add a provider instance",
+          operationId: "createProvider",
+          requestBody: jsonBody("CreateProviderRequest"),
+          responses: {
+            "200": jsonResponse("CreateProviderResponse", "Provider created"),
+            "500": errorResponse,
+          },
+        },
+      },
+      "/v1/providers/{providerId}": {
+        patch: {
+          tags: ["Models"],
+          summary: "Update a provider instance",
+          operationId: "updateProvider",
+          parameters: [
+            {
+              name: "providerId",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          requestBody: jsonBody("UpdateProviderRequest"),
+          responses: {
+            "200": jsonResponse("UpdateProviderResponse", "Provider updated"),
+            "500": errorResponse,
+          },
+        },
+        delete: {
+          tags: ["Models"],
+          summary: "Remove a provider instance",
+          operationId: "deleteProvider",
+          parameters: [
+            {
+              name: "providerId",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            "200": jsonResponse("DeleteProviderResponse", "Provider removed"),
+            "500": errorResponse,
+          },
+        },
+      },
       "/v1/settings/model": {
         put: {
           tags: ["Models"],

@@ -1,5 +1,5 @@
 import { generateSessionTitleFromMessages } from "@tinyclaw/agent";
-import type { ChatMessage, UserProviderConfig } from "@tinyclaw/core";
+import type { ChatMessage, UserConfig } from "@tinyclaw/core";
 import type { DatabaseAdapter } from "@tinyclaw/db";
 import { createProviderFromSources } from "../providers";
 
@@ -10,7 +10,7 @@ export class SessionTitleService {
 
   constructor(
     private readonly db: DatabaseAdapter,
-    private readonly getUserConfig: () => UserProviderConfig | null,
+    private readonly getUserConfig: () => UserConfig | null,
     private readonly isProviderConfigured: () => boolean,
   ) {}
 

@@ -2,32 +2,33 @@ import { createAnthropicProvider } from "./anthropic";
 import { createGeminiProvider } from "./gemini";
 import {
   apiKeyEnvVarForProvider,
+  getActiveProviderInstance,
   readEnvValue,
-  resolveProvider,
   type ProviderClient,
+  type ProviderInstance,
   type ProviderName,
+  type UserConfig,
 } from "@tinyclaw/core";
 import { resolveModel } from "./models";
 import { createOpenAICompatibleProvider } from "./openai-compatible";
 import { createOpenAIProvider } from "./openai";
 import { createOpenRouterProvider } from "./openrouter";
-import type { UserProviderConfig } from "@tinyclaw/core";
 
 export interface CreateProviderOptions {
   provider: ProviderName;
   apiKey: string;
   model?: string;
-  userConfig?: UserProviderConfig | null;
+  instance?: ProviderInstance | null;
 }
 
 function createProvider(options: CreateProviderOptions): ProviderClient {
   const model = resolveModel(
     options.provider,
     options.model,
-    options.userConfig?.customModels,
+    options.instance?.customModels,
   );
 
-  const baseUrlOverride = options.userConfig?.baseUrl?.trim();
+  const baseUrlOverride = options.instance?.baseUrl?.trim();
 
   switch (options.provider) {
     case "openai":
@@ -54,10 +55,10 @@ function createProvider(options: CreateProviderOptions): ProviderClient {
         ...(baseUrlOverride ? { baseUrl: baseUrlOverride } : {}),
       });
     case "openai_compatible": {
-      const displayName = options.userConfig?.displayName?.trim();
+      const displayName = options.instance?.label?.trim();
 
       if (!baseUrlOverride || !displayName) {
-        throw new Error("OpenAI-compatible provider requires baseUrl and displayName.");
+        throw new Error("OpenAI-compatible provider requires baseUrl and label.");
       }
 
       return createOpenAICompatibleProvider({
@@ -70,40 +71,52 @@ function createProvider(options: CreateProviderOptions): ProviderClient {
   }
 }
 
-function readApiKeyForProvider(
-  provider: ProviderName,
+function readApiKeyForInstance(
+  instance: ProviderInstance,
   env: Record<string, string | undefined>,
-  userConfig?: UserProviderConfig | null,
 ): string | undefined {
-  return readEnvValue(env, apiKeyEnvVarForProvider(provider)) ?? userConfig?.apiKey;
-}
-
-function createProviderFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): ProviderClient | null {
-  return createProviderFromSources(env);
-}
-
-export function createProviderFromSources(
-  env: Record<string, string | undefined> = process.env,
-  userConfig?: UserProviderConfig | null,
-): ProviderClient | null {
-  const provider = resolveProvider({ env, configuredProvider: userConfig?.provider });
-
-  if (!provider) {
-    return null;
+  if (instance.apiKey.trim()) {
+    return instance.apiKey;
   }
 
-  const apiKey = readApiKeyForProvider(provider, env, userConfig);
+  return readEnvValue(env, apiKeyEnvVarForProvider(instance.type));
+}
 
-  if (!apiKey?.trim()) {
+export function createProviderForInstance(
+  instance: ProviderInstance,
+  model: string,
+  env: Record<string, string | undefined> = process.env,
+): ProviderClient | null {
+  const apiKey = readApiKeyForInstance(instance, env);
+
+  if (!apiKey?.trim() && instance.type !== "openai_compatible") {
     return null;
   }
 
   return createProvider({
-    provider,
-    apiKey,
-    model: readEnvValue(env, "TINYCLAW_MODEL") ?? userConfig?.model,
-    userConfig,
+    provider: instance.type,
+    apiKey: apiKey ?? "",
+    model,
+    instance,
   });
+}
+
+export function createProviderFromActiveConfig(
+  userConfig: UserConfig | null | undefined,
+  env: Record<string, string | undefined> = process.env,
+): ProviderClient | null {
+  const instance = getActiveProviderInstance(userConfig);
+
+  if (!instance || !userConfig?.defaultModel) {
+    return null;
+  }
+
+  return createProviderForInstance(instance, userConfig.defaultModel, env);
+}
+
+export function createProviderFromSources(
+  env: Record<string, string | undefined> = process.env,
+  userConfig?: UserConfig | null,
+): ProviderClient | null {
+  return createProviderFromActiveConfig(userConfig, env);
 }

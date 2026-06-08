@@ -3,7 +3,7 @@ import {
   normalizeBaseUrl,
   type CustomModelEntry,
 } from "@tinyclaw/core";
-import type { ProviderName, UserProviderConfig } from "@tinyclaw/core";
+import type { ProviderInstance, ProviderName } from "@tinyclaw/core";
 import OpenAI from "openai";
 import type { ProviderModelOption } from "./models";
 import { AVAILABLE_MODELS, getDefaultModel } from "./models";
@@ -103,36 +103,49 @@ export function ensureCurrentModelInCatalog(
   ];
 }
 
-export function getModelsForConfiguredProvider(
-  provider: ProviderName | null,
-  userConfig: UserProviderConfig | null | undefined,
+export function getModelsForProviderInstance(
+  instance: ProviderInstance,
   currentModel?: string | null,
 ): ProviderModelOption[] {
-  if (provider === "openai_compatible") {
-    const entries = userConfig?.customModels ?? [];
-    const catalog = ensureCurrentModelInCatalog(
-      customModelsToCatalog(entries),
-      currentModel ?? userConfig?.model,
-      "openai_compatible",
+  const annotate = (models: ProviderModelOption[]): ProviderModelOption[] =>
+    models.map((model) => ({
+      ...model,
+      providerId: instance.id,
+      providerLabel: instance.label,
+    }));
+
+  if (instance.type === "openai_compatible") {
+    const entries = instance.customModels ?? [];
+    return annotate(
+      ensureCurrentModelInCatalog(
+        customModelsToCatalog(entries),
+        currentModel,
+        "openai_compatible",
+      ),
     );
-    return catalog;
   }
 
-  if (provider === "openrouter") {
-    const entries = userConfig?.customModels ?? [];
+  if (instance.type === "openrouter") {
+    const entries = instance.customModels ?? [];
     const catalog = entries.length ? openRouterCustomModelsToCatalog(entries) : [];
-    return ensureCurrentModelInCatalog(
-      catalog,
-      currentModel ?? userConfig?.model,
-      "openrouter",
+    return annotate(
+      ensureCurrentModelInCatalog(catalog, currentModel, "openrouter"),
     );
   }
 
-  if (!provider) {
-    return AVAILABLE_MODELS;
+  return annotate(AVAILABLE_MODELS.filter((model) => model.provider === instance.type));
+}
+
+export function getModelsForConfiguredProvider(
+  provider: ProviderName | null,
+  instance: ProviderInstance | null | undefined,
+  currentModel?: string | null,
+): ProviderModelOption[] {
+  if (!instance) {
+    return provider ? AVAILABLE_MODELS.filter((model) => model.provider === provider) : AVAILABLE_MODELS;
   }
 
-  return AVAILABLE_MODELS.filter((model) => model.provider === provider);
+  return getModelsForProviderInstance(instance, currentModel);
 }
 
 export function resolveOpenRouterDefaultModel(

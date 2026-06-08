@@ -439,7 +439,16 @@ async function runStickyChat(
     }
 
     try {
-      const result = await options.client.setModel(modelId);
+      const cached = modelsCache ?? (await options.client.getModels());
+      const match = cached.models.find((model) => model.id === modelId);
+      const providerId = match?.providerId ?? cached.currentProviderId;
+
+      if (!providerId) {
+        writeOutput(`Unknown model: ${modelId}`);
+        return "handled";
+      }
+
+      const result = await options.client.setModel({ providerId, model: modelId });
       session = await options.client.createSession(options.channel, {
         profileId: currentProfileId,
       });
