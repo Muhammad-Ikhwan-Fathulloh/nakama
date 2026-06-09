@@ -72,6 +72,10 @@ export interface AgentChatSession {
   createAutomation(prompt: string): Promise<AutomationDefinition>;
 }
 
+export interface ResolvePromptContextInput {
+  userMessage?: string;
+}
+
 export interface AgentChatSessionOptions {
   channel?: AgentRequest["channel"];
   tools?: ToolDefinition[];
@@ -83,7 +87,9 @@ export interface AgentChatSessionOptions {
   toolContext?: ToolContext;
   userTimezone?: string;
   compaction?: CompactionConfig;
-  resolvePromptContext?: () => string | Promise<string>;
+  resolvePromptContext?: (
+    context?: ResolvePromptContextInput,
+  ) => string | Promise<string>;
 }
 
 export function createAgentChatSession(
@@ -211,7 +217,9 @@ async function sendMessage(
     toolContext?: ToolContext;
     compaction?: CompactionConfig;
     runCompaction?: (force: boolean) => Promise<CompactionResponse>;
-    resolvePromptContext?: () => string | Promise<string>;
+    resolvePromptContext?: (
+      context?: ResolvePromptContextInput,
+    ) => string | Promise<string>;
   },
 ): Promise<string> {
   const userContent = normalizeUserContent(
@@ -219,6 +227,7 @@ async function sendMessage(
     input.images,
     input.documents,
   );
+  const userMessage = getUserMessageText(userContent);
   history.push({ role: "user", content: userContent });
   const multimodalTurn =
     messageContentHasImages(userContent) ||
@@ -262,7 +271,7 @@ async function sendMessage(
   }
 
   const promptContext = options.resolvePromptContext
-    ? await options.resolvePromptContext()
+    ? await options.resolvePromptContext({ userMessage })
     : "";
   const effectiveSystemPrompt = promptContext.trim()
     ? `${systemPrompt}\n\n${promptContext.trim()}`

@@ -71,9 +71,13 @@ import {
   type ListTaskRunsResponse,
   type TaskMessagesResponse,
   type AssignMcpServerRequest,
+  type AssignSkillRequest,
   type CreateMcpServerRequest,
   type ListMcpServersResponse,
+  type ListSkillsResponse,
   type McpServerResponse,
+  type SkillResponse,
+  type SyncSkillsResponse,
   type TestMcpServerResponse,
   type UpdateMcpServerRequest,
 } from "@tinyclaw/core";
@@ -354,6 +358,39 @@ export function createApp(options: ServerOptions) {
           const serverId = decodeURIComponent(mcpServerMatch[1]!);
           await mcpService.deleteServer(serverId);
           return new Response(null, { status: 204 });
+        }
+
+        if (request.method === "GET" && url.pathname === "/v1/skills") {
+          return json<ListSkillsResponse>(await agent.listSkills());
+        }
+
+        if (request.method === "POST" && url.pathname === "/v1/skills/sync") {
+          return json<SyncSkillsResponse>(await agent.syncSkills());
+        }
+
+        const skillMatch = url.pathname.match(/^\/v1\/skills\/([^/]+)$/);
+
+        if (skillMatch && request.method === "GET") {
+          const skillId = decodeURIComponent(skillMatch[1]!);
+          return json<SkillResponse>(await agent.getSkill(skillId));
+        }
+
+        const profileSkillsMatch = url.pathname.match(
+          /^\/v1\/profiles\/([^/]+)\/skills(?:\/([^/]+))?$/,
+        );
+
+        if (profileSkillsMatch) {
+          const profileId = decodeURIComponent(profileSkillsMatch[1]!);
+
+          if (request.method === "POST" && !profileSkillsMatch[2]) {
+            const body = await readJson<AssignSkillRequest>(request);
+            return json<ProfileResponse>(await agent.assignSkill(profileId, body));
+          }
+
+          if (request.method === "DELETE" && profileSkillsMatch[2]) {
+            const skillId = decodeURIComponent(profileSkillsMatch[2]!);
+            return json<ProfileResponse>(await agent.unassignSkill(profileId, skillId));
+          }
         }
 
         if (request.method === "GET" && url.pathname === "/v1/tools") {

@@ -7,6 +7,7 @@ import type {
   StoredAutomationRunRecord,
   StoredLlmUsageStatsRecord,
   StoredMcpServerRecord,
+  StoredSkillRecord,
   StoredProfileRecord,
   StoredSessionMessageRecord,
   StoredSessionRecord,
@@ -28,6 +29,9 @@ export function createInMemoryDatabaseAdapter(): DatabaseAdapter {
   const mcpServers = new Map<string, StoredMcpServerRecord>();
   const mcpServersByName = new Map<string, StoredMcpServerRecord>();
   const profileMcpServers = new Map<string, Set<string>>();
+  const skills = new Map<string, StoredSkillRecord>();
+  const skillsByName = new Map<string, StoredSkillRecord>();
+  const profileSkills = new Map<string, Set<string>>();
   const sessions = new Map<string, StoredSessionRecord>();
   const sessionMessages = new Map<string, StoredSessionMessageRecord[]>();
   let llmUsageStats: StoredLlmUsageStatsRecord | null = null;
@@ -387,6 +391,77 @@ export function createInMemoryDatabaseAdapter(): DatabaseAdapter {
       }
 
       return count;
+    },
+
+    async listSkills() {
+      return Array.from(skills.values()).sort((left, right) =>
+        left.name.localeCompare(right.name),
+      );
+    },
+
+    async getSkill(id) {
+      return skills.get(id) ?? null;
+    },
+
+    async getSkillByName(name) {
+      return skillsByName.get(name) ?? null;
+    },
+
+    async upsertSkill(record) {
+      const existing = skills.get(record.id);
+
+      if (existing) {
+        skillsByName.delete(existing.name);
+      }
+
+      skills.set(record.id, record);
+      skillsByName.set(record.name, record);
+    },
+
+    async deleteSkill(id) {
+      const existing = skills.get(id);
+
+      if (!existing) {
+        return false;
+      }
+
+      skills.delete(id);
+      skillsByName.delete(existing.name);
+
+      for (const assigned of profileSkills.values()) {
+        assigned.delete(id);
+      }
+
+      return true;
+    },
+
+    async listSkillsForProfile(profileId) {
+      const assigned = profileSkills.get(profileId);
+
+      if (!assigned) {
+        return [];
+      }
+
+      return Array.from(assigned)
+        .map((skillId) => skills.get(skillId))
+        .filter((skill): skill is StoredSkillRecord => skill !== undefined)
+        .sort((left, right) => left.name.localeCompare(right.name));
+    },
+
+    async assignSkillToProfile(profileId, skillId) {
+      const assigned = profileSkills.get(profileId) ?? new Set<string>();
+      assigned.add(skillId);
+      profileSkills.set(profileId, assigned);
+    },
+
+    async unassignSkillFromProfile(profileId, skillId) {
+      const assigned = profileSkills.get(profileId);
+
+      if (!assigned?.delete(skillId)) {
+        return false;
+      }
+
+      return true;
     },
   };
 }
