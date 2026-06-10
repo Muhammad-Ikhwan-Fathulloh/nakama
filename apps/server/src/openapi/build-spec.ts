@@ -531,6 +531,79 @@ export function buildOpenApiSpec() {
           },
         },
       },
+      "/v1/skills": {
+        get: {
+          tags: ["Skills"],
+          summary: "List discovered skills",
+          operationId: "listSkills",
+          responses: {
+            "200": jsonResponse("ListSkillsResponse", "Skill list"),
+          },
+        },
+      },
+      "/v1/skills/sync": {
+        post: {
+          tags: ["Skills"],
+          summary: "Sync skills from disk into the database",
+          operationId: "syncSkills",
+          responses: {
+            "200": jsonResponse("SyncSkillsResponse", "Skills synced"),
+          },
+        },
+      },
+      "/v1/skills/{skillId}": {
+        get: {
+          tags: ["Skills"],
+          summary: "Get a skill",
+          operationId: "getSkill",
+          parameters: [
+            {
+              name: "skillId",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            "200": jsonResponse("SkillResponse", "Skill detail"),
+            "404": errorResponse,
+            "500": errorResponse,
+          },
+        },
+      },
+      "/v1/profiles/{profileId}/skills": {
+        post: {
+          tags: ["Profiles", "Skills"],
+          summary: "Assign a skill to a profile",
+          operationId: "assignSkillToProfile",
+          parameters: [{ $ref: "#/components/parameters/ProfileId" }],
+          requestBody: jsonBody("AssignSkillRequest"),
+          responses: {
+            "200": jsonResponse("ProfileResponse", "Skill assigned"),
+            "500": errorResponse,
+          },
+        },
+      },
+      "/v1/profiles/{profileId}/skills/{skillId}": {
+        delete: {
+          tags: ["Profiles", "Skills"],
+          summary: "Unassign a skill from a profile",
+          operationId: "unassignSkillFromProfile",
+          parameters: [
+            { $ref: "#/components/parameters/ProfileId" },
+            {
+              name: "skillId",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            "200": jsonResponse("ProfileResponse", "Skill unassigned"),
+            "500": errorResponse,
+          },
+        },
+      },
       "/v1/profiles/{profileId}/mcp-servers": {
         post: {
           tags: ["Profiles", "MCP"],

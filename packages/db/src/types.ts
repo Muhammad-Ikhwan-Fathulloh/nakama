@@ -122,6 +122,18 @@ export interface CachedMcpTool {
   inputSchema?: unknown;
 }
 
+export interface StoredSkillRecord {
+  id: string;
+  name: string;
+  description: string;
+  sourcePath: string;
+  hasTool: boolean;
+  disableModelInvocation: boolean;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StoredMcpServerRecord {
   id: string;
   name: string;
@@ -210,4 +222,14 @@ export interface DatabaseAdapter {
   assignMcpServerToProfile(profileId: string, serverId: string): Promise<void>;
   unassignMcpServerFromProfile(profileId: string, serverId: string): Promise<boolean>;
   countProfileMcpAssignments(): Promise<number>;
+
+  listSkills(): Promise<StoredSkillRecord[]>;
+  getSkill(id: string): Promise<StoredSkillRecord | null>;
+  getSkillByName(name: string): Promise<StoredSkillRecord | null>;
+  upsertSkill(record: StoredSkillRecord): Promise<void>;
+  deleteSkill(id: string): Promise<boolean>;
+
+  listSkillsForProfile(profileId: string): Promise<StoredSkillRecord[]>;
+  assignSkillToProfile(profileId: string, skillId: string): Promise<void>;
+  unassignSkillFromProfile(profileId: string, skillId: string): Promise<boolean>;
 }

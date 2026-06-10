@@ -11,6 +11,7 @@ import type {
   StoredAutomationRunRecord,
   StoredLlmUsageStatsRecord,
   StoredMcpServerRecord,
+  StoredSkillRecord,
   StoredProfileRecord,
   StoredSessionMessageRecord,
   StoredSessionRecord,
@@ -124,6 +125,18 @@ interface LlmUsageStatsRow {
   output_tokens: number;
   estimated_cost_usd: number;
   tracked_since: string;
+  updated_at: string;
+}
+
+interface SkillRow {
+  id: string;
+  name: string;
+  description: string;
+  source_path: string;
+  has_tool: number;
+  disable_model_invocation: number;
+  enabled: number;
+  created_at: string;
   updated_at: string;
 }
 
@@ -373,6 +386,40 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
   `);
   const countProfileMcpAssignmentsStmt = db.prepare(`
     SELECT COUNT(*) AS count FROM profile_mcp_servers
+  `);
+
+  const listSkillsStmt = db.prepare("SELECT * FROM skills ORDER BY name ASC");
+  const getSkillStmt = db.prepare("SELECT * FROM skills WHERE id = ?");
+  const getSkillByNameStmt = db.prepare("SELECT * FROM skills WHERE name = ?");
+  const upsertSkillStmt = db.prepare(`
+    INSERT INTO skills (
+      id, name, description, source_path, has_tool, disable_model_invocation, enabled, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      description = excluded.description,
+      source_path = excluded.source_path,
+      has_tool = excluded.has_tool,
+      disable_model_invocation = excluded.disable_model_invocation,
+      enabled = excluded.enabled,
+      updated_at = excluded.updated_at
+  `);
+  const deleteSkillStmt = db.prepare("DELETE FROM skills WHERE id = ?");
+  const listSkillsForProfileStmt = db.prepare(`
+    SELECT skills.*
+    FROM skills
+    INNER JOIN profile_skills ON profile_skills.skill_id = skills.id
+    WHERE profile_skills.profile_id = ?
+    ORDER BY skills.name ASC
+  `);
+  const assignSkillStmt = db.prepare(`
+    INSERT OR IGNORE INTO profile_skills (profile_id, skill_id)
+    VALUES (?, ?)
+  `);
+  const unassignSkillStmt = db.prepare(`
+    DELETE FROM profile_skills
+    WHERE profile_id = ? AND skill_id = ?
   `);
 
   const incrementLlmUsageStatsStmt = db.prepare(`
@@ -743,6 +790,54 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
       const row = countProfileMcpAssignmentsStmt.get() as { count: number };
       return row.count;
     },
+
+    async listSkills() {
+      return listSkillsStmt.all().map((row) => toSkillRecord(row as SkillRow));
+    },
+
+    async getSkill(id) {
+      const row = getSkillStmt.get(id) as SkillRow | null;
+      return row ? toSkillRecord(row) : null;
+    },
+
+    async getSkillByName(name) {
+      const row = getSkillByNameStmt.get(name) as SkillRow | null;
+      return row ? toSkillRecord(row) : null;
+    },
+
+    async upsertSkill(record) {
+      upsertSkillStmt.run(
+        record.id,
+        record.name,
+        record.description,
+        record.sourcePath,
+        record.hasTool ? 1 : 0,
+        record.disableModelInvocation ? 1 : 0,
+        record.enabled ? 1 : 0,
+        record.createdAt,
+        record.updatedAt,
+      );
+    },
+
+    async deleteSkill(id) {
+      const result = deleteSkillStmt.run(id);
+      return result.changes > 0;
+    },
+
+    async listSkillsForProfile(profileId) {
+      return listSkillsForProfileStmt
+        .all(profileId)
+        .map((row) => toSkillRecord(row as SkillRow));
+    },
+
+    async assignSkillToProfile(profileId, skillId) {
+      assignSkillStmt.run(profileId, skillId);
+    },
+
+    async unassignSkillFromProfile(profileId, skillId) {
+      const result = unassignSkillStmt.run(profileId, skillId);
+      return result.changes > 0;
+    },
   };
 }
 
@@ -778,6 +873,20 @@ function toProfileRecord(row: ProfileRow): StoredProfileRecord {
     systemPrompt: row.system_prompt,
     model: row.model,
     isSuper: row.is_super !== 0,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toSkillRecord(row: SkillRow): StoredSkillRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    sourcePath: row.source_path,
+    hasTool: row.has_tool !== 0,
+    disableModelInvocation: row.disable_model_invocation !== 0,
+    enabled: row.enabled !== 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

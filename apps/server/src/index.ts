@@ -13,6 +13,7 @@ import { ensureProviderConfigured } from "./setup";
 import { resolveWebDistDir } from "./static-web";
 import { McpClientManager } from "./services/mcp-client-manager";
 import { McpService } from "./services/mcp-service";
+import { SkillsService } from "./services/skills-service";
 import { createAutomationTools } from "./tools/automation-tools";
 import { TINYCLAW_API_VERSION } from "@tinyclaw/core";
 import {
@@ -53,14 +54,22 @@ const llmUsageTracker = await LlmUsageTracker.create(database.adapter);
 const agent = new AgentService(userConfig, provider, database.adapter, llmUsageTracker);
 const mcpClientManager = new McpClientManager();
 const mcpService = new McpService(database.adapter, mcpClientManager);
+const skillsService = new SkillsService(database.adapter, projectRoot);
 
 agent.setMcpClientManager(mcpClientManager);
 agent.setMcpService(mcpService);
+agent.setSkillsService(skillsService);
 
 try {
   await mcpService.connectEnabledServers();
 } catch (error) {
   console.warn("Could not connect MCP servers:", error);
+}
+
+try {
+  await skillsService.syncDiscoveredSkills();
+} catch (error) {
+  console.warn("Could not sync skills:", error);
 }
 
 try {

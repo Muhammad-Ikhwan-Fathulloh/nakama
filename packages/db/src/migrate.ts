@@ -15,6 +15,7 @@ export function migrateDatabase(db: Database): void {
   migrateTasksTable(db);
   migrateSessionsTable(db);
   migrateMcpTables(db);
+  migrateSkillsTables(db);
 }
 
 function migrateMcpTables(db: Database): void {
@@ -38,6 +39,30 @@ function migrateMcpTables(db: Database): void {
       PRIMARY KEY (profile_id, server_id),
       FOREIGN KEY (profile_id) REFERENCES profiles (id) ON DELETE CASCADE,
       FOREIGN KEY (server_id) REFERENCES mcp_servers (id) ON DELETE CASCADE
+    );
+  `);
+}
+
+function migrateSkillsTables(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS skills (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      source_path TEXT NOT NULL,
+      has_tool INTEGER DEFAULT 0 NOT NULL,
+      disable_model_invocation INTEGER DEFAULT 0 NOT NULL,
+      enabled INTEGER DEFAULT 1 NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS skills_name_unique ON skills (name);
+    CREATE TABLE IF NOT EXISTS profile_skills (
+      profile_id TEXT NOT NULL,
+      skill_id TEXT NOT NULL,
+      PRIMARY KEY (profile_id, skill_id),
+      FOREIGN KEY (profile_id) REFERENCES profiles (id) ON DELETE CASCADE,
+      FOREIGN KEY (skill_id) REFERENCES skills (id) ON DELETE CASCADE
     );
   `);
 }

@@ -522,6 +522,41 @@ export interface ProfileDetail extends ProfileSummary {
   systemPrompt: string;
   tools: ToolSummary[];
   mcpServers: McpServerSummary[];
+  skills: SkillSummary[];
+}
+
+export interface SkillSummary {
+  id: string;
+  name: string;
+  description: string;
+  sourcePath: string;
+  hasTool: boolean;
+  disableModelInvocation: boolean;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillDetail extends SkillSummary {
+  body: string;
+}
+
+export interface ListSkillsResponse {
+  skills: SkillSummary[];
+}
+
+export interface SkillResponse {
+  skill: SkillDetail;
+}
+
+export interface AssignSkillRequest {
+  skillId: string;
+}
+
+export interface SyncSkillsResponse {
+  discovered: number;
+  created: number;
+  updated: number;
 }
 
 export type McpServerStatus = "connected" | "disconnected" | "error";

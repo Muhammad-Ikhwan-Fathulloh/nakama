@@ -8,6 +8,7 @@ import {
 import type {
   AgentChannel,
   AgentTodo,
+  AssignSkillRequest,
   AssignToolRequest,
   ChatMessage,
   CompactionResponse,
@@ -16,6 +17,7 @@ import type {
   InitSoulResponse,
   InitUserContextResponse,
   ListProfilesResponse,
+  ListSkillsResponse,
   ListToolsResponse,
   ListSessionsResponse,
   ModelsResponse,
@@ -33,7 +35,9 @@ import type {
   SetModelResponse,
   UpdateProviderRequest,
   UpdateProviderResponse,
+  SkillResponse,
   SoulStackResponse,
+  SyncSkillsResponse,
   SoulStatusResponse,
   TelegramSettingsResponse,
   ToolDefinition,
@@ -118,6 +122,7 @@ import { buildMcpToolDefinitions } from "./mcp-tool-bridge";
 import type { McpClientManager } from "./mcp-client-manager";
 import type { McpService } from "./mcp-service";
 import { ProfileService } from "./profile-service";
+import type { SkillsService } from "./skills-service";
 import { SessionTitleService } from "./session-title-service";
 import { SuperBotSessionState } from "./super-bot-session-state";
 import { resolveToolsFromStorage } from "./tool-resolver";
@@ -144,6 +149,7 @@ export class AgentService {
   private taskRunner: TaskRunner | null = null;
   private mcpClientManager: McpClientManager | null = null;
   private mcpService: McpService | null = null;
+  private skillsService: SkillsService | null = null;
   private readonly sessions = new Map<string, StoredSession>();
   private readonly sessionTitleService: SessionTitleService;
   private _providerConfigured: boolean;
@@ -193,6 +199,11 @@ export class AgentService {
 
   setMcpService(service: McpService): void {
     this.mcpService = service;
+  }
+
+  setSkillsService(service: SkillsService): void {
+    this.skillsService = service;
+    this.sessions.clear();
   }
 
   getMcpService(): McpService {
@@ -1014,6 +1025,29 @@ export class AgentService {
     return this.profileService.unassignMcpServer(profileId, serverId);
   }
 
+  async listSkills(): Promise<ListSkillsResponse> {
+    return this.requireSkillsService().listSkills();
+  }
+
+  async getSkill(skillId: string): Promise<SkillResponse> {
+    return this.requireSkillsService().getSkill(skillId);
+  }
+
+  async syncSkills(): Promise<SyncSkillsResponse> {
+    return this.requireSkillsService().syncDiscoveredSkills();
+  }
+
+  async assignSkill(
+    profileId: string,
+    request: AssignSkillRequest,
+  ): Promise<ProfileResponse> {
+    return this.profileService.assignSkill(profileId, request);
+  }
+
+  async unassignSkill(profileId: string, skillId: string): Promise<ProfileResponse> {
+    return this.profileService.unassignSkill(profileId, skillId);
+  }
+
   async uploadProfileAvatar(
     profileId: string,
     attachment: ImageAttachment,
@@ -1178,6 +1212,11 @@ export class AgentService {
       resolved = [...resolved, ...this.todoTools];
     }
 
+    if (this.skillsService) {
+      const skillTools = await this.skillsService.loadToolsForProfile(profile.id);
+      resolved = [...resolved, ...skillTools];
+    }
+
     if (profile.isSuper) {
       resolved = [...resolved, ...this.superBotTools];
     }
@@ -1218,7 +1257,27 @@ export class AgentService {
         profileId,
         sessionId,
       },
-      resolvePromptContext: () => this.agentTodoState.formatForPrompt(sessionId),
+      resolvePromptContext: async (context) => {
+        const parts: string[] = [];
+        const todoContext = await this.agentTodoState.formatForPrompt(sessionId);
+
+        if (todoContext.trim()) {
+          parts.push(todoContext.trim());
+        }
+
+        if (this.skillsService && context?.userMessage?.trim()) {
+          const skillContext = await this.skillsService.formatMatchedSkillsForPrompt(
+            profileId,
+            context.userMessage,
+          );
+
+          if (skillContext.trim()) {
+            parts.push(skillContext.trim());
+          }
+        }
+
+        return parts.join("\n\n");
+      },
     });
 
     return wrapPersistedSession(sessionId, session, this.db, {
@@ -1231,15 +1290,30 @@ export class AgentService {
     profilePrompt: string,
   ): Promise<{ systemPrompt: string; soulActive: boolean }> {
     const stack = await resolveSoulStackForProfile(profileId);
+    let systemPrompt = stack
+      ? composeSoulSystemPrompt(stack, { profilePrompt })
+      : profilePrompt;
 
-    if (!stack) {
-      return { systemPrompt: profilePrompt, soulActive: false };
+    if (this.skillsService) {
+      const skillsCatalog = await this.skillsService.composeCatalogForProfile(profileId);
+
+      if (skillsCatalog.trim()) {
+        systemPrompt = `${systemPrompt.trim()}\n\n${skillsCatalog.trim()}`;
+      }
     }
 
     return {
-      systemPrompt: composeSoulSystemPrompt(stack, { profilePrompt }),
-      soulActive: true,
+      systemPrompt,
+      soulActive: Boolean(stack),
     };
+  }
+
+  private requireSkillsService(): SkillsService {
+    if (!this.skillsService) {
+      throw new Error("Skills service is not configured.");
+    }
+
+    return this.skillsService;
   }
 
   private resolveCompactionConfig(

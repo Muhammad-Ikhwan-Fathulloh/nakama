@@ -607,6 +607,76 @@ export const openApiSchemas = {
       serverId: { type: "string" },
     },
   },
+  SkillSummary: {
+    type: "object",
+    required: [
+      "id",
+      "name",
+      "description",
+      "sourcePath",
+      "hasTool",
+      "disableModelInvocation",
+      "enabled",
+      "createdAt",
+      "updatedAt",
+    ],
+    properties: {
+      id: { type: "string" },
+      name: { type: "string" },
+      description: { type: "string" },
+      sourcePath: { type: "string" },
+      hasTool: { type: "boolean" },
+      disableModelInvocation: { type: "boolean" },
+      enabled: { type: "boolean" },
+      createdAt: { type: "string", format: "date-time" },
+      updatedAt: { type: "string", format: "date-time" },
+    },
+  },
+  SkillDetail: {
+    allOf: [
+      { $ref: "#/components/schemas/SkillSummary" },
+      {
+        type: "object",
+        required: ["body"],
+        properties: {
+          body: { type: "string" },
+        },
+      },
+    ],
+  },
+  ListSkillsResponse: {
+    type: "object",
+    required: ["skills"],
+    properties: {
+      skills: {
+        type: "array",
+        items: { $ref: "#/components/schemas/SkillSummary" },
+      },
+    },
+  },
+  SkillResponse: {
+    type: "object",
+    required: ["skill"],
+    properties: {
+      skill: { $ref: "#/components/schemas/SkillDetail" },
+    },
+  },
+  AssignSkillRequest: {
+    type: "object",
+    required: ["skillId"],
+    properties: {
+      skillId: { type: "string" },
+    },
+  },
+  SyncSkillsResponse: {
+    type: "object",
+    required: ["discovered", "created", "updated"],
+    properties: {
+      discovered: { type: "integer" },
+      created: { type: "integer" },
+      updated: { type: "integer" },
+    },
+  },
   TestMcpServerResponse: {
     type: "object",
     required: ["ok", "toolCount", "tools"],
@@ -634,7 +704,7 @@ export const openApiSchemas = {
       { $ref: "#/components/schemas/ProfileSummary" },
       {
         type: "object",
-        required: ["systemPrompt", "tools", "mcpServers"],
+        required: ["systemPrompt", "tools", "mcpServers", "skills"],
         properties: {
           systemPrompt: { type: "string" },
           tools: {
@@ -644,6 +714,10 @@ export const openApiSchemas = {
           mcpServers: {
             type: "array",
             items: { $ref: "#/components/schemas/McpServerSummary" },
+          },
+          skills: {
+            type: "array",
+            items: { $ref: "#/components/schemas/SkillSummary" },
           },
         },
       },

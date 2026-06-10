@@ -1,5 +1,6 @@
 import type {
   AssignMcpServerRequest,
+  AssignSkillRequest,
   AssignToolRequest,
   CreateProfileRequest,
   CreateToolRequest,
@@ -31,6 +32,7 @@ import type { DatabaseAdapter, StoredProfileRecord, StoredToolRecord } from "@ti
 import { SUPER_BOT_PROFILE_ID } from "@tinyclaw/db";
 import { validateJavascriptToolModule } from "./javascript-tool-loader";
 import { toMcpServerSummaries } from "./mcp-service";
+import { toSkillSummaries } from "./skills-service";
 import { readToolSource } from "./tool-source";
 
 export class ProfileService {
@@ -49,6 +51,7 @@ export class ProfileService {
     const profile = await this.requireProfile(profileId);
     const tools = await this.db.listToolsForProfile(profileId);
     const mcpServers = await this.db.listMcpServersForProfile(profileId);
+    const skills = await this.db.listSkillsForProfile(profileId);
 
     return {
       profile: {
@@ -56,6 +59,7 @@ export class ProfileService {
         systemPrompt: profile.systemPrompt,
         tools: tools.map(toToolSummary),
         mcpServers: toMcpServerSummaries(mcpServers),
+        skills: toSkillSummaries(skills),
       },
     };
   }
@@ -240,6 +244,35 @@ export class ProfileService {
 
     if (!removed) {
       throw new Error("MCP server is not assigned to this profile.");
+    }
+
+    return this.getProfile(profileId);
+  }
+
+  async assignSkill(
+    profileId: string,
+    request: AssignSkillRequest,
+  ): Promise<ProfileResponse> {
+    await this.requireProfile(profileId);
+
+    const skill = await this.db.getSkill(request.skillId);
+
+    if (!skill) {
+      throw new Error("Skill not found.");
+    }
+
+    await this.db.assignSkillToProfile(profileId, request.skillId);
+
+    return this.getProfile(profileId);
+  }
+
+  async unassignSkill(profileId: string, skillId: string): Promise<ProfileResponse> {
+    await this.requireProfile(profileId);
+
+    const removed = await this.db.unassignSkillFromProfile(profileId, skillId);
+
+    if (!removed) {
+      throw new Error("Skill is not assigned to this profile.");
     }
 
     return this.getProfile(profileId);

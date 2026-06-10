@@ -1,0 +1,15 @@
+{
+  "name": "@tinyclaw/skills",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir dist",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@tinyclaw/core": "workspace:*"
+  }
+}

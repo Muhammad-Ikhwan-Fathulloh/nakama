@@ -55,6 +55,7 @@ export type {
   AgentChatSessionOptions,
   AgentDependencies,
   AgentRequest,
+  ResolvePromptContextInput,
 } from "./chat";
 export type { CompactionConfig } from "./history-compaction";
 export type { DraftTaskPromptInput } from "./task-prompt";
