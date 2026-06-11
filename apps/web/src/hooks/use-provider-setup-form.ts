@@ -1,7 +1,6 @@
 import type { CreateProviderResponse, ProviderModelOption } from "@tinyclaw/core/contract";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ModelListRow } from "@/components/ModelListEditor";
-import { toCustomModelEntries } from "@/components/CustomProviderFields";
+import { normalizeModelListRows, type ModelListRow } from "@/components/ModelListEditor";
 import type { ModelsDevRow } from "@/hooks/use-models-dev";
 import type { OpenRouterModelRow } from "@/lib/openrouter-models";
 import { useAppContext } from "@/context/app-context";
@@ -273,9 +272,9 @@ export function useProviderSetupForm(options: UseProviderSetupFormOptions = {}) 
             baseUrl,
             customModels:
               selectedProvider === "openai_compatible"
-                ? toCustomModelEntries(customModels)
+                ? normalizeModelListRows(customModels)
                 : selectedProvider === "openrouter"
-                  ? toCustomModelEntries(openRouterModels)
+                  ? normalizeModelListRows(openRouterModels)
                   : undefined,
           }),
         );

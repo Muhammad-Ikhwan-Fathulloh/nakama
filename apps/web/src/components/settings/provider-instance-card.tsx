@@ -6,11 +6,8 @@ import type {
 import { useMemo, useState } from "react";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { OpenRouterProviderModelFields } from "@/components/OpenRouterProviderModelFields";
-import {
-  CustomProviderFields,
-  toCustomModelEntries,
-} from "@/components/CustomProviderFields";
-import type { ModelListRow } from "@/components/ModelListEditor";
+import { CustomProviderFields } from "@/components/CustomProviderFields";
+import { normalizeModelListRows, type ModelListRow } from "@/components/ModelListEditor";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -167,7 +164,7 @@ export function ProviderInstanceCard({
       {
         label: editLabel,
         baseUrl: editBaseUrl,
-        customModels: toCustomModelEntries(manageModels),
+        customModels: normalizeModelListRows(manageModels),
       },
       () => {
         setEditOpen(false);
@@ -185,7 +182,7 @@ export function ProviderInstanceCard({
     }
 
     await runUpdate(
-      { customModels: toCustomModelEntries(manageModels) },
+      { customModels: normalizeModelListRows(manageModels) },
       () => setManageOpen(false),
     );
   };

@@ -1,11 +1,6 @@
-import type { CustomModelEntry } from "@tinyclaw/core/contract";
 import { useState } from "react";
 import { ModelsBrowseList } from "@/components/ModelsBrowseList";
-import {
-  ModelListEditor,
-  normalizeModelListRows,
-  type ModelListRow,
-} from "@/components/ModelListEditor";
+import { ModelListEditor, type ModelListRow } from "@/components/ModelListEditor";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/ui/form-field";
 import { InputGroup, InputGroupInput } from "@/components/ui/input-group";
@@ -151,8 +146,4 @@ export function CustomProviderFields({
       ) : null}
     </div>
   );
-}
-
-export function toCustomModelEntries(rows: ModelListRow[]): CustomModelEntry[] {
-  return normalizeModelListRows(rows);
 }
