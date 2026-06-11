@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 interface McpServerAssignPickerProps {
   servers: McpServerSummary[];
   disabled?: boolean;
+  buttonLabel?: string;
   onAssign: (serverId: string) => void | Promise<void>;
   className?: string;
 }
@@ -29,6 +30,7 @@ interface McpServerAssignPickerProps {
 export function McpServerAssignPicker({
   servers,
   disabled = false,
+  buttonLabel = "Add MCP server",
   onAssign,
   className,
 }: McpServerAssignPickerProps) {
@@ -49,7 +51,7 @@ export function McpServerAssignPicker({
         onClick={() => setOpen(true)}
       >
         <PlusIcon className="size-4" aria-hidden />
-        Add MCP server
+        {buttonLabel}
       </Button>
 
       <Dialog

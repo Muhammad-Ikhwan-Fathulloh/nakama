@@ -1,4 +1,4 @@
-import type { ProfileSummary } from "@tinyclaw/core/contract";
+import type { CreateMcpServerRequest, ProfileSummary } from "@tinyclaw/core/contract";
 import {
   CameraIcon,
   PlusIcon,
@@ -11,6 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { McpServerAssignPicker } from "@/components/McpServerAssignPicker";
+import { McpServerDialog } from "@/components/soul-tools/mcp-tab/McpServerDialog";
 import { SkillAssignPicker } from "@/components/SkillAssignPicker";
 import { ToolAssignDialog } from "@/components/ToolAssignDialog";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
@@ -44,6 +45,7 @@ import {
   useAssignMcpServerMutation,
   useAssignSkillMutation,
   useAssignToolMutation,
+  useCreateMcpServerMutation,
   useCreateProfileMutation,
   useDeleteProfileMutation,
   useSyncSkillsMutation,
@@ -96,6 +98,7 @@ export function ProfilesPage() {
   const unassignMutation = useUnassignToolMutation();
   const assignMcpMutation = useAssignMcpServerMutation();
   const unassignMcpMutation = useUnassignMcpServerMutation();
+  const createMcpMutation = useCreateMcpServerMutation();
   const syncSkillsMutation = useSyncSkillsMutation();
   const assignSkillMutation = useAssignSkillMutation();
   const unassignSkillMutation = useUnassignSkillMutation();
@@ -105,6 +108,7 @@ export function ProfilesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [removeConfirm, setRemoveConfirm] = useState<RemoveAssignmentTarget | null>(null);
+  const [mcpCreateOpen, setMcpCreateOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [createName, setCreateName] = useState("");
   const [createPrompt, setCreatePrompt] = useState(defaultCreatePrompt);
@@ -146,6 +150,7 @@ export function ProfilesPage() {
     unassignMutation.isPending ||
     assignMcpMutation.isPending ||
     unassignMcpMutation.isPending ||
+    createMcpMutation.isPending ||
     syncSkillsMutation.isPending ||
     assignSkillMutation.isPending ||
     unassignSkillMutation.isPending;
@@ -539,6 +544,27 @@ export function ProfilesPage() {
       });
     } catch (err) {
       setError(formatError(err));
+    }
+  }
+
+  async function handleCreateMcpServer(request: CreateMcpServerRequest) {
+    if (!selectedId) {
+      return;
+    }
+
+    setError(null);
+
+    try {
+      const response = await createMcpMutation.mutateAsync({ ...request, connect: true });
+      await assignMcpMutation.mutateAsync({
+        profileId: selectedId,
+        serverId: response.server.id,
+      });
+      setMcpCreateOpen(false);
+    } catch (err) {
+      const message = formatError(err);
+      setError(message);
+      throw new Error(message);
     }
   }
 
@@ -946,15 +972,35 @@ export function ProfilesPage() {
                               : `${detail.mcpServers.length} assigned`}
                           </p>
                         </div>
-                        <McpServerAssignPicker
-                          servers={availableMcpServers}
-                          disabled={busy}
-                          onAssign={handleAssignMcpServer}
-                        />
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => setMcpCreateOpen(true)}
+                          >
+                            <PlusIcon className="size-4" aria-hidden />
+                            Add MCP server
+                          </Button>
+                          <McpServerAssignPicker
+                            servers={availableMcpServers}
+                            disabled={busy}
+                            buttonLabel="Assign existing"
+                            onAssign={handleAssignMcpServer}
+                          />
+                        </div>
                       </div>
 
-                      {detail.mcpServers.length === 0 ? (
-                        <p className="type-body text-xs">No MCP servers assigned.</p>
+                      {allMcpServers.length === 0 ? (
+                        <p className="type-body text-xs">
+                          No MCP servers registered yet. Use Add MCP server to connect an HTTP or
+                          command-based server for this profile.
+                        </p>
+                      ) : detail.mcpServers.length === 0 ? (
+                        <p className="type-body text-xs">
+                          No MCP servers assigned. Add a new server or assign an existing one.
+                        </p>
                       ) : (
                         <ul className="divide-y divide-border rounded-md border border-border">
                           {detail.mcpServers.map((server) => (
@@ -1257,6 +1303,15 @@ export function ProfilesPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <McpServerDialog
+        open={mcpCreateOpen}
+        busy={createMcpMutation.isPending || assignMcpMutation.isPending}
+        onOpenChange={(open) => {
+          setMcpCreateOpen(open);
+        }}
+        onSubmit={handleCreateMcpServer}
+      />
 
       <Dialog
         open={removeConfirm !== null}
