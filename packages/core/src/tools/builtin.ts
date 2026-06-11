@@ -2,6 +2,7 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ToolContext, ToolDefinition } from "../contract";
 import { guardFilePath, PathGuardError, type PathGuardOptions } from "./paths";
+import { searchWorkspaceTool } from "./search-workspace";
 import { webSearchTool } from "./web-search";
 
 export interface WriteFileInput {
@@ -102,6 +103,7 @@ export const deleteFileTool: ToolDefinition<DeleteFileInput, DeleteFileOutput> =
 export const builtinTools: ToolDefinition[] = [
   writeFileTool,
   deleteFileTool,
+  searchWorkspaceTool,
   webSearchTool,
 ];
 
