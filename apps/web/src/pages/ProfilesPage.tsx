@@ -692,7 +692,7 @@ export function ProfilesPage() {
         detail.id,
         detail.isSuper ? "super" : null,
         `${detail.tools.length} tools`,
-        detail.soulActive ? "soul active" : "soul inactive",
+        `${detail.mcpServers.length} MCP`,
       ]
         .filter(Boolean)
         .join(" · ")
@@ -700,7 +700,7 @@ export function ProfilesPage() {
       ? [
           selectedProfile.id,
           `${selectedProfile.toolCount} tools`,
-          selectedProfile.soulActive ? "soul active" : "soul inactive",
+          `${selectedProfile.mcpServerCount} MCP`,
         ].join(" · ")
       : "";
 
@@ -1540,16 +1540,11 @@ function ProfileScopeButton({
       <div className="flex items-start gap-3">
         <ProfileAvatar profile={profile} size="sm" />
         <div className="min-w-0 flex-1">
-          <p
-            className={cn(
-              "truncate text-sm font-medium",
-              active ? "text-primary" : "text-foreground",
-            )}
-          >
+          <p className="truncate text-sm font-medium text-foreground">
             {profile.name}
           </p>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {profile.toolCount} tools · soul {profile.soulActive ? "on" : "off"}
+            {profile.toolCount} tools · {profile.mcpServerCount} MCP
           </p>
         </div>
       </div>

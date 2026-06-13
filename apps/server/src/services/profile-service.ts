@@ -344,6 +344,7 @@ export class ProfileService {
 
   private async toProfileSummary(profile: StoredProfileRecord): Promise<ProfileSummary> {
     const tools = await this.db.listToolsForProfile(profile.id);
+    const mcpServers = await this.db.listMcpServersForProfile(profile.id);
     const soulStack = await resolveSoulStackForProfile(profile.id);
 
     return {
@@ -352,6 +353,7 @@ export class ProfileService {
       model: profile.model,
       isSuper: profile.isSuper,
       toolCount: tools.length,
+      mcpServerCount: mcpServers.length,
       soulActive: soulStack !== null,
       hasAvatar: await hasProfileAvatar(profile.id),
       createdAt: profile.createdAt,

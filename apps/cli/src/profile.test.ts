@@ -12,6 +12,7 @@ function profile(overrides: Partial<ProfileSummary> & Pick<ProfileSummary, "id" 
     model: null,
     isSuper: false,
     toolCount: 0,
+    mcpServerCount: 0,
     soulActive: false,
     hasAvatar: false,
     createdAt: "",

@@ -1349,6 +1349,191 @@
         }
       }
     },
+    "/v1/skills": {
+      "get": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "List discovered skills",
+        "operationId": "listSkills",
+        "responses": {
+          "200": {
+            "description": "Skill list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSkillsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/skills/sync": {
+      "post": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "Sync skills from disk into the database",
+        "operationId": "syncSkills",
+        "responses": {
+          "200": {
+            "description": "Skills synced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncSkillsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/skills/{skillId}": {
+      "get": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "Get a skill",
+        "operationId": "getSkill",
+        "parameters": [
+          {
+            "name": "skillId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skill detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{profileId}/skills": {
+      "post": {
+        "tags": [
+          "Profiles",
+          "Skills"
+        ],
+        "summary": "Assign a skill to a profile",
+        "operationId": "assignSkillToProfile",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProfileId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignSkillRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Skill assigned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{profileId}/skills/{skillId}": {
+      "delete": {
+        "tags": [
+          "Profiles",
+          "Skills"
+        ],
+        "summary": "Unassign a skill from a profile",
+        "operationId": "unassignSkillFromProfile",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProfileId"
+          },
+          {
+            "name": "skillId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skill unassigned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/profiles/{profileId}/mcp-servers": {
       "post": {
         "tags": [
@@ -3997,6 +4182,7 @@
           "model",
           "isSuper",
           "toolCount",
+          "mcpServerCount",
           "soulActive",
           "hasAvatar",
           "createdAt",
@@ -4019,6 +4205,9 @@
             "type": "boolean"
           },
           "toolCount": {
+            "type": "integer"
+          },
+          "mcpServerCount": {
             "type": "integer"
           },
           "soulActive": {
@@ -4221,6 +4410,124 @@
           }
         }
       },
+      "SkillSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "sourcePath",
+          "hasTool",
+          "disableModelInvocation",
+          "enabled",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "sourcePath": {
+            "type": "string"
+          },
+          "hasTool": {
+            "type": "boolean"
+          },
+          "disableModelInvocation": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SkillDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SkillSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "body"
+            ],
+            "properties": {
+              "body": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "ListSkillsResponse": {
+        "type": "object",
+        "required": [
+          "skills"
+        ],
+        "properties": {
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillSummary"
+            }
+          }
+        }
+      },
+      "SkillResponse": {
+        "type": "object",
+        "required": [
+          "skill"
+        ],
+        "properties": {
+          "skill": {
+            "$ref": "#/components/schemas/SkillDetail"
+          }
+        }
+      },
+      "AssignSkillRequest": {
+        "type": "object",
+        "required": [
+          "skillId"
+        ],
+        "properties": {
+          "skillId": {
+            "type": "string"
+          }
+        }
+      },
+      "SyncSkillsResponse": {
+        "type": "object",
+        "required": [
+          "discovered",
+          "created",
+          "updated"
+        ],
+        "properties": {
+          "discovered": {
+            "type": "integer"
+          },
+          "created": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "integer"
+          }
+        }
+      },
       "TestMcpServerResponse": {
         "type": "object",
         "required": [
@@ -4275,7 +4582,8 @@
             "required": [
               "systemPrompt",
               "tools",
-              "mcpServers"
+              "mcpServers",
+              "skills"
             ],
             "properties": {
               "systemPrompt": {
@@ -4291,6 +4599,12 @@
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/McpServerSummary"
+                }
+              },
+              "skills": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SkillSummary"
                 }
               }
             }

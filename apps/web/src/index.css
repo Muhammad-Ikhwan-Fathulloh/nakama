@@ -273,11 +273,11 @@
   }
 
   .scope-item[data-active] {
-    @apply border-primary/25 bg-primary/10 ring-1 ring-primary/20;
+    @apply border-border bg-muted/80;
   }
 
   .dark .scope-item[data-active] {
-    @apply border-primary/35 bg-sidebar-accent ring-primary/25;
+    @apply border-border bg-sidebar-accent;
   }
 
   .scope-badge {

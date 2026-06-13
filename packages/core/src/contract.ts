@@ -512,6 +512,7 @@ export interface ProfileSummary {
   model: string | null;
   isSuper: boolean;
   toolCount: number;
+  mcpServerCount: number;
   soulActive: boolean;
   hasAvatar: boolean;
   createdAt: string;
