@@ -238,7 +238,7 @@ export function ProviderInstanceCard({
           </Button>
         ) : null}
         <Button type="button" size="sm" variant="outline" onClick={() => setReplaceKeyOpen(true)}>
-          Replace key
+          {instance.hasApiKey ? "Update key" : "Add key"}
         </Button>
         <Button
           type="button"
@@ -254,7 +254,9 @@ export function ProviderInstanceCard({
       <Dialog open={replaceKeyOpen} onOpenChange={setReplaceKeyOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Replace API key for {instance.label}</DialogTitle>
+            <DialogTitle>
+              {instance.hasApiKey ? "Update API key" : "Add API key"} for {instance.label}
+            </DialogTitle>
           </DialogHeader>
           <InputGroup>
             <InputGroupInput
@@ -286,7 +288,7 @@ export function ProviderInstanceCard({
             </Button>
             <Button type="button" disabled={busy || !apiKey.trim()} onClick={() => void handleReplaceKey()}>
               {busy ? <Spinner className="mr-2" /> : null}
-              Save key
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>

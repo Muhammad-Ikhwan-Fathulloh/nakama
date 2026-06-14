@@ -3,7 +3,7 @@ import { TINYCLAW_API_VERSION } from "@tinyclaw/core";
 export const openApiSchemas = {
   AgentChannel: {
     type: "string",
-    enum: ["web", "cli", "telegram", "automation", "task"],
+    enum: ["web", "cli", "telegram", "whatsapp", "automation", "task"],
   },
   ApiErrorResponse: {
     type: "object",
@@ -1045,6 +1045,16 @@ export const openApiSchemas = {
       running: { type: "boolean" },
     },
   },
+  WhatsAppWorkerStatus: {
+    type: "object",
+    required: ["ok", "configured", "paired", "running"],
+    properties: {
+      ok: { type: "boolean" },
+      configured: { type: "boolean" },
+      paired: { type: "boolean" },
+      running: { type: "boolean" },
+    },
+  },
   LlmUsageStats: {
     type: "object",
     required: [
@@ -1096,6 +1106,7 @@ export const openApiSchemas = {
       "automationWorker",
       "taskWorker",
       "telegramWorker",
+      "whatsappWorker",
       "llmUsage",
       "mcp",
       "checkedAt",
@@ -1105,6 +1116,7 @@ export const openApiSchemas = {
       automationWorker: { $ref: "#/components/schemas/AutomationWorkerStatus" },
       taskWorker: { $ref: "#/components/schemas/TaskWorkerStatus" },
       telegramWorker: { $ref: "#/components/schemas/TelegramWorkerStatus" },
+      whatsappWorker: { $ref: "#/components/schemas/WhatsAppWorkerStatus" },
       llmUsage: { $ref: "#/components/schemas/LlmUsageStatus" },
       mcp: { $ref: "#/components/schemas/McpStatus" },
       checkedAt: { type: "string" },
@@ -1418,6 +1430,30 @@ export const openApiSchemas = {
     properties: {
       botToken: { type: "string" },
       allowedUserIds: { type: "string" },
+      profileId: { type: "string" },
+    },
+  },
+  WhatsAppSettingsResponse: {
+    type: "object",
+    required: [
+      "configured",
+      "phoneNumberMasked",
+      "pairingCode",
+      "pairedJid",
+      "profileId",
+    ],
+    properties: {
+      configured: { type: "boolean" },
+      phoneNumberMasked: { type: "string", nullable: true },
+      pairingCode: { type: "string", nullable: true },
+      pairedJid: { type: "string", nullable: true },
+      profileId: { type: "string" },
+    },
+  },
+  UpdateWhatsAppSettingsRequest: {
+    type: "object",
+    properties: {
+      phoneNumber: { type: "string" },
       profileId: { type: "string" },
     },
   },

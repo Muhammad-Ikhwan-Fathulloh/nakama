@@ -12,7 +12,7 @@ import type {
 } from "@tinyclaw/core/contract";
 import {
   createProviderInstanceId,
-  defaultProviderLabel,
+  normalizeProviderInstanceLabel,
   type ProviderInstance,
   validateProviderInstanceLabel,
 } from "@tinyclaw/core";
@@ -34,7 +34,7 @@ export function toProviderInstanceSummary(
   return {
     id: instance.id,
     type: instance.type,
-    label: instance.label,
+    label: normalizeProviderInstanceLabel(instance.type, instance.label, []),
     hasApiKey: Boolean(instance.apiKey.trim()) || instance.type === "openai_compatible",
     baseUrl: instance.baseUrl ?? null,
     ...(instance.customModels?.length ? { customModels: instance.customModels } : {}),
@@ -110,9 +110,10 @@ export function buildProviderInstanceFromCreateRequest(
   }
 
   const fields = buildProviderFieldsFromRequest(request);
-  const label = request.label?.trim()
+  const rawLabel = request.label?.trim()
     ? validateProviderInstanceLabel(request.label, type)
-    : fields.label ?? defaultProviderLabel(type, existing);
+    : fields.label;
+  const label = normalizeProviderInstanceLabel(type, rawLabel, existing);
 
   return {
     id: createProviderInstanceId(),

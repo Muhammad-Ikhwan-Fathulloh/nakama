@@ -11,6 +11,11 @@ date: 2026-06-15
 
 Add a WhatsApp integration channel (`apps/platform/whatsapp`) following the existing Telegram bridge pattern — a thin client using `@tinyclaw/client` to forward messages to the tinyclaw server with `channel: "whatsapp"`. Uses Baileys (open-source WhatsApp Web protocol library) for message transport, pairing-code authentication, and the same hub-and-spoke architecture as Telegram. Includes core package config/types, server API endpoints, client SDK methods, and a web dashboard settings card.
 
+## Progress
+
+- [x] U4: WhatsApp Bridge Application (`apps/platform/whatsapp`)
+- [x] U5: Web Dashboard — WhatsApp Settings Card
+
 ---
 
 ## Problem Frame

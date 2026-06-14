@@ -204,6 +204,49 @@ export async function regenerateWhatsAppPairingCode(): Promise<WhatsAppSettingsP
   return toWhatsAppSettingsPublic(next);
 }
 
+export async function verifyAndPairWhatsAppUser(
+  pairingCodeInput: string,
+  jid: string,
+): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
+  const config = await loadWhatsAppConfigFile();
+
+  if (!config) {
+    return { ok: false, message: "WhatsApp is not configured on the server yet." };
+  }
+
+  if (isWhatsAppUserAuthorized(jid, config)) {
+    return { ok: true, message: "This number is already linked." };
+  }
+
+  const expected = config.pairingCode;
+
+  if (!expected) {
+    return {
+      ok: false,
+      message:
+        "No pairing code is active. Open TinyClaw Settings \u2192 WhatsApp and generate a new code.",
+    };
+  }
+
+  if (normalizePairingCode(pairingCodeInput) !== normalizePairingCode(expected)) {
+    return {
+      ok: false,
+      message: "Invalid pairing code. Copy it from Settings \u2192 WhatsApp and try again.",
+    };
+  }
+
+  await writeWhatsAppConfigFile({
+    ...config,
+    pairedJid: jid,
+    pairingCode: null,
+  });
+
+  return {
+    ok: true,
+    message: "Linked successfully. You can chat with TinyClaw now.",
+  };
+}
+
 export function resolveWhatsAppConfigFromSources(options: {
   env?: Record<string, string | undefined>;
   file?: WhatsAppConfigFile | null;
