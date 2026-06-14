@@ -13,7 +13,7 @@ import {
   type RipgrepMatch,
 } from "./ripgrep";
 
-export interface SearchWorkspaceInput {
+export interface SearchFilesInput {
   query: string;
   path?: string;
   glob?: string;
@@ -21,22 +21,22 @@ export interface SearchWorkspaceInput {
   maxResults?: number;
 }
 
-export interface SearchWorkspaceMatch extends RipgrepMatch {}
+export interface SearchFilesMatch extends RipgrepMatch {}
 
-export interface SearchWorkspaceOutput {
+export interface SearchFilesOutput {
   query: string;
   root: string;
-  matches: SearchWorkspaceMatch[];
+  matches: SearchFilesMatch[];
   matchCount: number;
   truncated: boolean;
 }
 
-interface SearchWorkspaceOptions {
+interface SearchFilesOptions {
   workspaceRoot?: string;
 }
 
-export const searchWorkspaceTool: ToolDefinition<SearchWorkspaceInput, SearchWorkspaceOutput> = {
-  name: "search_workspace",
+export const searchFilesTool: ToolDefinition<SearchFilesInput, SearchFilesOutput> = {
+  name: "search_files",
   description:
     "Search text in files under the active profile workspace and return compact matching snippets.",
   parameters: {
@@ -67,15 +67,15 @@ export const searchWorkspaceTool: ToolDefinition<SearchWorkspaceInput, SearchWor
     additionalProperties: false,
   },
   run(input, context) {
-    return runSearchWorkspace(input, context);
+    return runSearchFiles(input, context);
   },
 };
 
-export async function runSearchWorkspace(
+export async function runSearchFiles(
   input: unknown,
   context: ToolContext,
-  options: SearchWorkspaceOptions = {},
-): Promise<SearchWorkspaceOutput> {
+  options: SearchFilesOptions = {},
+): Promise<SearchFilesOutput> {
   const profileId = context.profileId?.trim();
   if (!profileId) {
     throw new Error("profileId is required.");
