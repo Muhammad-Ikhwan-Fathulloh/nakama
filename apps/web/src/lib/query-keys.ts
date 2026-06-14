@@ -18,6 +18,7 @@ export const queryKeys = {
   },
   skills: {
     all: ["skills"] as const,
+    detail: (skillId: string) => ["skills", skillId] as const,
   },
   automations: {
     all: ["automations"] as const,

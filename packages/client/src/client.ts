@@ -406,6 +406,10 @@ export class TinyClawClient {
     });
   }
 
+  async getSkill(skillId: string): Promise<SkillResponse> {
+    return this.request<SkillResponse>(`/v1/skills/${encodeURIComponent(skillId)}`);
+  }
+
   async deleteSkill(skillId: string): Promise<void> {
     await this.request(`/v1/skills/${encodeURIComponent(skillId)}`, {
       method: "DELETE",

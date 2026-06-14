@@ -13,6 +13,7 @@ import { McpServerAssignPicker } from "@/components/McpServerAssignPicker";
 import { McpServerDialog } from "@/components/soul-tools/mcp-tab/McpServerDialog";
 import { SkillAssignPicker } from "@/components/SkillAssignPicker";
 import { SkillCreateDialog } from "@/components/SkillCreateDialog";
+import { SkillDetailDialog } from "@/components/SkillDetailDialog";
 import { ToolAssignDialog } from "@/components/ToolAssignDialog";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { Button } from "@/components/ui/button";
@@ -112,6 +113,7 @@ export function ProfilesPage() {
   const [removeConfirm, setRemoveConfirm] = useState<RemoveAssignmentTarget | null>(null);
   const [mcpCreateOpen, setMcpCreateOpen] = useState(false);
   const [skillCreateOpen, setSkillCreateOpen] = useState(false);
+  const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [createName, setCreateName] = useState("");
   const [createPrompt, setCreatePrompt] = useState(defaultCreatePrompt);
@@ -1122,22 +1124,30 @@ export function ProfilesPage() {
                           {detail.skills.map((skill) => (
                             <li
                               key={skill.id}
-                              className="flex items-center justify-between gap-2 px-3 py-2 first:rounded-t-md last:rounded-b-md"
+                              className="group flex items-center justify-between gap-2 px-3 py-2 first:rounded-t-md last:rounded-b-md hover:bg-muted/40"
                             >
-                              <div className="min-w-0">
-                                <p className="truncate text-sm font-medium leading-tight text-foreground">
-                                  {skill.name}
-                                </p>
-                                <p className="mt-0.5 line-clamp-1 text-xs leading-snug text-muted-foreground">
-                                  {[
-                                    skill.description,
-                                    skill.hasTool ? "includes tool" : null,
-                                    skill.disableModelInvocation ? "explicit invoke only" : null,
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" · ")}
-                                </p>
-                              </div>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                className="flex min-w-0 flex-1 items-start text-left disabled:opacity-50"
+                                aria-label={`View details for ${skill.name}`}
+                                onClick={() => setDetailSkillId(skill.id)}
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-medium leading-tight text-foreground">
+                                    {skill.name}
+                                  </p>
+                                  <p className="mt-0.5 line-clamp-1 text-xs leading-snug text-muted-foreground">
+                                    {[
+                                      skill.description,
+                                      skill.hasTool ? "includes tool" : null,
+                                      skill.disableModelInvocation ? "explicit invoke only" : null,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · ")}
+                                  </p>
+                                </div>
+                              </button>
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -1345,6 +1355,20 @@ export function ProfilesPage() {
         profileId={selectedId}
         onOpenChange={setSkillCreateOpen}
         onSubmit={handleCreateSkill}
+      />
+
+      <SkillDetailDialog
+        skillId={detailSkillId}
+        busy={busy}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDetailSkillId(null);
+          }
+        }}
+        onRemoveFromProfile={(skillId, skillName) => {
+          setDetailSkillId(null);
+          setRemoveConfirm({ kind: "skill", id: skillId, name: skillName });
+        }}
       />
 
       <McpServerDialog

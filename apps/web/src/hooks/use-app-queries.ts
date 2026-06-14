@@ -112,6 +112,22 @@ export function useSkillsQuery() {
   return useQuery(skillsQueryOptions);
 }
 
+export function skillQueryOptions(skillId: string) {
+  return queryOptions({
+    queryKey: queryKeys.skills.detail(skillId),
+    queryFn: async () => (await client.getSkill(skillId)).skill,
+    staleTime: defaultStaleTime,
+    enabled: Boolean(skillId),
+  });
+}
+
+export function useSkillQuery(skillId: string | null) {
+  return useQuery({
+    ...skillQueryOptions(skillId ?? ""),
+    enabled: Boolean(skillId),
+  });
+}
+
 export function mcpServerDetailQueryOptions(serverId: string) {
   return queryOptions({
     queryKey: queryKeys.mcp.detail(serverId),

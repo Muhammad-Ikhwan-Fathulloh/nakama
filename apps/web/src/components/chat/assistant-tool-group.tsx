@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { ChevronDownIcon } from "lucide-react";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
-import { Spinner } from "@/components/ui/spinner";
 import type { ChatListItem } from "@/lib/chat-history";
 import {
   formatToolActionLabel,
@@ -190,9 +189,6 @@ function ThinkingBlock({ message }: { message: ChatListItem }) {
         open={open}
         onToggle={() => setOpen((current) => !current)}
         label={isStreaming ? "Thinking…" : "Thought"}
-        trailing={
-          isStreaming ? <Spinner className="size-3.5 shrink-0 text-muted-foreground" /> : null
-        }
       />
       {open && text ? (
         <p className="mt-2 whitespace-pre-wrap pl-5 text-sm leading-relaxed text-muted-foreground">
@@ -258,9 +254,6 @@ function ToolTimelineItem({
         onToggle={() => hasDetails && setOpen((current) => !current)}
         label={label}
         disabled={!hasDetails}
-        trailing={
-          isRunning ? <Spinner className="size-3.5 shrink-0 text-muted-foreground" /> : null
-        }
         className="pl-0"
       />
       {open && hasDetails ? (
@@ -283,14 +276,12 @@ function CollapsibleTrigger({
   open,
   onToggle,
   label,
-  trailing,
   disabled = false,
   className,
 }: {
   open: boolean;
   onToggle: () => void;
   label: string;
-  trailing?: ReactNode;
   disabled?: boolean;
   className?: string;
 }) {
@@ -317,7 +308,6 @@ function CollapsibleTrigger({
         />
       )}
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {trailing}
     </button>
   );
 }
