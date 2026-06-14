@@ -1168,13 +1168,6 @@ export function ProfilesPage() {
                     </div>
                   </div>
 
-                  <div className="type-body mt-5 rounded-md border border-border bg-muted/40 p-3 text-xs lg:hidden dark:bg-muted/30">
-                    <p className="font-medium text-foreground">How it works</p>
-                    <p className="mt-2">
-                      Profiles isolate prompts and tool access. Open Soul to customize voice and
-                      identity per profile.
-                    </p>
-                  </div>
                 </>
               )}
             </div>
