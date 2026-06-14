@@ -4,7 +4,7 @@ import {
   ChevronsRightIcon,
 } from "lucide-react";
 import type { SVGProps } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -13,13 +13,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useAppContext } from "@/context/app-context";
-import { useAppNavigation } from "@/hooks/use-app-navigation";
 import { usePrefetchAppData } from "@/hooks/use-app-queries";
 import { useSidebarCollapsed } from "@/hooks/use-sidebar-collapsed";
 import { cn } from "@/lib/utils";
 import { chatProfileIdFromPath } from "@/lib/chat-history";
 import {
   findNavItem,
+  navHrefForPage,
   NAV_GROUPS,
   NAV_ITEM_ICONS,
   pageIdFromPath,
@@ -31,7 +31,6 @@ const GITHUB_REPO_URL = "https://github.com/ahmadrosid/tinyclaw";
 
 export function Layout() {
   const location = useLocation();
-  const { navigateToPage, navigateToNewChat } = useAppNavigation();
   const page = pageIdFromPath(location.pathname) ?? "chat";
   const chatProfileId = chatProfileIdFromPath(location.pathname);
   const { error } = useAppContext();
@@ -95,11 +94,7 @@ export function Layout() {
                         icon={NAV_ITEM_ICONS[item.id]}
                         active={item.id === page}
                         collapsed={collapsed}
-                        onClick={() =>
-                          item.id === "chat"
-                            ? navigateToNewChat(chatProfileId)
-                            : navigateToPage(item.id)
-                        }
+                        to={navHrefForPage(item.id, chatProfileId)}
                         onPrefetch={
                           item.id === "automations" ? prefetchAppData : undefined
                         }
@@ -122,7 +117,7 @@ export function Layout() {
               icon={NAV_ITEM_ICONS.settings}
               active={page === "settings"}
               collapsed={collapsed}
-              onClick={() => navigateToPage("settings")}
+              to={navHrefForPage("settings")}
               onPrefetch={prefetchAppData}
             />
           </div>
@@ -213,7 +208,7 @@ function SidebarNavButton({
   icon: Icon,
   active,
   collapsed,
-  onClick,
+  to,
   onPrefetch,
   className,
 }: {
@@ -221,17 +216,16 @@ function SidebarNavButton({
   icon: LucideIcon;
   active: boolean;
   collapsed: boolean;
-  onClick: () => void;
+  to: string;
   onPrefetch?: () => void;
   className?: string;
 }) {
-  const button = (
-    <button
-      type="button"
+  const link = (
+    <Link
+      to={to}
       title={collapsed ? undefined : item.description}
       aria-label={item.label}
       aria-current={active ? "page" : undefined}
-      onClick={onClick}
       onMouseEnter={onPrefetch}
       onFocus={onPrefetch}
       data-active={active || undefined}
@@ -249,16 +243,16 @@ function SidebarNavButton({
       {!collapsed ? (
         <span className="min-w-0 truncate">{item.label}</span>
       ) : null}
-    </button>
+    </Link>
   );
 
   if (!collapsed) {
-    return button;
+    return link;
   }
 
   return (
     <Tooltip>
-      <TooltipTrigger render={button} />
+      <TooltipTrigger render={link} />
       <TooltipContent side="right" sideOffset={8}>
         {item.label}
       </TooltipContent>

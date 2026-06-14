@@ -124,6 +124,21 @@ export function pathForPage(pageId: PageId): string {
   return PAGE_PATHS[pageId];
 }
 
+export function navHrefForPage(
+  pageId: PageId,
+  chatProfileId?: string | null,
+): string {
+  if (pageId === "chat") {
+    const params = new URLSearchParams({ new: "1" });
+    if (chatProfileId) {
+      params.set("profile", chatProfileId);
+    }
+    return `${PAGE_PATHS.chat}?${params.toString()}`;
+  }
+
+  return pathForPage(pageId);
+}
+
 export function findNavItem(pageId: PageId): NavItem | undefined {
   if (pageId === "settings") {
     return SETTINGS_NAV_ITEM;

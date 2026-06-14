@@ -43,7 +43,7 @@ import {
 import { parseAutomationResponse } from "./parse";
 import { executeToolCall, serializeToolResult } from "./tool-loop";
 
-const MAX_TOOL_ITERATIONS = 5;
+const MAX_TOOL_ITERATIONS = 20;
 
 export interface StreamHandlers {
   onChunk: (delta: string) => void;
