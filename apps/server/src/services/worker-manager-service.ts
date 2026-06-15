@@ -19,24 +19,40 @@ function promisifyPm2<T>(
 }
 
 export class WorkerManagerService {
+  private pm2Module: typeof import("pm2") | null = null;
+
   constructor(
     private readonly projectRoot: string,
-    private readonly pm2: typeof import("pm2") | null = null,
-  ) {}
+    pm2?: typeof import("pm2"),
+  ) {
+    this.pm2Module = pm2 ?? null;
+  }
+
+  private async ensurePm2(): Promise<NonNullable<typeof import("pm2")>> {
+    if (this.pm2Module) {
+      return this.pm2Module;
+    }
+
+    try {
+      const pm2 = await import("pm2");
+      this.pm2Module = pm2;
+      return pm2 as NonNullable<typeof import("pm2")>;
+    } catch {
+      throw new Error("PM2 is not available. Install it with: npm install -g pm2");
+    }
+  }
 
   private async withPm2<T>(
     action: (pm2: NonNullable<typeof import("pm2")>) => Promise<T>,
   ): Promise<T> {
-    if (!this.pm2) {
-      throw new Error("PM2 is not available");
-    }
+    const pm2 = await this.ensurePm2();
 
-    await promisifyPm2<void>((cb) => this.pm2!.connect(cb));
+    await promisifyPm2<void>((cb) => pm2.connect(cb));
 
     try {
-      return await action(this.pm2);
+      return await action(pm2);
     } finally {
-      this.pm2.disconnect();
+      pm2.disconnect();
     }
   }
 
