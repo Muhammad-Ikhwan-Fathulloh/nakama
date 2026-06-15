@@ -27,8 +27,12 @@ function formatUserContextError(error: unknown): string {
   return formatError(error);
 }
 
+interface UserContextSettingsProps {
+  onSaveSuccess?: () => void;
+}
+
 /** USER.md editor row for Settings — render inside a parent card. */
-export function UserContextSettings() {
+export function UserContextSettings({ onSaveSuccess }: UserContextSettingsProps = {}) {
   const {
     data: status,
     isLoading,
@@ -77,6 +81,9 @@ export function UserContextSettings() {
         setEditorOpen(true);
       }
       setHint(result.created ? "Template created." : "USER.md already exists.");
+      if (result.created) {
+        onSaveSuccess?.();
+      }
     } catch (error) {
       setFormError(formatUserContextError(error));
     }
@@ -92,6 +99,7 @@ export function UserContextSettings() {
       setHint("Saved. Start a new chat to apply.");
       setEditorOpen(false);
       await refetch();
+      onSaveSuccess?.();
     } catch (error) {
       setFormError(formatUserContextError(error));
     }
