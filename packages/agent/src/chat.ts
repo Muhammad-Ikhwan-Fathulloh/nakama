@@ -383,6 +383,15 @@ async function executeToolCalls(
   }
 }
 
+function formatCurrentDate(): string {
+  return new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
 async function generateReply(
   provider: ProviderClient,
   systemPrompt: string,
@@ -392,8 +401,9 @@ async function generateReply(
   mode: "send" | "stream",
   handlers?: StreamHandlers,
 ) {
+  const dateLine = `Today is ${formatCurrentDate()}.`;
   const input = {
-    system: systemPrompt,
+    system: `${systemPrompt}\n\n${dateLine}`,
     messages: history,
     tools,
     providerOptions,

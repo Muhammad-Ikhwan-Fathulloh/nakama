@@ -69,6 +69,7 @@ tinyclaw/
 │   ├── cli/                 # Terminal client (primary); auto-starts server
 │   ├── platform/
 │   │   └── telegram/        # Telegram bot bridge; auto-starts server
+│   │   └── whatsapp/        # WhatsApp bot bridge; auto-starts server
 │   └── server/              # HTTP API, agent runtime, LLM providers, openapi.json, scripts/
 ├── packages/
 │   ├── core/                # Config, API types, provider interfaces, builtin tools
