@@ -60,7 +60,7 @@ export const NAV_GROUPS: NavGroup[] = [
       },
       {
         id: "soul",
-        label: "Soul & Tools",
+        label: "System",
         description: "Identity stack files and registered agent tools",
       },
     ],
@@ -114,7 +114,7 @@ export const PAGE_PATHS: Record<PageId, string> = {
   chat: "/chat",
   history: "/history",
   profiles: "/profiles",
-  soul: "/soul",
+  soul: "/system",
   automations: "/automations",
   tasks: "/tasks",
   settings: "/settings",
@@ -122,6 +122,21 @@ export const PAGE_PATHS: Record<PageId, string> = {
 
 export function pathForPage(pageId: PageId): string {
   return PAGE_PATHS[pageId];
+}
+
+export function navHrefForPage(
+  pageId: PageId,
+  chatProfileId?: string | null,
+): string {
+  if (pageId === "chat") {
+    const params = new URLSearchParams({ new: "1" });
+    if (chatProfileId) {
+      params.set("profile", chatProfileId);
+    }
+    return `${PAGE_PATHS.chat}?${params.toString()}`;
+  }
+
+  return pathForPage(pageId);
 }
 
 export function findNavItem(pageId: PageId): NavItem | undefined {
@@ -135,10 +150,6 @@ export function findNavItem(pageId: PageId): NavItem | undefined {
 export function pageIdFromPath(pathname: string): PageId | null {
   if (pathname === "/chat" || pathname.startsWith("/chat/")) {
     return "chat";
-  }
-
-  if (pathname === "/tools") {
-    return "soul";
   }
 
   for (const [pageId, path] of Object.entries(PAGE_PATHS) as [PageId, string][]) {

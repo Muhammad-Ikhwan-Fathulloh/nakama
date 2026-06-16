@@ -6,6 +6,7 @@ import { getCustomToolsDir, guardFilePath, PathGuardError, type PathGuardOptions
 import { searchFilesTool } from "./search-files";
 import { knowledgeBaseSearchTool } from "./knowledge-base-search";
 import { webSearchTool } from "./web-search";
+import { updateProfileMemoryTool } from "./profile-memory";
 
 export interface WriteFileInput {
   path: string;
@@ -26,6 +27,13 @@ export interface DeleteFileInput {
 export interface DeleteFileOutput {
   path: string;
   deleted: true;
+}
+
+export interface CreateSkillInput {
+  name: string;
+  description: string;
+  body?: string;
+  disableModelInvocation?: boolean;
 }
 
 interface FileToolRunOptions {
@@ -143,12 +151,46 @@ export async function runDeleteFile(
   return { path: guarded.resolved, deleted: true };
 }
 
+export const createSkillTool: ToolDefinition<CreateSkillInput> = {
+  name: "create_skill",
+  description:
+    "Save a step-by-step procedure or repeatable workflow as a skill for the active profile and assign it immediately. Use for actions the agent executes — multi-step instructions, workflows, and processes. Not for facts or observations (use update_profile_memory for those).",
+  parameters: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description: "Unique skill name for the active profile.",
+      },
+      description: {
+        type: "string",
+        description: "Short summary explaining when the skill should be used.",
+      },
+      body: {
+        type: "string",
+        description: "Optional step-by-step instructions for the agent to follow when this skill activates.",
+      },
+      disableModelInvocation: {
+        type: "boolean",
+        description: "When true, the skill only activates on explicit invocation.",
+      },
+    },
+    required: ["name", "description"],
+    additionalProperties: false,
+  },
+  async run() {
+    throw new Error("create_skill must be resolved by the TinyClaw server.");
+  },
+};
+
 export const builtinTools: ToolDefinition[] = [
   writeFileTool,
   deleteFileTool,
+  createSkillTool,
   searchFilesTool,
   knowledgeBaseSearchTool,
   webSearchTool,
+  updateProfileMemoryTool,
 ];
 
 function readRequiredString(input: unknown, key: string): string {

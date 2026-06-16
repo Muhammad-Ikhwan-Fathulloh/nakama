@@ -1,13 +1,12 @@
 import type { AgentTodo, ProfileSummary } from "@tinyclaw/core/contract";
 import type { FileUIPart } from "ai";
-import { MessageCircleIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { RemoteChatSession } from "@tinyclaw/client";
-import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { ChatComposer } from "@/components/chat/chat-composer";
 import { ChatMessageList } from "@/components/chat/chat-message-list";
 import { useAppContext } from "@/context/app-context";
+import { useBranchSessionMutation, useUpdateProfileMutation } from "@/hooks/use-resource-mutations";
 import { useThinkingSettings } from "@/hooks/use-thinking-settings";
 import { filePartsToDocumentAttachments, filePartsToImageAttachments } from "@/lib/chat-images";
 import {
@@ -29,10 +28,17 @@ import {
 import { client, formatError } from "@/lib/client";
 import {
   decodeModelSelection,
-  encodeModelSelection,
+  effectiveProfileModelSelection,
   groupModelsByProvider,
+  INHERIT_MODEL_VALUE,
+  profileModelLabel,
 } from "@/lib/models";
 import { SETUP_PATH } from "@/lib/navigation";
+
+interface SendMessageOptions {
+  sessionOverride?: RemoteChatSession;
+  initialMessages?: ChatListItem[];
+}
 
 export function ChatPage() {
   const params = useParams();
@@ -40,7 +46,7 @@ export function ChatPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const routeSession = useMemo(() => parseChatRouteParams(params), [params]);
-  const { health, models, setModel } = useAppContext();
+  const { health, models } = useAppContext();
   const { data: thinkingSettings } = useThinkingSettings();
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [profileId, setProfileId] = useState(
@@ -50,6 +56,7 @@ export function ChatPage() {
   const [messages, setMessages] = useState<ChatListItem[]>([]);
   const [agentTodos, setAgentTodos] = useState<AgentTodo[]>([]);
   const [busy, setBusy] = useState(false);
+  const [branchingMessageId, setBranchingMessageId] = useState<string | null>(null);
   const [canStop, setCanStop] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -76,19 +83,34 @@ export function ChatPage() {
   );
 
   const showOfflineHint = health != null && !health.providerConfigured;
+  const branchSessionMutation = useBranchSessionMutation();
+  const updateProfileMutation = useUpdateProfileMutation();
+
+  const activeProfile = useMemo(
+    () => profiles.find((profile) => profile.id === profileId),
+    [profiles, profileId],
+  );
 
   const providerModelGroups = useMemo(
     () => groupModelsByProvider(models?.models ?? []),
     [models?.models],
   );
 
-  const currentModelSelection = useMemo(() => {
-    if (!models?.currentProviderId || !models.currentModel) {
-      return null;
-    }
-
-    return encodeModelSelection(models.currentProviderId, models.currentModel);
-  }, [models?.currentProviderId, models?.currentModel]);
+  const currentModelSelection = useMemo(
+    () =>
+      effectiveProfileModelSelection(
+        activeProfile?.model,
+        models?.currentProviderId,
+        models?.currentModel,
+        providerModelGroups,
+      ),
+    [
+      activeProfile?.model,
+      models?.currentProviderId,
+      models?.currentModel,
+      providerModelGroups,
+    ],
+  );
 
   const renderModelLabel = useCallback(
     (selection: string | null) => {
@@ -96,10 +118,18 @@ export function ChatPage() {
         return null;
       }
 
+      if (selection === INHERIT_MODEL_VALUE) {
+        return profileModelLabel(null, providerModelGroups, models?.currentModel);
+      }
+
       const decoded = decodeModelSelection(selection);
 
       if (!decoded) {
         return selection;
+      }
+
+      if (decoded.providerId === "__unknown__") {
+        return decoded.modelId;
       }
 
       const group = providerModelGroups.find(
@@ -110,25 +140,59 @@ export function ChatPage() {
         decoded.modelId
       );
     },
-    [providerModelGroups],
+    [models?.currentModel, providerModelGroups],
   );
 
   const handleModelChange = useCallback(
     (selection: string) => {
+      if (!profileId) {
+        return;
+      }
+
+      if (selection === INHERIT_MODEL_VALUE) {
+        void updateProfileMutation
+          .mutateAsync({
+            profileId,
+            input: { model: null },
+          })
+          .then(() => {
+            setProfiles((current) =>
+              current.map((profile) =>
+                profile.id === profileId ? { ...profile, model: null } : profile,
+              ),
+            );
+          })
+          .catch((err) => {
+            setError(formatError(err));
+          });
+        return;
+      }
+
       const decoded = decodeModelSelection(selection);
 
       if (!decoded) {
         return;
       }
 
-      void setModel({ providerId: decoded.providerId, model: decoded.modelId });
+      void updateProfileMutation
+        .mutateAsync({
+          profileId,
+          input: { model: decoded.modelId },
+        })
+        .then(() => {
+          setProfiles((current) =>
+            current.map((profile) =>
+              profile.id === profileId
+                ? { ...profile, model: decoded.modelId }
+                : profile,
+            ),
+          );
+        })
+        .catch((err) => {
+          setError(formatError(err));
+        });
     },
-    [setModel],
-  );
-
-  const activeProfile = useMemo(
-    () => profiles.find((profile) => profile.id === profileId),
-    [profiles, profileId],
+    [profileId, updateProfileMutation],
   );
 
   const loadProfiles = useCallback(async () => {
@@ -178,11 +242,15 @@ export function ChatPage() {
       try {
         localStorage.setItem(sessionStorageKey(nextProfileId), sessionId);
         skipNextProfileSessionRef.current = nextProfileId !== profileId;
-        const { messages: storedMessages, todos } = await client.getSessionMessages(sessionId);
+        const {
+          messages: storedMessages,
+          messageMeta,
+          todos,
+        } = await client.getSessionMessages(sessionId);
         const nextSession = client.createChatSession(sessionId, "web");
         setProfileId(nextProfileId);
         setSession(nextSession);
-        setMessages(chatMessagesToListItems(storedMessages));
+        setMessages(chatMessagesToListItems(storedMessages, messageMeta));
         setAgentTodos(todos);
         syncChatUrl(nextProfileId, sessionId);
       } catch (err) {
@@ -192,6 +260,32 @@ export function ChatPage() {
       }
     },
     [profileId, syncChatUrl],
+  );
+
+  const handleBranchMessage = useCallback(
+    async (message: ChatListItem) => {
+      if (!session || !profileId || typeof message.historyIndex !== "number") {
+        return;
+      }
+
+      setBranchingMessageId(message.id);
+      setError(null);
+
+      try {
+        const result = await branchSessionMutation.mutateAsync({
+          profileId,
+          sessionId: session.id,
+          messageIndex: message.historyIndex,
+          channel: "web",
+        });
+        await resumeSession(profileId, result.sessionId);
+      } catch (err) {
+        setError(formatError(err));
+      } finally {
+        setBranchingMessageId(null);
+      }
+    },
+    [branchSessionMutation, profileId, resumeSession, session],
   );
 
   const handleProfileSwitch = useCallback(
@@ -280,7 +374,7 @@ export function ChatPage() {
   }, []);
 
   const sendMessage = useCallback(
-    async (text: string, files: FileUIPart[] = []) => {
+    async (text: string, files: FileUIPart[] = [], options: SendMessageOptions = {}) => {
       const images = filePartsToImageAttachments(files);
       const documents = filePartsToDocumentAttachments(files);
 
@@ -291,7 +385,12 @@ export function ChatPage() {
       setBusy(true);
       setError(null);
 
-      let activeSession = session;
+      if (options.initialMessages) {
+        setMessages(options.initialMessages);
+        setAgentTodos([]);
+      }
+
+      let activeSession = options.sessionOverride ?? session;
 
       if (!activeSession) {
         try {
@@ -335,7 +434,13 @@ export function ChatPage() {
           { signal: abortController.signal },
         );
 
-        setMessages((current) => finalizeStreamingMessages(current));
+        const {
+          messages: storedMessages,
+          messageMeta,
+          todos,
+        } = await client.getSessionMessages(activeSession.id);
+        setMessages(chatMessagesToListItems(storedMessages, messageMeta));
+        setAgentTodos(todos);
       } catch (err) {
         if (isAbortError(err)) {
           setMessages((current) => finalizeStreamingMessages(current));
@@ -370,64 +475,194 @@ export function ChatPage() {
     [session, busy, profileId, syncChatUrl, thinkingSettings?.enabled],
   );
 
+  const handleTryAgainMessage = useCallback(
+    async (message: ChatListItem) => {
+      if (busy || !profileId) {
+        return;
+      }
+
+      const prompt = findRetryPrompt(messages, message);
+
+      if (!prompt?.content.trim()) {
+        setError("Could not find a prompt to try again.");
+        return;
+      }
+
+      if (prompt.images?.length || prompt.documents?.length) {
+        setError("Try again is available for text-only prompts.");
+        return;
+      }
+
+      const checkpoint = findRetryCheckpoint(messages, prompt);
+
+      if (checkpoint && !session) {
+        setError("Chat session is unavailable. Please send a new message instead.");
+        return;
+      }
+
+      setBranchingMessageId(message.id);
+      setError(null);
+
+      try {
+        let retrySession: RemoteChatSession;
+        let initialMessages: ChatListItem[] = [];
+
+        if (checkpoint && session) {
+          const result = await branchSessionMutation.mutateAsync({
+            profileId,
+            sessionId: session.id,
+            messageIndex: checkpoint.historyIndex!,
+            channel: "web",
+          });
+          retrySession = client.createChatSession(result.sessionId, "web");
+          initialMessages = messages.filter(
+            (item) =>
+              typeof item.historyIndex === "number" &&
+              item.historyIndex <= checkpoint.historyIndex!,
+          );
+        } else {
+          retrySession = await client.createSession("web", { profileId });
+        }
+
+        localStorage.setItem(sessionStorageKey(profileId), retrySession.id);
+        setSession(retrySession);
+        syncChatUrl(profileId, retrySession.id);
+
+        await sendMessage(prompt.content, [], {
+          sessionOverride: retrySession,
+          initialMessages,
+        });
+      } catch (err) {
+        setError(formatError(err));
+      } finally {
+        setBranchingMessageId(null);
+      }
+    },
+    [
+      branchSessionMutation,
+      busy,
+      messages,
+      profileId,
+      sendMessage,
+      session,
+      syncChatUrl,
+    ],
+  );
+
+  const isEmptyState = messages.length === 0 && !busy;
+
+  const composer = (
+    <ChatComposer
+      className={isEmptyState && !error ? "py-0 [&>p:first-child]:min-h-0" : "py-0"}
+      chatStatus={chatStatus}
+      busy={busy}
+      canStop={canStop}
+      disabled={!profileId}
+      error={error}
+      profileId={profileId}
+      profiles={profiles}
+      activeProfile={activeProfile}
+      onProfileSwitch={handleProfileSwitch}
+      showOfflineHint={showOfflineHint}
+      providerConfigured={health?.providerConfigured}
+      onNavigateSetup={() => navigate(SETUP_PATH)}
+      providerModelGroups={providerModelGroups}
+      inheritModelLabel={profileModelLabel(
+        null,
+        providerModelGroups,
+        models?.defaultModel ?? models?.currentModel,
+      )}
+      profileModelId={activeProfile?.model ?? null}
+      currentModelSelection={currentModelSelection}
+      onModelChange={handleModelChange}
+      renderModelLabel={renderModelLabel}
+      todos={agentTodos}
+      onSubmit={(text, files) => void sendMessage(text, files)}
+      onStop={stopStreaming}
+    />
+  );
+
+  if (isEmptyState) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col justify-center px-6">
+        <div className="mx-auto flex w-full max-w-3xl flex-col mb-12">
+          <ChatWelcome profile={activeProfile} />
+          {composer}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col px-6">
       <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {messages.length === 0 && !busy ? (
-            <ChatWelcome profile={activeProfile} />
-          ) : (
-            <ChatMessageList messages={messages} />
-          )}
+          <ChatMessageList
+            messages={messages}
+            branchingMessageId={branchingMessageId}
+            actionsDisabled={busy}
+            onBranchMessage={(message) => void handleBranchMessage(message)}
+            onRetryMessage={(message) => void handleTryAgainMessage(message)}
+          />
         </div>
 
         <div className="sticky bottom-0 z-10 mt-auto w-full shrink-0 bg-background/95 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/85">
-          <ChatComposer
-            className="py-0"
-            chatStatus={chatStatus}
-            busy={busy}
-            canStop={canStop}
-            disabled={!profileId}
-            error={error}
-            profileId={profileId}
-            profiles={profiles}
-            activeProfile={activeProfile}
-            onProfileSwitch={handleProfileSwitch}
-            showOfflineHint={showOfflineHint}
-            providerConfigured={health?.providerConfigured}
-            onNavigateSetup={() => navigate(SETUP_PATH)}
-            providerModelGroups={providerModelGroups}
-            currentModelSelection={currentModelSelection}
-            onModelChange={handleModelChange}
-            renderModelLabel={renderModelLabel}
-            todos={agentTodos}
-            onSubmit={(text, files) => void sendMessage(text, files)}
-            onStop={stopStreaming}
-          />
+          {composer}
         </div>
       </div>
     </div>
   );
 }
 
+function findRetryPrompt(
+  messages: ChatListItem[],
+  assistantMessage: ChatListItem,
+): ChatListItem | null {
+  if (typeof assistantMessage.historyIndex !== "number") {
+    return null;
+  }
+
+  return (
+    messages.findLast(
+      (message) =>
+        message.role === "user" &&
+        typeof message.historyIndex === "number" &&
+        message.historyIndex < assistantMessage.historyIndex!,
+    ) ?? null
+  );
+}
+
+function findRetryCheckpoint(
+  messages: ChatListItem[],
+  promptMessage: ChatListItem,
+): ChatListItem | null {
+  if (typeof promptMessage.historyIndex !== "number") {
+    return null;
+  }
+
+  return (
+    messages.findLast(
+      (message) =>
+        typeof message.historyIndex === "number" &&
+        message.historyIndex < promptMessage.historyIndex!,
+    ) ?? null
+  );
+}
+
 function ChatWelcome({ profile }: { profile: ProfileSummary | undefined }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-6 pb-10 pt-16 text-center">
-      <div className="flex size-14 items-center justify-center rounded-2xl border border-border/80 bg-card shadow-sm">
-        {profile ? (
-          <ProfileAvatar profile={profile} size="lg" className="size-12" />
-        ) : (
-          <MessageCircleIcon className="size-6 text-muted-foreground" aria-hidden="true" />
-        )}
+    <div className="flex items-center gap-4 px-2">
+      <div className="min-w-0 text-left">
+        <h2 className="type-section-title text-xl tracking-tight">
+          {/* {profile ? `Chat with ${profile.name}` : "Start chatting"} */}
+          Hi, good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"}!
+        </h2>
+        <p className="type-body mt-1 max-w-sm">
+          {profile?.isSuper
+            ? "Ask anything, attach images, or run tools."
+            : "What can I help you with today?"}
+        </p>
       </div>
-      <h2 className="type-section-title mt-5">
-        {profile ? `Chat with ${profile.name}` : "Start chatting"}
-      </h2>
-      <p className="type-body mt-1.5 max-w-sm">
-        {profile?.isSuper
-          ? "Ask anything, attach images, or run tools."
-          : "Ask a question or attach an image to get started."}
-      </p>
     </div>
   );
 }

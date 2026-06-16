@@ -54,6 +54,7 @@ export function buildOpenApiSpec() {
     ],
     tags: [
       { name: "Health" },
+      { name: "Workers" },
       { name: "Chat" },
       { name: "Models" },
       { name: "Profiles" },
@@ -277,6 +278,40 @@ export function buildOpenApiSpec() {
           },
         },
       },
+      "/v1/settings/whatsapp": {
+        get: {
+          tags: ["Models"],
+          summary: "Get WhatsApp bridge settings",
+          operationId: "getWhatsAppSettings",
+          responses: {
+            "200": jsonResponse("WhatsAppSettingsResponse", "WhatsApp settings"),
+            "500": errorResponse,
+          },
+        },
+        put: {
+          tags: ["Models"],
+          summary: "Update WhatsApp bridge settings",
+          operationId: "setWhatsAppSettings",
+          requestBody: jsonBody("UpdateWhatsAppSettingsRequest"),
+          responses: {
+            "200": jsonResponse("WhatsAppSettingsResponse", "WhatsApp settings updated"),
+            "400": errorResponse,
+            "500": errorResponse,
+          },
+        },
+      },
+      "/v1/settings/whatsapp/pairing-code": {
+        post: {
+          tags: ["Models"],
+          summary: "Regenerate WhatsApp pairing code",
+          operationId: "regenerateWhatsAppPairingCode",
+          responses: {
+            "200": jsonResponse("WhatsAppSettingsResponse", "Pairing code regenerated"),
+            "400": errorResponse,
+            "500": errorResponse,
+          },
+        },
+      },
       "/v1/user/context": {
         get: {
           tags: ["User"],
@@ -420,6 +455,20 @@ export function buildOpenApiSpec() {
             },
             "404": errorResponse,
             "500": errorResponse,
+          },
+        },
+      },
+      "/v1/sessions/{sessionId}/branch": {
+        post: {
+          tags: ["Chat"],
+          summary: "Create a branched chat session from a message checkpoint",
+          operationId: "branchSession",
+          parameters: [{ $ref: "#/components/parameters/SessionId" }],
+          requestBody: jsonBody("BranchSessionRequest"),
+          responses: {
+            "201": jsonResponse("BranchSessionResponse", "Created branched session"),
+            "400": errorResponse,
+            "404": errorResponse,
           },
         },
       },
@@ -1181,6 +1230,96 @@ export function buildOpenApiSpec() {
           responses: {
             "200": jsonResponse("TaskMessagesResponse", "Task chat messages"),
             "404": errorResponse,
+          },
+        },
+      },
+      "/v1/workers/{name}/start": {
+        post: {
+          tags: ["Workers"],
+          summary: "Start a background worker",
+          operationId: "startWorker",
+          parameters: [
+            {
+              name: "name",
+              in: "path",
+              required: true,
+              schema: { type: "string", enum: ["telegram", "whatsapp"] },
+            },
+          ],
+          responses: {
+            "200": {
+              description: "Worker started",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: { ok: { type: "boolean" } },
+                  },
+                },
+              },
+            },
+            "400": errorResponse,
+            "500": errorResponse,
+          },
+        },
+      },
+      "/v1/workers/{name}/stop": {
+        post: {
+          tags: ["Workers"],
+          summary: "Stop a background worker",
+          operationId: "stopWorker",
+          parameters: [
+            {
+              name: "name",
+              in: "path",
+              required: true,
+              schema: { type: "string", enum: ["telegram", "whatsapp"] },
+            },
+          ],
+          responses: {
+            "200": {
+              description: "Worker stopped",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: { ok: { type: "boolean" } },
+                  },
+                },
+              },
+            },
+            "400": errorResponse,
+            "500": errorResponse,
+          },
+        },
+      },
+      "/v1/workers/{name}/restart": {
+        post: {
+          tags: ["Workers"],
+          summary: "Restart a background worker",
+          operationId: "restartWorker",
+          parameters: [
+            {
+              name: "name",
+              in: "path",
+              required: true,
+              schema: { type: "string", enum: ["telegram", "whatsapp"] },
+            },
+          ],
+          responses: {
+            "200": {
+              description: "Worker restarted",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: { ok: { type: "boolean" } },
+                  },
+                },
+              },
+            },
+            "400": errorResponse,
+            "500": errorResponse,
           },
         },
       },

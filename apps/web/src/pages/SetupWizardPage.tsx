@@ -1,71 +1,29 @@
-import { useCallback, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { ProviderSetupForm } from "@/components/ProviderSetupForm";
+import { Navigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { SetupWizard } from "@/components/setup-wizard/SetupWizard";
 import { SetupLayout } from "@/components/SetupLayout";
-import { TelegramSettingsCard } from "@/components/TelegramSettingsCard";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Spinner } from "@/components/ui/spinner";
 import { useAppContext } from "@/context/app-context";
-import { useModelsQuery } from "@/hooks/use-app-queries";
 import { pathForPage } from "@/lib/navigation";
 
 export function SetupWizardPage() {
-  const navigate = useNavigate();
   const { health } = useAppContext();
-  const { isLoading: catalogLoading } = useModelsQuery();
-  const providerConfigured = health?.providerConfigured === true;
-
-  const goToChat = useCallback(() => {
-    navigate(pathForPage("chat"), { replace: true });
-  }, [navigate]);
+  const [hasMounted, setHasMounted] = useState(false);
 
   useEffect(() => {
-    if (providerConfigured) {
-      goToChat();
-    }
-  }, [providerConfigured, goToChat]);
+    setHasMounted(true);
+  }, []);
 
-  if (catalogLoading || providerConfigured) {
-    return (
-      <SetupLayout>
-        <div className="flex justify-center py-16">
-          <Spinner className="size-6 text-muted-foreground" />
-        </div>
-      </SetupLayout>
-    );
+  // Only redirect on the initial render (before mount) if the user is
+  // already fully configured. Once the wizard mounts, allow the user to
+  // finish all steps — even after providerConfigured becomes true on step 2.
+  const isFullyConfigured = health?.userConfigured === true && health?.providerConfigured === true;
+  if (!hasMounted && isFullyConfigured) {
+    return <Navigate to={pathForPage("chat")} replace />;
   }
 
   return (
     <SetupLayout>
-      <div className="space-y-8">
-        <div className="space-y-1">
-          <h1 className="text-xl font-semibold text-foreground">Welcome to TinyClaw</h1>
-          <p className="text-sm text-muted-foreground">
-            Connect a provider to start chatting. Telegram is optional and can be set up here or
-            in Settings later.
-          </p>
-        </div>
-
-        <Card className="w-full">
-          <CardHeader className="border-b border-border pb-3">
-            <CardTitle>Provider</CardTitle>
-            <CardDescription>
-              Choose a provider, paste your API key, and pick a default model. Credentials are
-              saved on the server.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="px-4 py-4">
-            <ProviderSetupForm
-              submitLabel="Continue"
-              showHeading={false}
-              density="compact"
-              onSuccess={goToChat}
-            />
-          </CardContent>
-        </Card>
-
-        <TelegramSettingsCard submitLabel="Save" />
-      </div>
+      <SetupWizard />
     </SetupLayout>
   );
 }

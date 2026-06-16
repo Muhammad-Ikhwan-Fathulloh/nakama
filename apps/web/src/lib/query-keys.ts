@@ -18,6 +18,7 @@ export const queryKeys = {
   },
   skills: {
     all: ["skills"] as const,
+    detail: (skillId: string) => ["skills", skillId] as const,
   },
   automations: {
     all: ["automations"] as const,
@@ -41,6 +42,9 @@ export const queryKeys = {
   thinkingSettings: ["thinking", "settings"] as const,
   telegram: {
     settings: ["telegram", "settings"] as const,
+  },
+  whatsapp: {
+    settings: ["whatsapp", "settings"] as const,
   },
   userContext: ["userContext"] as const,
   modelsDev: ["modelsDev"] as const,

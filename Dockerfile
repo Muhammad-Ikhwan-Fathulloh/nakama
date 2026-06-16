@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # TinyClaw — one container: API, web dashboard, automation + task workers
 # Build: docker build -t tinyclaw .
 # Run:   docker run -d -p 4310:4310 -v tinyclaw-config:/root/.tinyclaw tinyclaw
@@ -10,7 +11,8 @@ COPY package.json bun.lock ./
 COPY apps apps
 COPY packages packages
 
-RUN bun install --frozen-lockfile \
+RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
+    bun install --frozen-lockfile \
   && bun run --filter @tinyclaw/web build
 
 # --- Production runtime (server + workspace packages + built static assets) ---
@@ -24,9 +26,11 @@ COPY packages packages
 COPY apps/web/package.json apps/web/
 COPY apps/cli/package.json apps/cli/
 COPY apps/platform/telegram/package.json apps/platform/telegram/
+COPY apps/platform/whatsapp/package.json apps/platform/whatsapp/
 COPY --from=web-builder /app/apps/web/dist apps/web/dist
 
-RUN bun install --frozen-lockfile --production --filter '@tinyclaw/server'
+RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
+    bun install --frozen-lockfile --production --filter '@tinyclaw/server'
 
 ENV NODE_ENV=production \
     TINYCLAW_HOST=0.0.0.0 \

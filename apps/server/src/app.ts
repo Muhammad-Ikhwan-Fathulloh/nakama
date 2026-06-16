@@ -6,6 +6,8 @@ import {
   type AgentTodo,
   type ApiErrorResponse,
   type AssignToolRequest,
+  type BranchSessionRequest,
+  type BranchSessionResponse,
   type CreateProfileRequest,
   type CreateAutomationRequest,
   type CreateSessionRequest,
@@ -25,6 +27,8 @@ import {
   type UpdateAutomationRequest,
   type UpdateTimezoneRequest,
   type UpdateTelegramSettingsRequest,
+  type UpdateWhatsAppSettingsRequest,
+  type WhatsAppSettingsResponse,
   type HealthResponse,
   type InitSoulResponse,
   type InitUserContextResponse,
@@ -94,6 +98,9 @@ import type { McpService } from "./services/mcp-service";
 import type { TaskService } from "./services/task-service";
 import { getTimezoneCatalog } from "./services/timezone-catalog-service";
 import { SystemStatusService } from "./services/system-status-service";
+import type { WorkerManagerService } from "./services/worker-manager-service";
+import type { AuthService } from "./services/auth-service";
+import type { DatabaseAdapter } from "@tinyclaw/db";
 import { tryServeStaticWeb } from "./static-web";
 
 const DOCS_HTML = `<!doctype html>
@@ -121,7 +128,10 @@ export interface ServerOptions {
   automationService: AutomationService;
   taskService: TaskService;
   systemStatus: SystemStatusService;
+  workerManager: WorkerManagerService;
   mcpService: McpService;
+  authService?: AuthService | null;
+  databaseAdapter?: DatabaseAdapter | null;
   webDistDir?: string | null;
 }
 
@@ -131,7 +141,10 @@ export function createApp(options: ServerOptions) {
     automationService,
     taskService,
     systemStatus,
+    workerManager,
     mcpService,
+    authService,
+    databaseAdapter,
     webDistDir = null,
   } = options;
 
@@ -156,15 +169,148 @@ export function createApp(options: ServerOptions) {
         }
 
         if (request.method === "GET" && url.pathname === "/health") {
+          const userCount = await databaseAdapter?.countUsers() ?? 0;
           return json<HealthResponse>({
             ok: true,
             apiVersion: TINYCLAW_API_VERSION,
             providerConfigured: agent.providerConfigured,
+            userConfigured: userCount > 0,
           });
+        }
+
+        // Auth endpoints
+        if (request.method === "POST" && url.pathname === "/v1/auth/setup") {
+          if (!authService || !databaseAdapter) {
+            return errorResponse("Authentication not configured", 500);
+          }
+
+          const userCount = await databaseAdapter.countUsers();
+          if (userCount > 0) {
+            return errorResponse("Admin user already exists", 409);
+          }
+
+          const body = await readJson<{ email: string; password: string }>(request);
+          const hash = await authService.hashPassword(body.password);
+          const now = new Date().toISOString();
+
+          await databaseAdapter.createUser({
+            id: "user_admin",
+            email: body.email,
+            passwordHash: hash,
+            createdAt: now,
+            updatedAt: now,
+          });
+
+          const token = await authService.createToken(body.email);
+          return json({ token }, 201);
+        }
+
+        if (request.method === "POST" && url.pathname === "/v1/auth/login") {
+          const body = await readJson<{ email: string; password: string }>(request);
+
+          if (!authService || !databaseAdapter) {
+            return errorResponse("Authentication not configured", 500);
+          }
+
+          const user = await databaseAdapter.getUserByEmail(body.email);
+          if (!user) {
+            return errorResponse("Invalid credentials", 401);
+          }
+
+          const valid = await authService.verifyPassword(body.password, user.passwordHash);
+          if (!valid) {
+            return errorResponse("Invalid credentials", 401);
+          }
+
+          const token = await authService.createToken(user.email);
+          return json({ token });
+        }
+
+        if (request.method === "GET" && url.pathname === "/v1/auth/me") {
+          if (!authService) {
+            return errorResponse("Authentication not configured", 500);
+          }
+
+          const authHeader = request.headers.get("Authorization");
+          if (!authHeader || !authHeader.startsWith("Bearer ")) {
+            return errorResponse("Authentication required", 401);
+          }
+
+          const token = authHeader.slice(7);
+          try {
+            const payload = await authService.verifyToken(token);
+            return json({ email: payload.email });
+          } catch {
+            return errorResponse("Invalid token", 401);
+          }
+        }
+
+        if (webDistDir) {
+          const staticResponse = tryServeStaticWeb(request, webDistDir);
+
+          if (staticResponse) {
+            return staticResponse;
+          }
+        }
+
+        // Auth middleware for all other routes
+        if (authService) {
+          const isPublicRoute =
+            url.pathname === "/health" ||
+            url.pathname === "/docs" ||
+            url.pathname === "/docs/" ||
+            url.pathname === "/openapi.json" ||
+            url.pathname === "/v1/auth/setup" ||
+            url.pathname === "/v1/auth/login" ||
+            url.pathname === "/v1/auth/me" ||
+            url.pathname === "/v1/tasks/__capability_probe__/messages" ||
+            url.pathname === "/v1/tools" ||
+            (request.method === "GET" &&
+              /^\/v1\/profiles\/[^/]+\/avatar$/.test(url.pathname));
+
+          if (!isPublicRoute) {
+            const authHeader = request.headers.get("Authorization");
+            if (!authHeader || !authHeader.startsWith("Bearer ")) {
+              return errorResponse("Authentication required", 401);
+            }
+
+            const token = authHeader.slice(7);
+            try {
+              await authService.verifyToken(token);
+            } catch {
+              return errorResponse("Invalid token", 401);
+            }
+          }
         }
 
         if (request.method === "GET" && url.pathname === "/v1/system/status") {
           return json<SystemStatusResponse>(await systemStatus.getStatus());
+        }
+
+        const workerActionMatch = url.pathname.match(/^\/v1\/workers\/([^/]+)\/(start|stop|restart)$/);
+
+        if (workerActionMatch && request.method === "POST") {
+          const name = decodeURIComponent(workerActionMatch[1]!);
+          const action = workerActionMatch[2];
+
+          if (!workerManager.isValidWorker(name)) {
+            return errorResponse(`Unknown worker: ${name}`, 400);
+          }
+
+          try {
+            if (action === "start") {
+              await workerManager.startWorker(name);
+            } else if (action === "stop") {
+              await workerManager.stopWorker(name);
+            } else {
+              await workerManager.restartWorker(name);
+            }
+
+            return json({ ok: true });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return errorResponse(message, 500);
+          }
         }
 
         if (request.method === "GET" && url.pathname === "/v1/models") {
@@ -262,6 +408,30 @@ export function createApp(options: ServerOptions) {
         if (request.method === "POST" && url.pathname === "/v1/settings/telegram/handshake") {
           try {
             return json<TelegramSettingsResponse>(await agent.regenerateTelegramHandshake());
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return errorResponse(message, 400);
+          }
+        }
+
+        if (request.method === "GET" && url.pathname === "/v1/settings/whatsapp") {
+          return json<WhatsAppSettingsResponse>(await agent.getWhatsAppSettings());
+        }
+
+        if (request.method === "PUT" && url.pathname === "/v1/settings/whatsapp") {
+          const body = await readJson<UpdateWhatsAppSettingsRequest>(request);
+
+          try {
+            return json<WhatsAppSettingsResponse>(await agent.setWhatsAppSettings(body));
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return errorResponse(message, 400);
+          }
+        }
+
+        if (request.method === "POST" && url.pathname === "/v1/settings/whatsapp/pairing-code") {
+          try {
+            return json<WhatsAppSettingsResponse>(await agent.regenerateWhatsAppPairingCode());
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             return errorResponse(message, 400);
@@ -607,6 +777,7 @@ export function createApp(options: ServerOptions) {
         }
 
         const messageMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/messages$/);
+        const branchMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/branch$/);
 
         const compactMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/compact$/);
 
@@ -626,15 +797,36 @@ export function createApp(options: ServerOptions) {
 
         if (messageMatch && request.method === "GET") {
           const sessionId = decodeURIComponent(messageMatch[1]!);
-          const messages = await agent.getSessionMessages(sessionId);
+          const result = await agent.getSessionMessages(sessionId);
 
-          if (!messages) {
+          if (!result) {
             return errorResponse("Session not found", 404);
           }
 
           const todos = (await agent.getSessionTodos(sessionId)) ?? [];
 
-          return json<SessionMessagesResponse>({ messages, todos });
+          return json<SessionMessagesResponse>({
+            messages: result.messages,
+            messageMeta: result.messageMeta,
+            todos,
+          });
+        }
+
+        if (branchMatch && request.method === "POST") {
+          try {
+            const sessionId = decodeURIComponent(branchMatch[1]!);
+            const body = await readJson<BranchSessionRequest>(request);
+            const result = await agent.branchSession(sessionId, body.messageIndex);
+
+            if (!result) {
+              return errorResponse("Session not found", 404);
+            }
+
+            return json<BranchSessionResponse>(result, 201);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return errorResponse(message, 400);
+          }
         }
 
         if (messageMatch && request.method === "POST") {
@@ -922,14 +1114,6 @@ export function createApp(options: ServerOptions) {
           });
         }
 
-        if (webDistDir) {
-          const staticResponse = tryServeStaticWeb(request, webDistDir);
-
-          if (staticResponse) {
-            return staticResponse;
-          }
-        }
-
         return errorResponse("Not found", 404);
       } catch (err) {
         if (err instanceof TinyClawApiError) {
@@ -943,7 +1127,7 @@ export function createApp(options: ServerOptions) {
 }
 
 function parseChannel(value: string | undefined): AgentChannel {
-  if (value === "cli" || value === "web" || value === "telegram") {
+  if (value === "cli" || value === "web" || value === "telegram" || value === "whatsapp") {
     return value;
   }
 

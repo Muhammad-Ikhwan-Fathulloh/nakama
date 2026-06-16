@@ -1,12 +1,16 @@
 import { createClient } from "@tinyclaw/client";
 import { runChat } from "./chat";
 import { parseCliProfileArgs } from "./profile";
-import { ensureProviderConfiguredViaCli } from "./setup";
+import { ensureUserConfiguredViaCli, ensureProviderConfiguredViaCli } from "./setup";
 import { ensureServerRunning, stopSpawnedServer } from "@tinyclaw/core/ensure-server";
 
 let spawnedChild: Bun.Subprocess | null = null;
+const abortController = new AbortController();
 
-registerCleanupHandlers(() => stopSpawnedServer(spawnedChild));
+registerCleanupHandlers(() => {
+  abortController.abort();
+  stopSpawnedServer(spawnedChild);
+});
 
 try {
   const { serverUrl, spawnedChild: child } = await ensureServerRunning();
@@ -14,6 +18,14 @@ try {
 
   const client = createClient({ baseUrl: serverUrl });
   let health = await client.health();
+
+  if (!health.userConfigured) {
+    const created = await ensureUserConfiguredViaCli(client);
+
+    if (created) {
+      health = await client.health();
+    }
+  }
 
   if (!health.providerConfigured) {
     const configured = await ensureProviderConfiguredViaCli(client);
@@ -30,6 +42,7 @@ try {
     channel: "cli",
     offline: !health.providerConfigured,
     profileId: cliProfile.profileId,
+    signal: abortController.signal,
   });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

@@ -39,7 +39,7 @@ export interface AutomationRunRecord {
   error: string | null;
 }
 
-export type AgentChannel = "web" | "cli" | "telegram" | "automation" | "task";
+export type AgentChannel = "web" | "cli" | "telegram" | "whatsapp" | "automation" | "task";
 
 export const TINYCLAW_API_VERSION = 1;
 
@@ -47,6 +47,7 @@ export interface HealthResponse {
   ok: true;
   apiVersion: typeof TINYCLAW_API_VERSION;
   providerConfigured: boolean;
+  userConfigured: boolean;
 }
 
 export interface AutomationWorkerStatus {
@@ -63,11 +64,29 @@ export interface TaskWorkerStatus {
   providerConfigured: boolean;
 }
 
+export interface WorkerProcessInfo {
+  managed: boolean;
+  status: "online" | "stopped" | "errored" | null;
+  cpuPercent: number | null;
+  memoryMb: number | null;
+  uptimeSeconds: number | null;
+}
+
 export interface TelegramWorkerStatus {
   ok: boolean;
   configured: boolean;
   paired: boolean;
   running: boolean;
+  process?: WorkerProcessInfo;
+}
+
+export interface WhatsAppWorkerStatus {
+  ok: boolean;
+  configured: boolean;
+  paired: boolean;
+  running: boolean;
+  qrCode: string | null;
+  process?: WorkerProcessInfo;
 }
 
 export interface LlmUsageStats {
@@ -98,6 +117,7 @@ export interface SystemStatusResponse {
   automationWorker: AutomationWorkerStatus;
   taskWorker: TaskWorkerStatus;
   telegramWorker: TelegramWorkerStatus;
+  whatsappWorker: WhatsAppWorkerStatus;
   llmUsage: LlmUsageStatus;
   mcp: McpStatus;
   checkedAt: string;
@@ -112,6 +132,14 @@ export interface CreateSessionResponse {
   sessionId: string;
 }
 
+export interface BranchSessionRequest {
+  messageIndex: number;
+}
+
+export interface BranchSessionResponse {
+  sessionId: string;
+}
+
 export type AgentTodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
 
 export interface AgentTodo {
@@ -120,8 +148,15 @@ export interface AgentTodo {
   status: AgentTodoStatus;
 }
 
+export interface SessionMessageMeta {
+  id: string;
+  seq: number;
+  createdAt: string;
+}
+
 export interface SessionMessagesResponse {
   messages: ChatMessage[];
+  messageMeta: SessionMessageMeta[];
   todos: AgentTodo[];
 }
 
@@ -366,6 +401,19 @@ export interface UpdateTelegramSettingsRequest {
   profileId?: string;
 }
 
+export interface WhatsAppSettingsResponse {
+  configured: boolean;
+  phoneNumberMasked: string | null;
+  pairingCode: string | null;
+  pairedJid: string | null;
+  profileId: string;
+}
+
+export interface UpdateWhatsAppSettingsRequest {
+  phoneNumber?: string;
+  profileId?: string;
+}
+
 export interface TimezoneCatalogEntry {
   id: string;
   countryCode: string;
@@ -469,6 +517,8 @@ export interface ModelsResponse {
   defaultModel: string | null;
   providers: ProviderInstanceSummary[];
   models: ProviderModelOption[];
+  /** Full static model catalog for provider setup and management UIs. */
+  catalog?: ProviderModelOption[];
   provider: ProviderName | null;
   displayName: string | null;
   baseUrl?: string | null;
@@ -783,7 +833,8 @@ export type ProviderName =
   | "anthropic"
   | "openrouter"
   | "gemini"
-  | "openai_compatible";
+  | "openai_compatible"
+  | "opencode_go";
 
 export type GenerateTextFormat = "json" | "text";
 

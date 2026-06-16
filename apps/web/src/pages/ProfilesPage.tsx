@@ -7,12 +7,13 @@ import {
   UsersRoundIcon,
   XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { McpServerAssignPicker } from "@/components/McpServerAssignPicker";
 import { McpServerDialog } from "@/components/soul-tools/mcp-tab/McpServerDialog";
 import { SkillAssignPicker } from "@/components/SkillAssignPicker";
 import { SkillCreateDialog } from "@/components/SkillCreateDialog";
+import { SkillDetailDialog } from "@/components/SkillDetailDialog";
 import { ToolAssignDialog } from "@/components/ToolAssignDialog";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
@@ -36,6 +38,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { ExpandableTextarea } from "@/components/ui/expandable-textarea";
 import {
   useMcpServersQuery,
+  useModelsQuery,
   useProfileQuery,
   useProfilesQuery,
   useSkillsQuery,
@@ -59,13 +62,46 @@ import {
 import { cn } from "@/lib/utils";
 import { fileToImageAttachment } from "@/lib/profile-images";
 import { formatError } from "@/lib/client";
+import {
+  decodeModelSelection,
+  encodeModelSelection,
+  groupModelsByProvider,
+  INHERIT_MODEL_VALUE,
+  modelSelectContentMaxHeightClass,
+  profileModelLabel,
+  profileModelSelectionValue,
+} from "@/lib/models";
 
 const defaultCreatePrompt = "You are a helpful assistant.";
 const sectionClass = "rounded-md border border-border bg-card";
+const identityBoxClass = "p-3";
 const profilesTagline = "Separate prompt, tools, and soul for each bot.";
-const profileSaveDelayMs = 600;
+const profileTextSaveDelayMs = 1000;
+const profileModelSaveDelayMs = 400;
 
 type ProfileSaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
+
+type ProfileEditSnapshot = {
+  editName: string;
+  editPrompt: string;
+  editModel: string | null;
+  savedName: string;
+  savedPrompt: string;
+  savedModel: string | null;
+};
+
+function profileHasPendingEdits(snapshot: ProfileEditSnapshot): boolean {
+  const name = snapshot.editName.trim();
+  if (!name) {
+    return false;
+  }
+
+  return (
+    name !== snapshot.savedName ||
+    snapshot.editPrompt !== snapshot.savedPrompt ||
+    snapshot.editModel !== snapshot.savedModel
+  );
+}
 
 type RemoveAssignmentTarget =
   | { kind: "tool"; id: string; name: string }
@@ -83,6 +119,7 @@ export function ProfilesPage() {
   const { data: allTools = [] } = useToolsQuery();
   const { data: allMcpServers = [] } = useMcpServersQuery();
   const { data: allSkills = [] } = useSkillsQuery();
+  const { data: modelsResponse } = useModelsQuery();
   const [selectedId, setSelectedIdState] = useState<string | null>(null);
   const profileInitializedRef = useRef(false);
   const {
@@ -112,6 +149,7 @@ export function ProfilesPage() {
   const [removeConfirm, setRemoveConfirm] = useState<RemoveAssignmentTarget | null>(null);
   const [mcpCreateOpen, setMcpCreateOpen] = useState(false);
   const [skillCreateOpen, setSkillCreateOpen] = useState(false);
+  const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [createName, setCreateName] = useState("");
   const [createPrompt, setCreatePrompt] = useState(defaultCreatePrompt);
@@ -121,28 +159,56 @@ export function ProfilesPage() {
   const [createAssignToolId, setCreateAssignToolId] = useState("");
   const [editName, setEditName] = useState("");
   const [editPrompt, setEditPrompt] = useState("");
+  const [editModel, setEditModel] = useState<string | null>(null);
   const [savedName, setSavedName] = useState("");
   const [savedPrompt, setSavedPrompt] = useState("");
+  const [savedModel, setSavedModel] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<ProfileSaveStatus>("idle");
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savingRef = useRef(false);
+  const pendingSaveRef = useRef(false);
+  const performSaveRef = useRef<() => Promise<boolean>>(async () => true);
   const editStateRef = useRef({
     editName,
     editPrompt,
+    editModel,
     savedName,
     savedPrompt,
+    savedModel,
     selectedId,
     detail,
   });
   editStateRef.current = {
     editName,
     editPrompt,
+    editModel,
     savedName,
     savedPrompt,
+    savedModel,
     selectedId,
     detail,
   };
+
+  const providerModelGroups = useMemo(
+    () => groupModelsByProvider(modelsResponse?.models ?? []),
+    [modelsResponse?.models],
+  );
+
+  const modelSelectionValue = useMemo(
+    () => profileModelSelectionValue(editModel, providerModelGroups),
+    [editModel, providerModelGroups],
+  );
+
+  const modelInCatalog = useMemo(() => {
+    if (!editModel) {
+      return true;
+    }
+
+    return providerModelGroups.some((group) =>
+      group.models.some((model) => model.id === editModel),
+    );
+  }, [editModel, providerModelGroups]);
 
   const busy =
     createMutation.isPending ||
@@ -168,19 +234,63 @@ export function ProfilesPage() {
       return false;
     }
 
-    return editName.trim() !== savedName || editPrompt !== savedPrompt;
-  }, [detail, editName, editPrompt, savedName, savedPrompt]);
+    return (
+      editName.trim() !== savedName ||
+      editPrompt !== savedPrompt ||
+      editModel !== savedModel
+    );
+  }, [detail, editName, editPrompt, editModel, savedName, savedPrompt, savedModel]);
+
+  const clearScheduledSave = useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleSave = useCallback(
+    (delayMs = profileTextSaveDelayMs) => {
+      clearScheduledSave();
+
+      const snapshot = editStateRef.current;
+      const { selectedId: profileId, detail: profileDetail } = snapshot;
+
+      if (!profileId || !profileDetail) {
+        return;
+      }
+
+      if (!snapshot.editName.trim()) {
+        setSaveStatus("idle");
+        return;
+      }
+
+      if (!profileHasPendingEdits(snapshot)) {
+        setSaveStatus("idle");
+        return;
+      }
+
+      setSaveStatus("pending");
+      saveTimerRef.current = setTimeout(() => {
+        saveTimerRef.current = null;
+        void performSaveRef.current();
+      }, delayMs);
+    },
+    [clearScheduledSave],
+  );
 
   const performSave = useCallback(async (): Promise<boolean> => {
     if (savingRef.current) {
-      return true;
+      pendingSaveRef.current = true;
+      return false;
     }
 
     const {
       editName: nameDraft,
       editPrompt: promptDraft,
+      editModel: modelDraft,
       savedName: baselineName,
       savedPrompt: baselinePrompt,
+      savedModel: baselineModel,
       selectedId: profileId,
       detail: profileDetail,
     } = editStateRef.current;
@@ -194,7 +304,7 @@ export function ProfilesPage() {
       return false;
     }
 
-    if (name === baselineName && promptDraft === baselinePrompt) {
+    if (name === baselineName && promptDraft === baselinePrompt && modelDraft === baselineModel) {
       setSaveStatus("idle");
       return true;
     }
@@ -203,24 +313,35 @@ export function ProfilesPage() {
     setSaveStatus("saving");
     setError(null);
 
+    let savedSuccessfully = false;
+
     try {
       await updateMutation.mutateAsync({
         profileId,
         input: {
           name,
           systemPrompt: promptDraft,
+          model: modelDraft,
         },
       });
       setSavedName(name);
       setSavedPrompt(promptDraft);
+      setSavedModel(modelDraft);
+      editStateRef.current = {
+        ...editStateRef.current,
+        savedName: name,
+        savedPrompt: promptDraft,
+        savedModel: modelDraft,
+      };
       setSaveStatus("saved");
+      savedSuccessfully = true;
 
       if (savedHintTimerRef.current) {
         clearTimeout(savedHintTimerRef.current);
       }
 
       savedHintTimerRef.current = setTimeout(() => {
-        setSaveStatus("idle");
+        setSaveStatus((current) => (current === "saved" ? "idle" : current));
       }, 2000);
 
       return true;
@@ -230,52 +351,52 @@ export function ProfilesPage() {
       return false;
     } finally {
       savingRef.current = false;
+
+      const queuedDuringSave = pendingSaveRef.current;
+      pendingSaveRef.current = false;
+      const hasMoreEdits = profileHasPendingEdits(editStateRef.current);
+
+      if (savedSuccessfully && (queuedDuringSave || hasMoreEdits)) {
+        scheduleSave(0);
+      } else if (queuedDuringSave && hasMoreEdits) {
+        scheduleSave(profileTextSaveDelayMs);
+      }
     }
-  }, [updateMutation]);
+  }, [scheduleSave, updateMutation]);
 
-  const scheduleSave = useCallback(() => {
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-    }
-
-    const {
-      editName: nameDraft,
-      editPrompt: promptDraft,
-      savedName: baselineName,
-      savedPrompt: baselinePrompt,
-      selectedId: profileId,
-      detail: profileDetail,
-    } = editStateRef.current;
-
-    if (!profileId || !profileDetail) {
-      return;
-    }
-
-    const name = nameDraft.trim();
-    if (!name) {
-      setSaveStatus("idle");
-      return;
-    }
-
-    if (name === baselineName && promptDraft === baselinePrompt) {
-      setSaveStatus("idle");
-      return;
-    }
-
-    setSaveStatus("pending");
-    saveTimerRef.current = setTimeout(() => {
-      void performSave();
-    }, profileSaveDelayMs);
-  }, [performSave]);
+  performSaveRef.current = performSave;
 
   const flushSave = useCallback(async (): Promise<boolean> => {
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-
+    clearScheduledSave();
     return performSave();
-  }, [performSave]);
+  }, [clearScheduledSave, performSave]);
+
+  const handleEditNameChange = useCallback(
+    (value: string) => {
+      setEditName(value);
+      editStateRef.current.editName = value;
+      scheduleSave(profileTextSaveDelayMs);
+    },
+    [scheduleSave],
+  );
+
+  const handleEditPromptChange = useCallback(
+    (value: string) => {
+      setEditPrompt(value);
+      editStateRef.current.editPrompt = value;
+      scheduleSave(profileTextSaveDelayMs);
+    },
+    [scheduleSave],
+  );
+
+  const handleEditModelChange = useCallback(
+    (model: string | null) => {
+      setEditModel(model);
+      editStateRef.current.editModel = model;
+      scheduleSave(profileModelSaveDelayMs);
+    },
+    [scheduleSave],
+  );
 
   const selectedProfile = useMemo(
     () => profiles.find((profile) => profile.id === selectedId),
@@ -337,34 +458,26 @@ export function ProfilesPage() {
       return;
     }
 
+    clearScheduledSave();
+    pendingSaveRef.current = false;
     setEditName(detail.name);
     setEditPrompt(detail.systemPrompt);
+    setEditModel(detail.model);
     setSavedName(detail.name);
     setSavedPrompt(detail.systemPrompt);
+    setSavedModel(detail.model);
     setSaveStatus("idle");
-  }, [detail?.id]);
-
-  useEffect(() => {
-    scheduleSave();
-
-    return () => {
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current);
-      }
-    };
-  }, [editName, editPrompt, scheduleSave]);
+  }, [clearScheduledSave, detail?.id]);
 
   useEffect(() => {
     return () => {
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current);
-      }
+      clearScheduledSave();
 
       if (savedHintTimerRef.current) {
         clearTimeout(savedHintTimerRef.current);
       }
     };
-  }, []);
+  }, [clearScheduledSave]);
 
   useEffect(() => {
     return () => {
@@ -405,15 +518,20 @@ export function ProfilesPage() {
       return;
     }
 
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
+    clearScheduledSave();
 
-    const { editName: nameDraft, editPrompt: promptDraft, savedName: baselineName, savedPrompt: baselinePrompt } =
-      editStateRef.current;
+    const {
+      editName: nameDraft,
+      editPrompt: promptDraft,
+      editModel: modelDraft,
+      savedName: baselineName,
+      savedPrompt: baselinePrompt,
+      savedModel: baselineModel,
+    } = editStateRef.current;
     const hasPendingEdits =
-      nameDraft.trim() !== baselineName || promptDraft !== baselinePrompt;
+      nameDraft.trim() !== baselineName ||
+      promptDraft !== baselinePrompt ||
+      modelDraft !== baselineModel;
 
     if (hasPendingEdits && nameDraft.trim()) {
       const saved = await performSave();
@@ -504,6 +622,14 @@ export function ProfilesPage() {
     }
   }
 
+
+  function handleDeleteOpenChange(open: boolean) {
+    if (busy) {
+      return;
+    }
+
+    setDeleteOpen(open);
+  }
 
   async function handleDeleteConfirm() {
     if (!selectedId || !detail || detail.isSuper) {
@@ -852,100 +978,164 @@ export function ProfilesPage() {
                 </div>
               ) : (
                 <>
-                  <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="flex min-w-0 items-start gap-3">
-                      <input
-                        ref={avatarInputRef}
-                        type="file"
-                        accept="image/jpeg,image/png,image/gif,image/webp"
-                        className="hidden"
-                        disabled={busy}
-                        onChange={(event) => void handleAvatarSelected(event)}
-                      />
+                  <div className="mb-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    <input
+                      ref={avatarInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/gif,image/webp"
+                      className="hidden"
+                      disabled={busy}
+                      onChange={(event) => void handleAvatarSelected(event)}
+                    />
+                    <div className={cn(identityBoxClass, "flex min-w-0 items-start gap-4")}>
                       <EditableProfileAvatar
                         profile={detail}
+                        size="lg"
                         disabled={busy || uploadAvatarMutation.isPending}
                         uploading={uploadAvatarMutation.isPending}
                         onPick={() => avatarInputRef.current?.click()}
                       />
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h2 className="type-section-title">{detail.name}</h2>
-                          {detail.soulActive ? (
-                            <span className="scope-badge scope-badge-active">soul active</span>
-                          ) : null}
+                      <div className="flex min-w-0 flex-1 flex-col justify-center gap-2">
+                        <div>
+                          <label htmlFor="profile-name" className="sr-only">
+                            Name
+                          </label>
+                          <Input
+                            id="profile-name"
+                            value={editName}
+                            disabled={busy}
+                            className="h-8 min-w-0 font-semibold"
+                            onChange={(event) => handleEditNameChange(event.target.value)}
+                            onBlur={() => void flushSave()}
+                          />
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+                          <span className="type-body">{profileSubtitle}</span>
                           {detail.isSuper ? (
                             <span className="scope-badge bg-muted text-muted-foreground">super</span>
                           ) : null}
+                          <ProfileSaveIndicator
+                            inline
+                            saveStatus={saveStatus}
+                            nameMissing={isDirty && !editName.trim()}
+                          />
                         </div>
-                        <p className="type-body mt-1 text-xs">{profileSubtitle}</p>
-                        <ProfileSaveIndicator
-                          saveStatus={saveStatus}
-                          nameMissing={isDirty && !editName.trim()}
-                        />
+                        {!detail.isSuper ? (
+                          <Dialog open={deleteOpen} onOpenChange={handleDeleteOpenChange}>
+                            <DialogTrigger
+                              render={
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={busy}
+                                  className="w-fit text-destructive hover:text-destructive"
+                                />
+                              }
+                            >
+                              <Trash2Icon className="size-4" aria-hidden />
+                              Delete
+                            </DialogTrigger>
+                            <DialogContent className="gap-6 p-6 sm:max-w-md">
+                              <DialogHeader className="gap-3">
+                                <DialogTitle>Delete profile?</DialogTitle>
+                                <DialogDescription>
+                                  This removes {detail.name} and its chat history. This cannot be
+                                  undone.
+                                </DialogDescription>
+                              </DialogHeader>
+
+                              <DialogFooter className="gap-3 border-t-0 bg-transparent p-0 pt-2 pb-2 sm:justify-end">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  disabled={busy}
+                                  onClick={() => setDeleteOpen(false)}
+                                >
+                                  Cancel
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="destructive"
+                                  disabled={busy}
+                                  onClick={() => void handleDeleteConfirm()}
+                                >
+                                  {deleteMutation.isPending ? (
+                                    <Spinner className="size-4" />
+                                  ) : (
+                                    "Delete"
+                                  )}
+                                </Button>
+                              </DialogFooter>
+                            </DialogContent>
+                          </Dialog>
+                        ) : null}
                       </div>
                     </div>
 
-                    <div className="hidden shrink-0 flex-wrap items-center gap-2 lg:flex">
-                      {!detail.isSuper ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={busy}
-                          className="text-destructive hover:text-destructive"
-                          onClick={() => setDeleteOpen(true)}
-                        >
-                          Delete
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="mb-4 flex flex-wrap gap-2 lg:hidden">
-                    {!detail.isSuper ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        className="text-destructive hover:text-destructive"
-                        onClick={() => setDeleteOpen(true)}
-                      >
-                        Delete
-                      </Button>
-                    ) : null}
-                  </div>
-
-                  <div className="space-y-5">
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <Field label="Name" htmlFor="profile-name">
-                        <Input
-                          id="profile-name"
-                          value={editName}
-                          disabled={busy}
-                          onChange={(event) => setEditName(event.target.value)}
-                        />
-                      </Field>
+                    <div className={cn(identityBoxClass, "flex min-w-0 flex-col gap-4")}>
                       <Field label="Model" htmlFor="profile-model">
-                        <Input
-                          id="profile-model"
-                          value={detail.model ?? "inherit global"}
-                          disabled
-                          readOnly
-                        />
-                      </Field>
-                    </div>
+                        <Select
+                          value={modelSelectionValue}
+                          disabled={busy || providerModelGroups.length === 0}
+                          onValueChange={(value) => {
+                            const nextValue = value != null ? String(value) : INHERIT_MODEL_VALUE;
 
-                    <ExpandableTextarea
-                      label="System prompt"
-                      htmlFor="profile-prompt"
-                      dialogDescription="Instructions sent to the model at the start of each chat."
-                      value={editPrompt}
-                      disabled={busy}
-                      onChange={(event) => setEditPrompt(event.target.value)}
-                      onSave={flushSave}
-                    />
+                            if (nextValue === INHERIT_MODEL_VALUE) {
+                              handleEditModelChange(null);
+                              return;
+                            }
+
+                            const decoded = decodeModelSelection(nextValue);
+                            handleEditModelChange(decoded?.modelId ?? null);
+                          }}
+                        >
+                          <SelectTrigger id="profile-model" className="w-full">
+                            <SelectValue placeholder="Select model">
+                              {profileModelLabel(
+                                editModel,
+                                providerModelGroups,
+                                modelsResponse?.defaultModel,
+                              )}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent className={modelSelectContentMaxHeightClass}>
+                            <SelectItem value={INHERIT_MODEL_VALUE}>
+                              {profileModelLabel(null, providerModelGroups, modelsResponse?.defaultModel)}
+                            </SelectItem>
+                            {editModel && !modelInCatalog ? (
+                              <SelectItem
+                                value={encodeModelSelection("__unknown__", editModel)}
+                              >
+                                {editModel}
+                              </SelectItem>
+                            ) : null}
+                            {providerModelGroups.flatMap((group) =>
+                              group.models.map((model) => (
+                                <SelectItem
+                                  key={`${group.providerId}:${model.id}`}
+                                  value={encodeModelSelection(group.providerId, model.id)}
+                                >
+                                  {group.providerLabel}: {model.name}
+                                </SelectItem>
+                              )),
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <ExpandableTextarea
+                        label="System prompt"
+                        htmlFor="profile-prompt"
+                        dialogDescription="Instructions sent to the model at the start of each chat."
+                        value={editPrompt}
+                        disabled={busy}
+                        onChange={(event) => handleEditPromptChange(event.target.value)}
+                        onSave={flushSave}
+                        containerClassName="flex min-h-0 flex-1 flex-col gap-1.5"
+                        previewClassName="min-h-16 flex-1"
+                      />
+                    </div>
+                  </div>
 
                     <div className="border-t border-border pt-5">
                       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -1000,7 +1190,7 @@ export function ProfilesPage() {
                       )}
                     </div>
 
-                    <div className="border-t border-border pt-5">
+                    <div className="pt-5">
                       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <h3 className="type-section-title">MCP servers</h3>
@@ -1074,7 +1264,7 @@ export function ProfilesPage() {
                       )}
                     </div>
 
-                    <div className="border-t border-border pt-5">
+                    <div className="pt-5">
                       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <h3 className="type-section-title">Skills</h3>
@@ -1114,30 +1304,36 @@ export function ProfilesPage() {
                           .
                         </p>
                       ) : detail.skills.length === 0 ? (
-                        <p className="type-body text-xs">
-                          No skills assigned. Add a new skill or assign an existing one.
-                        </p>
+                        null
                       ) : (
                         <ul className="divide-y divide-border rounded-md border border-border">
                           {detail.skills.map((skill) => (
                             <li
                               key={skill.id}
-                              className="flex items-center justify-between gap-2 px-3 py-2 first:rounded-t-md last:rounded-b-md"
+                              className="group flex items-center justify-between gap-2 px-3 py-2 first:rounded-t-md last:rounded-b-md hover:bg-muted/40"
                             >
-                              <div className="min-w-0">
-                                <p className="truncate text-sm font-medium leading-tight text-foreground">
-                                  {skill.name}
-                                </p>
-                                <p className="mt-0.5 line-clamp-1 text-xs leading-snug text-muted-foreground">
-                                  {[
-                                    skill.description,
-                                    skill.hasTool ? "includes tool" : null,
-                                    skill.disableModelInvocation ? "explicit invoke only" : null,
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" · ")}
-                                </p>
-                              </div>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                className="flex min-w-0 flex-1 items-start text-left disabled:opacity-50"
+                                aria-label={`View details for ${skill.name}`}
+                                onClick={() => setDetailSkillId(skill.id)}
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-medium leading-tight text-foreground">
+                                    {skill.name}
+                                  </p>
+                                  <p className="mt-0.5 line-clamp-1 text-xs leading-snug text-muted-foreground">
+                                    {[
+                                      skill.description,
+                                      skill.hasTool ? "includes tool" : null,
+                                      skill.disableModelInvocation ? "explicit invoke only" : null,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · ")}
+                                  </p>
+                                </div>
+                              </button>
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -1156,15 +1352,7 @@ export function ProfilesPage() {
                         </ul>
                       )}
                     </div>
-                  </div>
 
-                  <div className="type-body mt-5 rounded-md border border-border bg-muted/40 p-3 text-xs lg:hidden dark:bg-muted/30">
-                    <p className="font-medium text-foreground">How it works</p>
-                    <p className="mt-2">
-                      Profiles isolate prompts and tool access. Open Soul to customize voice and
-                      identity per profile.
-                    </p>
-                  </div>
                 </>
               )}
             </div>
@@ -1347,6 +1535,20 @@ export function ProfilesPage() {
         onSubmit={handleCreateSkill}
       />
 
+      <SkillDetailDialog
+        skillId={detailSkillId}
+        busy={busy}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDetailSkillId(null);
+          }
+        }}
+        onRemoveFromProfile={(skillId, skillName) => {
+          setDetailSkillId(null);
+          setRemoveConfirm({ kind: "skill", id: skillId, name: skillName });
+        }}
+      />
+
       <McpServerDialog
         open={mcpCreateOpen}
         busy={createMcpMutation.isPending || assignMcpMutation.isPending}
@@ -1409,37 +1611,6 @@ export function ProfilesPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={deleteOpen}
-        onOpenChange={(open) => {
-          if (!open && !busy) {
-            setDeleteOpen(false);
-          }
-        }}
-      >
-        <DialogContent className="gap-6 p-6 sm:max-w-md">
-          <DialogHeader className="gap-3">
-            <DialogTitle>Delete profile?</DialogTitle>
-            <DialogDescription>
-              This removes {detail?.name} and its chat history. This cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-
-          <DialogFooter className="gap-3 border-t-0 bg-transparent p-0 pt-2 pb-2 sm:justify-end">
-            <Button type="button" variant="outline" disabled={busy} onClick={() => setDeleteOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={busy}
-              onClick={() => void handleDeleteConfirm()}
-            >
-              {deleteMutation.isPending ? <Spinner className="size-4" /> : "Delete"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }
@@ -1447,44 +1618,45 @@ export function ProfilesPage() {
 function ProfileSaveIndicator({
   saveStatus,
   nameMissing,
+  inline = false,
 }: {
   saveStatus: ProfileSaveStatus;
   nameMissing: boolean;
+  inline?: boolean;
 }) {
-  if (nameMissing) {
-    return (
-      <p className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
-        Name is required
-      </p>
-    );
-  }
+  let content: ReactNode = null;
 
-  if (saveStatus === "pending" || saveStatus === "saving") {
-    return (
-      <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+  if (nameMissing) {
+    content = (
+      <span className="font-medium text-amber-700 dark:text-amber-300">Name is required</span>
+    );
+  } else if (saveStatus === "pending" || saveStatus === "saving") {
+    content = (
+      <span className="inline-flex items-center gap-1.5">
         <Spinner className="size-3" />
         Saving…
-      </p>
+      </span>
     );
+  } else if (saveStatus === "saved") {
+    content = <span>Saved</span>;
+  } else if (saveStatus === "error") {
+    content = <span className="font-medium text-destructive">Save failed</span>;
   }
 
-  if (saveStatus === "saved") {
+  if (!content) {
+    return null;
+  }
+
+  if (inline) {
     return (
-      <p className="mt-2 text-xs text-muted-foreground" role="status">
-        Saved
-      </p>
+      <>
+        <span aria-hidden>·</span>
+        <span role="status">{content}</span>
+      </>
     );
   }
 
-  if (saveStatus === "error") {
-    return (
-      <p className="mt-2 text-xs font-medium text-destructive" role="status">
-        Save failed
-      </p>
-    );
-  }
-
-  return null;
+  return <p className="mt-2 text-xs text-muted-foreground">{content}</p>;
 }
 
 function EditableProfileAvatar({
@@ -1492,12 +1664,16 @@ function EditableProfileAvatar({
   disabled,
   uploading,
   onPick,
+  size = "md",
 }: {
   profile: ProfileSummary;
   disabled: boolean;
   uploading: boolean;
   onPick: () => void;
+  size?: "xs" | "sm" | "md" | "lg";
 }) {
+  const overlayIconClass = size === "lg" ? "size-5" : "size-4";
+
   return (
     <button
       type="button"
@@ -1506,12 +1682,12 @@ function EditableProfileAvatar({
       aria-label="Change profile image"
       className="group relative shrink-0 rounded-full disabled:cursor-not-allowed disabled:opacity-50"
     >
-      <ProfileAvatar profile={profile} size="lg" />
+      <ProfileAvatar profile={profile} size={size} />
       <span className="absolute inset-0 flex items-center justify-center rounded-full bg-foreground/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
         {uploading ? (
-          <Spinner className="size-5 text-primary-foreground" />
+          <Spinner className={cn(overlayIconClass, "text-primary-foreground")} />
         ) : (
-          <CameraIcon className="size-5 text-primary-foreground" aria-hidden />
+          <CameraIcon className={cn(overlayIconClass, "text-primary-foreground")} aria-hidden />
         )}
       </span>
     </button>

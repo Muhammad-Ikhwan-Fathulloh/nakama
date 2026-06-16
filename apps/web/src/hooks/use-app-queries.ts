@@ -6,10 +6,12 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
+import { useAuth } from "@/context/auth-context";
 import { client } from "@/lib/client";
 import { queryKeys } from "@/lib/query-keys";
 import { prefetchTimezoneData } from "@/hooks/use-timezones";
 import { telegramSettingsQueryOptions } from "@/hooks/use-telegram-settings";
+import { whatsappSettingsQueryOptions } from "@/hooks/use-whatsapp-settings";
 
 const defaultStaleTime = 1000 * 30;
 
@@ -61,6 +63,7 @@ export function profileQueryOptions(profileId: string) {
 export function prefetchAppData(queryClient: QueryClient): void {
   prefetchTimezoneData(queryClient);
   void queryClient.prefetchQuery(telegramSettingsQueryOptions);
+  void queryClient.prefetchQuery(whatsappSettingsQueryOptions);
   void queryClient.prefetchQuery(healthQueryOptions);
   void queryClient.prefetchQuery(modelsQueryOptions);
   void queryClient.prefetchQuery(profilesQueryOptions);
@@ -70,10 +73,15 @@ export function prefetchAppData(queryClient: QueryClient): void {
 
 export function AppQueryPrefetch() {
   const queryClient = useQueryClient();
+  const { isAuthenticated, isLoading } = useAuth();
 
   useEffect(() => {
+    if (isLoading || !isAuthenticated) {
+      return;
+    }
+
     prefetchAppData(queryClient);
-  }, [queryClient]);
+  }, [queryClient, isAuthenticated, isLoading]);
 
   return null;
 }
@@ -110,6 +118,22 @@ export function useMcpServersQuery() {
 
 export function useSkillsQuery() {
   return useQuery(skillsQueryOptions);
+}
+
+export function skillQueryOptions(skillId: string) {
+  return queryOptions({
+    queryKey: queryKeys.skills.detail(skillId),
+    queryFn: async () => (await client.getSkill(skillId)).skill,
+    staleTime: defaultStaleTime,
+    enabled: Boolean(skillId),
+  });
+}
+
+export function useSkillQuery(skillId: string | null) {
+  return useQuery({
+    ...skillQueryOptions(skillId ?? ""),
+    enabled: Boolean(skillId),
+  });
 }
 
 export function mcpServerDetailQueryOptions(serverId: string) {

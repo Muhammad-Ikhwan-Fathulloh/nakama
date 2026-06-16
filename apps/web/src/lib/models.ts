@@ -46,7 +46,8 @@ export function formatProviderLabel(
     provider === "anthropic" ||
     provider === "openrouter" ||
     provider === "gemini" ||
-    provider === "openai_compatible"
+    provider === "openai_compatible" ||
+    provider === "opencode_go"
   ) {
     return formatConfiguredProviderLabel(provider, displayName);
   }
@@ -59,6 +60,7 @@ export const PROVIDER_OPTIONS: Array<{ id: SelectedProvider; label: string }> = 
   { id: "anthropic", label: "Anthropic" },
   { id: "openrouter", label: "OpenRouter" },
   { id: "gemini", label: "Gemini" },
+  { id: "opencode_go", label: "OpenCode Go" },
   { id: "openai_compatible", label: "Custom (OpenAI-compatible)" },
 ];
 
@@ -77,6 +79,10 @@ export function apiKeyPlaceholder(provider: SelectedProvider): string {
 
   if (provider === "openai_compatible") {
     return "Optional for local endpoints";
+  }
+
+  if (provider === "opencode_go") {
+    return "oc-…";
   }
 
   return "sk-…";
@@ -160,6 +166,40 @@ export function validateOpenRouterModelsInput(
     const hasOutput = row.outputPerMillionUsd !== undefined;
     if (hasInput !== hasOutput) {
       return `Model "${row.id.trim()}" must set both input and output $/1M rates, or leave both blank.`;
+    }
+  }
+
+  return null;
+}
+
+const OPENCODE_GO_MODEL_ID_PATTERN = /^opencode-go\/[\w.-]+$/;
+
+export function validateOpenCodeGoModelId(model: string): string | null {
+  const trimmed = model.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  if (!OPENCODE_GO_MODEL_ID_PATTERN.test(trimmed)) {
+    return 'Use opencode-go/model format, e.g. opencode-go/kimi-k2.7-code';
+  }
+
+  return null;
+}
+
+export function validateOpenCodeGoModelsInput(
+  models: Array<{ id: string }>,
+): string | null {
+  const listError = validateCustomModelsInput(models);
+  if (listError) {
+    return listError;
+  }
+
+  for (const row of models) {
+    const idError = validateOpenCodeGoModelId(row.id);
+    if (idError) {
+      return idError;
     }
   }
 
@@ -365,6 +405,17 @@ export function buildConfigureProviderRequest(options: {
     };
   }
 
+  if (options.provider === "opencode_go" && options.customModels?.length) {
+    return {
+      ...request,
+      customModels: options.customModels,
+    };
+  }
+
+  if (options.provider === "opencode_go") {
+    return request;
+  }
+
   const baseUrl = options.baseUrl?.trim();
   if (baseUrl) {
     return { ...request, baseUrl };
@@ -422,6 +473,66 @@ export function groupModelsByProvider(
   }
 
   return [...groups.values()];
+}
+
+export const INHERIT_MODEL_VALUE = "__inherit__";
+
+/** Visible rows before a model select list scrolls (~SelectItem py-1 + text-sm). */
+export const MODEL_SELECT_MAX_VISIBLE_ROWS = 25;
+
+export const modelSelectContentMaxHeightClass = `max-h-[min(calc(1.75rem*${MODEL_SELECT_MAX_VISIBLE_ROWS}+0.5rem),var(--available-height))]`;
+
+export function profileModelSelectionValue(
+  modelId: string | null,
+  groups: ReturnType<typeof groupModelsByProvider>,
+): string {
+  if (!modelId) {
+    return INHERIT_MODEL_VALUE;
+  }
+
+  for (const group of groups) {
+    if (group.models.some((model) => model.id === modelId)) {
+      return encodeModelSelection(group.providerId, modelId);
+    }
+  }
+
+  return encodeModelSelection("__unknown__", modelId);
+}
+
+export function profileModelLabel(
+  modelId: string | null,
+  groups: ReturnType<typeof groupModelsByProvider>,
+  globalModel: string | null | undefined,
+): string {
+  if (!modelId) {
+    return globalModel ? `Inherit global (${globalModel})` : "Inherit global";
+  }
+
+  for (const group of groups) {
+    const match = group.models.find((model) => model.id === modelId);
+    if (match) {
+      return match.name;
+    }
+  }
+
+  return modelId;
+}
+
+export function effectiveProfileModelSelection(
+  profileModel: string | null | undefined,
+  globalProviderId: string | null | undefined,
+  globalModel: string | null | undefined,
+  groups: ReturnType<typeof groupModelsByProvider>,
+): string | null {
+  if (profileModel) {
+    return profileModelSelectionValue(profileModel, groups);
+  }
+
+  if (globalProviderId && globalModel) {
+    return encodeModelSelection(globalProviderId, globalModel);
+  }
+
+  return null;
 }
 
 export function modelsFromCustomRows(

@@ -1,5 +1,7 @@
 import type {
   AgentChannel,
+  BranchSessionRequest,
+  BranchSessionResponse,
   AssignMcpServerRequest,
   AssignSkillRequest,
   AssignToolRequest,
@@ -67,7 +69,9 @@ import type {
   UpdateAutomationRequest,
   UpdateThinkingRequest,
   UpdateTelegramSettingsRequest,
+  UpdateWhatsAppSettingsRequest,
   UpdateTimezoneRequest,
+  WhatsAppSettingsResponse,
   ListTimezonesResponse,
   CreateTaskRequest,
   DraftTaskPromptRequest,
@@ -100,11 +104,17 @@ import type {
 export class TinyClawClient {
   readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private authToken: string | null;
 
   constructor(options: TinyClawClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? resolveServerUrl()).replace(/\/$/, "");
     const fetchFn = options.fetch ?? fetch;
     this.fetchImpl = ((input, init) => fetchFn(input, init)) as typeof fetch;
+    this.authToken = options.authToken ?? null;
+  }
+
+  setAuthToken(token: string | null): void {
+    this.authToken = token;
   }
 
   async health(): Promise<HealthResponse> {
@@ -113,6 +123,24 @@ export class TinyClawClient {
 
   async getSystemStatus(): Promise<SystemStatusResponse> {
     return this.request<SystemStatusResponse>("/v1/system/status");
+  }
+
+  async startWorker(name: string): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>(`/v1/workers/${encodeURIComponent(name)}/start`, {
+      method: "POST",
+    });
+  }
+
+  async stopWorker(name: string): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>(`/v1/workers/${encodeURIComponent(name)}/stop`, {
+      method: "POST",
+    });
+  }
+
+  async restartWorker(name: string): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>(`/v1/workers/${encodeURIComponent(name)}/restart`, {
+      method: "POST",
+    });
   }
 
   async getModels(options: { source?: "catalog" | "remote" } = {}): Promise<ModelsResponse> {
@@ -193,6 +221,19 @@ export class TinyClawClient {
   async getSessionMessages(sessionId: string): Promise<SessionMessagesResponse> {
     return this.request<SessionMessagesResponse>(
       `/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+    );
+  }
+
+  async branchSession(
+    sessionId: string,
+    request: BranchSessionRequest,
+  ): Promise<BranchSessionResponse> {
+    return this.request<BranchSessionResponse>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/branch`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
     );
   }
 
@@ -391,6 +432,10 @@ export class TinyClawClient {
     });
   }
 
+  async getSkill(skillId: string): Promise<SkillResponse> {
+    return this.request<SkillResponse>(`/v1/skills/${encodeURIComponent(skillId)}`);
+  }
+
   async deleteSkill(skillId: string): Promise<void> {
     await this.request(`/v1/skills/${encodeURIComponent(skillId)}`, {
       method: "DELETE",
@@ -530,14 +575,18 @@ export class TinyClawClient {
       ) => {
         const handlers = normalizeStreamHandlers(handler);
         const body = { ...resolveSendMessageBody(input), stream: true };
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        };
+        if (this.authToken) {
+          headers["Authorization"] = `Bearer ${this.authToken}`;
+        }
         const response = await this.fetchImpl(
           `${this.baseUrl}/v1/sessions/${sessionId}/messages?stream=true`,
           {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "text/event-stream",
-            },
+            headers,
             body: JSON.stringify(body),
             signal: options?.signal,
           },
@@ -773,20 +822,63 @@ export class TinyClawClient {
     });
   }
 
+  async getWhatsAppSettings(): Promise<WhatsAppSettingsResponse> {
+    return this.request<WhatsAppSettingsResponse>("/v1/settings/whatsapp");
+  }
+
+  async setWhatsAppSettings(
+    request: UpdateWhatsAppSettingsRequest,
+  ): Promise<WhatsAppSettingsResponse> {
+    return this.request<WhatsAppSettingsResponse>("/v1/settings/whatsapp", {
+      method: "PUT",
+      body: JSON.stringify(request),
+    });
+  }
+
+  async regenerateWhatsAppPairingCode(): Promise<WhatsAppSettingsResponse> {
+    return this.request<WhatsAppSettingsResponse>("/v1/settings/whatsapp/pairing-code", {
+      method: "POST",
+    });
+  }
+
   async listTimezones(): Promise<ListTimezonesResponse> {
     return this.request<ListTimezonesResponse>("/v1/timezones");
+  }
+
+  async setupUser(email: string, password: string): Promise<{ token: string }> {
+    return this.request<{ token: string }>("/v1/auth/setup", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+  }
+
+  async login(email: string, password: string): Promise<{ token: string }> {
+    return this.request<{ token: string }>("/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+  }
+
+  async getMe(): Promise<{ email: string }> {
+    return this.request<{ email: string }>("/v1/auth/me");
   }
 
   private async request<T>(
     path: string,
     init?: RequestInit,
   ): Promise<T> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...(init?.headers as Record<string, string> ?? {}),
+    };
+
+    if (this.authToken) {
+      headers["Authorization"] = `Bearer ${this.authToken}`;
+    }
+
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {}),
-      },
+      headers,
     });
 
     if (!response.ok) {

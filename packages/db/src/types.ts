@@ -147,7 +147,19 @@ export interface StoredMcpServerRecord {
   updatedAt: string;
 }
 
+export interface StoredUserRecord {
+  id: string;
+  email: string;
+  passwordHash: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DatabaseAdapter {
+  getUserByEmail(email: string): Promise<StoredUserRecord | null>;
+  createUser(record: StoredUserRecord): Promise<void>;
+  countUsers(): Promise<number>;
+
   listAutomations(): Promise<StoredAutomationRecord[]>;
   getAutomation(id: string): Promise<StoredAutomationRecord | null>;
   upsertAutomation(record: StoredAutomationRecord): Promise<void>;
@@ -226,6 +238,7 @@ export interface DatabaseAdapter {
   listSkills(): Promise<StoredSkillRecord[]>;
   getSkill(id: string): Promise<StoredSkillRecord | null>;
   getSkillByName(name: string): Promise<StoredSkillRecord | null>;
+  getSkillBySourcePath(sourcePath: string): Promise<StoredSkillRecord | null>;
   upsertSkill(record: StoredSkillRecord): Promise<void>;
   deleteSkill(id: string): Promise<boolean>;
 

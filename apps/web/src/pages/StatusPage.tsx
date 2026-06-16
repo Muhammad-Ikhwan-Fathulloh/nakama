@@ -6,11 +6,10 @@ import {
   CircleGaugeIcon,
   ClockIcon,
   CoinsIcon,
-  KanbanIcon,
   MessageCircleIcon,
   ServerIcon,
+  SmartphoneIcon,
   SparklesIcon,
-  WorkflowIcon,
   XCircleIcon,
   ZapIcon,
   type LucideIcon,
@@ -19,6 +18,7 @@ import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { LlmUsageStatus, SystemStatusResponse } from "@tinyclaw/core/contract";
 import { Button } from "@/components/ui/button";
+import { WorkerActionBar } from "@/components/WorkerActionBar";
 import { useRefreshSystemStatus, useSystemStatusQuery } from "@/hooks/use-system-status";
 import { formatError } from "@/lib/client";
 import { PAGE_PATHS } from "@/lib/navigation";
@@ -47,13 +47,9 @@ export function StatusPage() {
           <div className="min-w-0 space-y-0.5">
             <h1 className="type-page-title">Status</h1>
             <p className="type-body max-w-2xl">
-              Live health for the server, workers, and Telegram bridge.
+              Live health for the server, workers, and message bridges.
             </p>
           </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <LiveIndicator active={Boolean(status) && !errorMessage} />
         </div>
       </header>
 
@@ -92,7 +88,7 @@ export function StatusPage() {
 function StatusDashboard({ status }: { status: SystemStatusResponse }) {
   const summary = useMemo(() => deriveSummary(status), [status]);
   const services = useMemo(() => buildServiceColumns(status), [status]);
-  const { automationWorker, taskWorker } = status;
+  const { automationWorker, taskWorker, telegramWorker, whatsappWorker } = status;
 
   return (
     <section className={cn(sectionClass, "min-w-0 overflow-hidden")}>
@@ -112,10 +108,38 @@ function StatusDashboard({ status }: { status: SystemStatusResponse }) {
         />
       </div>
 
-      <div className="grid grid-cols-1 divide-y divide-border sm:grid-cols-2 lg:grid-cols-4 lg:divide-x lg:divide-y-0">
-        {services.map((service) => (
-          <ServiceColumn key={service.title} {...service} />
-        ))}
+      <div className="grid grid-cols-1 divide-y divide-border sm:grid-cols-2 lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+        {services.map((service) => {
+          if (service.title === "Telegram") {
+            return (
+              <WorkerServiceColumn
+                key={service.title}
+                icon={service.icon}
+                title={service.title}
+                status={service.status}
+                tone={service.tone}
+                worker={telegramWorker}
+                workerName="telegram"
+              />
+            );
+          }
+
+          if (service.title === "WhatsApp") {
+            return (
+              <WorkerServiceColumn
+                key={service.title}
+                icon={service.icon}
+                title={service.title}
+                status={service.status}
+                tone={service.tone}
+                worker={whatsappWorker}
+                workerName="whatsapp"
+              />
+            );
+          }
+
+          return <ServiceColumn key={service.title} {...service} />;
+        })}
       </div>
     </section>
   );
@@ -180,7 +204,7 @@ function LlmUsageSection({ usage }: { usage: LlmUsageStatus }) {
       ) : (
         <div className="space-y-4 p-5">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.4fr)]">
-            <div className="rounded-lg border border-border bg-gradient-to-br from-primary/5 via-card to-card p-5 dark:from-primary/10">
+            <div className="rounded-lg border border-border p-5">
               <div className="flex items-start justify-between gap-3">
                 <div className="space-y-1">
                   <p className="type-label">
@@ -372,29 +396,6 @@ function UsageMetricTile({
   );
 }
 
-function LiveIndicator({ active }: { active: boolean }) {
-  return (
-    <div
-      className="inline-flex h-9 items-center gap-2 rounded-lg bg-muted/30 px-3 text-xs font-medium text-muted-foreground"
-      aria-live="polite"
-    >
-      <span className="relative flex size-2 shrink-0">
-        {active ? (
-          <>
-            <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60 motion-reduce:animate-none" />
-            <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
-          </>
-        ) : (
-          <span className="relative inline-flex size-2 rounded-full bg-muted-foreground/40" />
-        )}
-      </span>
-      <span className={active ? "text-emerald-800 dark:text-emerald-200" : undefined}>
-        {active ? "Live" : "Waiting"}
-      </span>
-    </div>
-  );
-}
-
 function SummaryStrip({
   status,
   summary,
@@ -404,12 +405,7 @@ function SummaryStrip({
 }) {
   return (
     <div
-      className={cn(
-        "flex flex-wrap items-center gap-3 border-b border-border px-5 py-4 sm:gap-4",
-        summary.tone === "ok" && "bg-emerald-50/40 dark:bg-emerald-950/10",
-        summary.tone === "warn" && "bg-amber-50/40 dark:bg-amber-950/10",
-        summary.tone === "bad" && "bg-destructive/5",
-      )}
+      className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-4 sm:gap-4"
     >
       <div className={cn(iconTileClass, "bg-background/70")}>
         <ToneIcon tone={summary.tone} className="size-5" />
@@ -504,6 +500,88 @@ function ServiceColumn({
   );
 }
 
+function MetricsDisplay({
+  cpuPercent,
+  memoryMb,
+}: {
+  cpuPercent: number | null | undefined;
+  memoryMb: number | null | undefined;
+}) {
+  if (cpuPercent == null && memoryMb == null) return null;
+
+  return (
+    <div className="flex items-center gap-3 border-t border-border px-5 py-2">
+      {cpuPercent != null ? (
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          <ZapIcon className="size-3" aria-hidden />
+          CPU: {cpuPercent.toFixed(1)}%
+        </span>
+      ) : null}
+      {memoryMb != null ? (
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          <ServerIcon className="size-3" aria-hidden />
+          Mem: {memoryMb < 1 ? `${(memoryMb * 1024).toFixed(0)} KB` : `${memoryMb.toFixed(1)} MB`}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkerServiceColumn({
+  icon: Icon,
+  title,
+  status,
+  tone,
+  worker,
+  workerName,
+}: {
+  icon: LucideIcon;
+  title: string;
+  status: string;
+  tone: ServiceStatusTone;
+  worker: SystemStatusResponse["telegramWorker"];
+  workerName: string;
+}) {
+  return (
+    <div className="flex flex-col">
+      <div className="flex min-w-0 items-center gap-3 p-5">
+        <span
+          className={cn(
+            iconTileClass,
+            tone === "bad" && "bg-destructive/5",
+          )}
+        >
+          <Icon className={iconClass} aria-hidden />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="type-section-title leading-tight">{title}</h2>
+          <p
+            className={cn(
+              "mt-1 text-xs font-medium leading-none",
+              tone === "ok" && "text-emerald-700 dark:text-emerald-300",
+              tone === "warn" && "text-amber-700 dark:text-amber-300",
+              tone === "bad" && "text-destructive",
+              tone === "muted" && "text-muted-foreground",
+            )}
+          >
+            {status}
+          </p>
+        </div>
+      </div>
+      <WorkerActionBar
+        className="border-t border-border px-5 py-2"
+        running={worker.running}
+        pm2Managed={worker.process?.managed ?? false}
+        workerName={workerName}
+      />
+      <MetricsDisplay
+        cpuPercent={worker.process?.cpuPercent}
+        memoryMb={worker.process?.memoryMb}
+      />
+    </div>
+  );
+}
+
 function ToneIcon({ tone, className }: { tone: StatusTone; className?: string }) {
   if (tone === "ok") {
     return (
@@ -537,7 +615,7 @@ function StatusSkeleton() {
 }
 
 function buildServiceColumns(status: SystemStatusResponse) {
-  const { server, automationWorker, telegramWorker } = status;
+  const { server, telegramWorker, whatsappWorker } = status;
 
   return [
     {
@@ -546,20 +624,14 @@ function buildServiceColumns(status: SystemStatusResponse) {
       ...serverServiceStatus(server),
     },
     {
-      icon: WorkflowIcon,
-      title: "Automation",
-      ...workerServiceStatus(automationWorker.ok, "Stopped"),
-    },
-    {
-      icon: KanbanIcon,
-      title: "Tasks",
-      status: "Healthy",
-      tone: "ok" as const,
-    },
-    {
       icon: MessageCircleIcon,
       title: "Telegram",
       ...telegramServiceStatus(telegramWorker),
+    },
+    {
+      icon: SmartphoneIcon,
+      title: "WhatsApp",
+      ...whatsappServiceStatus(whatsappWorker),
     },
   ];
 }
@@ -579,15 +651,6 @@ function serverServiceStatus(server: SystemStatusResponse["server"]): {
   return { status: "Healthy", tone: "ok" };
 }
 
-function workerServiceStatus(
-  ok: boolean,
-  offlineLabel: string,
-): { status: string; tone: ServiceStatusTone } {
-  return ok
-    ? { status: "Healthy", tone: "ok" }
-    : { status: offlineLabel, tone: "bad" };
-}
-
 function telegramServiceStatus(
   telegramWorker: SystemStatusResponse["telegramWorker"],
 ): { status: string; tone: ServiceStatusTone } {
@@ -600,6 +663,24 @@ function telegramServiceStatus(
   }
 
   if (!telegramWorker.paired) {
+    return { status: "Awaiting pairing", tone: "warn" };
+  }
+
+  return { status: "Healthy", tone: "ok" };
+}
+
+function whatsappServiceStatus(
+  whatsappWorker: SystemStatusResponse["whatsappWorker"],
+): { status: string; tone: ServiceStatusTone } {
+  if (!whatsappWorker.configured) {
+    return { status: "Not set up", tone: "muted" };
+  }
+
+  if (!whatsappWorker.running) {
+    return { status: "Offline", tone: "bad" };
+  }
+
+  if (!whatsappWorker.paired) {
     return { status: "Awaiting pairing", tone: "warn" };
   }
 
@@ -635,6 +716,14 @@ function deriveSummary(status: SystemStatusResponse): {
     };
   }
 
+  if (status.whatsappWorker.configured && !status.whatsappWorker.running) {
+    return {
+      tone: "warn",
+      title: "WhatsApp bridge offline",
+      description: "Start the WhatsApp worker (bun run dev:whatsapp) to receive messages.",
+    };
+  }
+
   if (!status.server.providerConfigured || !status.automationWorker.providerConfigured) {
     return {
       tone: "warn",
@@ -646,7 +735,7 @@ function deriveSummary(status: SystemStatusResponse): {
   return {
     tone: "ok",
     title: "All systems operational",
-    description: "Server, workers, and Telegram bridge are healthy.",
+    description: "Server, workers, and bridges are healthy.",
   };
 }
 

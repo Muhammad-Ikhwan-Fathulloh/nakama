@@ -27,8 +27,13 @@ function formatUserContextError(error: unknown): string {
   return formatError(error);
 }
 
+interface UserContextSettingsProps {
+  onSaveSuccess?: () => void;
+  autoInit?: boolean;
+}
+
 /** USER.md editor row for Settings — render inside a parent card. */
-export function UserContextSettings() {
+export function UserContextSettings({ onSaveSuccess, autoInit = false }: UserContextSettingsProps = {}) {
   const {
     data: status,
     isLoading,
@@ -43,6 +48,7 @@ export function UserContextSettings() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [autoInitAttempted, setAutoInitAttempted] = useState(false);
 
   const busy = initMutation.isPending || writeMutation.isPending;
   const isDirty = content !== savedContent;
@@ -57,6 +63,33 @@ export function UserContextSettings() {
       setSavedContent("");
     }
   }, [status]);
+
+  // Auto-create USER.md in wizard contexts so the user can immediately edit
+  useEffect(() => {
+    if (!autoInit || autoInitAttempted || isActive || isLoading || !status) {
+      return;
+    }
+
+    setAutoInitAttempted(true);
+
+    async function autoCreate() {
+      setFormError(null);
+      setHint(null);
+
+      try {
+        const result = await initMutation.mutateAsync();
+        await refetch();
+        if (result.created) {
+          setEditorOpen(true);
+        }
+        setHint(result.created ? "Template created." : "USER.md already exists.");
+      } catch (error) {
+        setFormError(formatUserContextError(error));
+      }
+    }
+
+    void autoCreate();
+  }, [autoInit, autoInitAttempted, isActive, isLoading, status, initMutation, refetch]);
 
   function handleEditorOpenChange(open: boolean) {
     setEditorOpen(open);
@@ -82,6 +115,19 @@ export function UserContextSettings() {
     }
   }
 
+  async function handleInitAndEdit() {
+    setFormError(null);
+    setHint(null);
+
+    try {
+      await initMutation.mutateAsync();
+      await refetch();
+      setEditorOpen(true);
+    } catch (error) {
+      setFormError(formatUserContextError(error));
+    }
+  }
+
   async function handleSave() {
     setFormError(null);
     setHint(null);
@@ -92,6 +138,7 @@ export function UserContextSettings() {
       setHint("Saved. Start a new chat to apply.");
       setEditorOpen(false);
       await refetch();
+      onSaveSuccess?.();
     } catch (error) {
       setFormError(formatUserContextError(error));
     }
@@ -124,7 +171,34 @@ export function UserContextSettings() {
 
         {isLoading ? (
           <Spinner />
-        ) : loadError ? null : !isActive ? (
+        ) : loadError ? null : isActive ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => setEditorOpen(true)}
+          >
+            {isDirty ? "Edit · unsaved" : "Edit"}
+          </Button>
+        ) : autoInit ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void handleInitAndEdit()}
+          >
+            {initMutation.isPending ? (
+              <>
+                <Spinner className="mr-2" />
+                Creating…
+              </>
+            ) : (
+              "Edit"
+            )}
+          </Button>
+        ) : (
           <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void handleInit()}>
             {initMutation.isPending ? (
               <>
@@ -135,16 +209,6 @@ export function UserContextSettings() {
               "Create"
             )}
           </Button>
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onClick={() => setEditorOpen(true)}
-          >
-            {isDirty ? "Edit · unsaved" : "Edit"}
-          </Button>
         )}
       </div>
 
@@ -153,7 +217,7 @@ export function UserContextSettings() {
           <DialogHeader>
             <DialogTitle>About you (USER.md)</DialogTitle>
             <DialogDescription>
-              Name, preferences, and projects. Start a new chat after saving to apply changes.
+              A quick note so the agent knows who you are.
             </DialogDescription>
           </DialogHeader>
 
