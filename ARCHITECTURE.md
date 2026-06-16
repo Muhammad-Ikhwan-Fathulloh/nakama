@@ -2,8 +2,6 @@
 
 TinyClaw is a personal AI assistant: one agent runtime, multiple thin clients. Users chat with configurable bots, draft automations, and (eventually) run them. Everything funnels through a single HTTP server; clients do not embed agent logic.
 
-For what works today, see [FEATURES.md](./FEATURES.md). For HTTP routes, see `apps/server/openapi.json` or `/openapi.json` at runtime.
-
 ## System overview
 
 ```mermaid
