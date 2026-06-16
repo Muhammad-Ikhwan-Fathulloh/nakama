@@ -115,6 +115,19 @@ export function UserContextSettings({ onSaveSuccess, autoInit = false }: UserCon
     }
   }
 
+  async function handleInitAndEdit() {
+    setFormError(null);
+    setHint(null);
+
+    try {
+      await initMutation.mutateAsync();
+      await refetch();
+      setEditorOpen(true);
+    } catch (error) {
+      setFormError(formatUserContextError(error));
+    }
+  }
+
   async function handleSave() {
     setFormError(null);
     setHint(null);
@@ -158,7 +171,34 @@ export function UserContextSettings({ onSaveSuccess, autoInit = false }: UserCon
 
         {isLoading ? (
           <Spinner />
-        ) : loadError ? null : !isActive ? (
+        ) : loadError ? null : isActive ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => setEditorOpen(true)}
+          >
+            {isDirty ? "Edit · unsaved" : "Edit"}
+          </Button>
+        ) : autoInit ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void handleInitAndEdit()}
+          >
+            {initMutation.isPending ? (
+              <>
+                <Spinner className="mr-2" />
+                Creating…
+              </>
+            ) : (
+              "Edit"
+            )}
+          </Button>
+        ) : (
           <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void handleInit()}>
             {initMutation.isPending ? (
               <>
@@ -168,16 +208,6 @@ export function UserContextSettings({ onSaveSuccess, autoInit = false }: UserCon
             ) : (
               "Create"
             )}
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onClick={() => setEditorOpen(true)}
-          >
-            {isDirty ? "Edit · unsaved" : "Edit"}
           </Button>
         )}
       </div>

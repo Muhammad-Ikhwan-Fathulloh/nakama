@@ -4,6 +4,11 @@
 
 A multi-agent platform (monorepo). Each profile has a **soul** — a set of files that define the agent's identity, style, operating instructions, and continuity memory.
 
+## Tools
+
+- **Runtime & package manager:** [Bun](https://bun.sh) (1.3+). Use `bun install`, `bun run`, and `bun test` for all workspace commands.
+- **Dev server:** `bun run dev:server` (HTTP API), `bun run dev:web` (dashboard), `bun run dev:cli` (interactive CLI).
+
 There's also an `apps/` directory for server, CLI, web UI, telegram, and whatsapp apps.
 
 ## Soul System (`packages/core/src/soul/`)
