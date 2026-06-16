@@ -7,6 +7,49 @@ import {
   type UserProviderName,
 } from "@tinyclaw/core";
 
+export async function ensureUserConfiguredViaCli(
+  client: TinyClawClient,
+): Promise<boolean> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return false;
+  }
+
+  console.log("TinyClaw admin setup\n");
+  console.log("No admin user found. Let's create one.\n");
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  try {
+    const email = await rl.question("Email: ");
+    const password = await rl.question("Password: ", { mask: true });
+    const confirmPassword = await rl.question("Confirm password: ", { mask: true });
+
+    if (password !== confirmPassword) {
+      console.log("\nPasswords do not match.");
+      return false;
+    }
+
+    if (password.length < 8) {
+      console.log("\nPassword must be at least 8 characters.");
+      return false;
+    }
+
+    const result = await client.setupUser(email, password);
+    console.log("\nAdmin user created successfully.");
+
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(`\nFailed to create admin user: ${message}`);
+    return false;
+  } finally {
+    rl.close();
+  }
+}
+
 export async function ensureProviderConfiguredViaCli(
   client: TinyClawClient,
 ): Promise<boolean> {
