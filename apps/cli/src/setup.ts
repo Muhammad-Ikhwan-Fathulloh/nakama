@@ -12,6 +12,11 @@ function readPassword(prompt: string): Promise<string> {
     const stdin = process.stdin;
     const stdout = process.stdout;
 
+    if (!stdin.isTTY || typeof stdin.setRawMode !== "function") {
+      reject(new Error("Terminal does not support raw mode"));
+      return;
+    }
+
     stdout.write(prompt);
 
     stdin.setRawMode(true);
@@ -74,31 +79,34 @@ export async function ensureUserConfiguredViaCli(
     output: process.stdout,
   });
 
+  let email: string;
   try {
-    const email = await rl.question("Email: ");
-    const password = await readPassword("Password: ");
-    const confirmPassword = await readPassword("Confirm password: ");
+    email = await rl.question("Email: ");
+  } finally {
+    rl.close();
+  }
 
-    if (password !== confirmPassword) {
-      console.log("Passwords do not match.");
-      return false;
-    }
+  const password = await readPassword("Password: ");
+  const confirmPassword = await readPassword("Confirm password: ");
 
-    if (password.length < 8) {
-      console.log("Password must be at least 8 characters.");
-      return false;
-    }
+  if (password !== confirmPassword) {
+    console.log("Passwords do not match.");
+    return false;
+  }
 
+  if (password.length < 8) {
+    console.log("Password must be at least 8 characters.");
+    return false;
+  }
+
+  try {
     const result = await client.setupUser(email, password);
     console.log("Admin user created successfully.");
-
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.log(`Failed to create admin user: ${message}`);
     return false;
-  } finally {
-    rl.close();
   }
 }
 
