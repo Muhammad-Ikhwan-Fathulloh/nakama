@@ -52,6 +52,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
   }, []);
 
   const handleComplete = useCallback(() => {
+    localStorage.setItem("tinyclaw:setup-completed", "true");
     if (onComplete) {
       onComplete();
     } else {
