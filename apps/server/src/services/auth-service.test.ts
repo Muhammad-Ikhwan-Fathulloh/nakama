@@ -1,9 +1,41 @@
-import { describe, expect, test, beforeEach } from "bun:test";
-import { AuthService } from "./auth-service";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { AuthService, resolveJwtSecret } from "./auth-service";
 
 const TEST_CONFIG = {
   jwtSecret: "test-secret-key-for-jwt-signing-1234567890",
 };
+
+describe("resolveJwtSecret", () => {
+  const originalEnv = process.env.TINYCLAW_JWT_SECRET;
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.TINYCLAW_JWT_SECRET;
+    } else {
+      process.env.TINYCLAW_JWT_SECRET = originalEnv;
+    }
+  });
+
+  test("returns env var when set", async () => {
+    process.env.TINYCLAW_JWT_SECRET = "env-secret-123";
+    const secret = await resolveJwtSecret();
+    expect(secret).toBe("env-secret-123");
+  });
+
+  test("generates a new secret when env var is not set", async () => {
+    delete process.env.TINYCLAW_JWT_SECRET;
+    const secret = await resolveJwtSecret();
+    expect(secret).toBeTruthy();
+    expect(secret.length).toBe(32);
+  });
+
+  test("returns persisted secret on subsequent calls", async () => {
+    delete process.env.TINYCLAW_JWT_SECRET;
+    const secret1 = await resolveJwtSecret();
+    const secret2 = await resolveJwtSecret();
+    expect(secret2).toBe(secret1);
+  });
+});
 
 describe("AuthService", () => {
   let authService: AuthService;

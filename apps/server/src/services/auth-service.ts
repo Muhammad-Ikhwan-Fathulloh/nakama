@@ -1,11 +1,40 @@
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
+import {
+  getUserConfigDir,
+  getUserConfigPath,
+  loadUserConfig,
+  saveUserConfig,
+} from "@tinyclaw/core";
 
 const SALT_ROUNDS = 10;
 const TOKEN_EXPIRY_DAYS = 7;
 
 export interface AuthServiceConfig {
   jwtSecret: string;
+}
+
+export async function resolveJwtSecret(): Promise<string> {
+  const envSecret = process.env.TINYCLAW_JWT_SECRET;
+  if (envSecret) {
+    return envSecret;
+  }
+
+  const config = await loadUserConfig();
+  const persistedSecret = config?.jwtSecret;
+  if (persistedSecret) {
+    return persistedSecret;
+  }
+
+  const generated = crypto.randomUUID().replace(/-/g, "");
+  const newConfig = config ?? {
+    defaultProviderId: null,
+    defaultModel: null,
+    providers: [],
+  };
+  await saveUserConfig({ ...newConfig, jwtSecret: generated });
+
+  return generated;
 }
 
 export class AuthService {
