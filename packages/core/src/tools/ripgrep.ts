@@ -34,6 +34,7 @@ export function buildRipgrepArgs(options: {
     "--json",
     "--line-number",
     "--no-heading",
+    "--ignore-case",
     "--max-count",
     String(options.maxResults),
   ];

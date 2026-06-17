@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { getKnowledgeBaseExtractedDir } from "../knowledge-base/paths";
+import { getKnowledgeBaseDir } from "../knowledge-base/paths";
 import { runKnowledgeBaseSearch } from "./knowledge-base-search";
 
 describe("knowledge_base_search tool", () => {
@@ -57,7 +57,7 @@ describe("knowledge_base_search tool", () => {
     );
   }
 
-  test("searches extracted knowledge base files only", async () => {
+  test("searches all knowledge base files", async () => {
     await setupExtractedFile("notes.txt", "alpha project fact\nbeta line\n");
 
     const profileDir = path.join(tempConfigDir, "profiles", profileId);
@@ -70,8 +70,7 @@ describe("knowledge_base_search tool", () => {
 
     expect(result.matchCount).toBe(1);
     expect(result.matches[0]?.text).toContain("alpha project fact");
-    expect(result.root).toBe(getKnowledgeBaseExtractedDir(profileId));
-    expect(result.matches.every((match) => match.file.endsWith(".txt"))).toBe(true);
+    expect(result.root).toBe(getKnowledgeBaseDir(profileId));
   });
 
   test("filters by source filename", async () => {

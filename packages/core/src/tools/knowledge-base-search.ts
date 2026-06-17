@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import type { ToolContext, ToolDefinition } from "../contract";
-import { getKnowledgeBaseExtractedDir, getKnowledgeBaseExtractedPath } from "../knowledge-base/paths";
+import { getKnowledgeBaseDir, getKnowledgeBaseExtractedPath } from "../knowledge-base/paths";
 import { ensureKnowledgeBaseDirs, listKnowledgeBaseDocuments } from "../knowledge-base/store";
 import { getProfileSoulDir } from "../soul/resolve";
 import {
@@ -135,10 +135,10 @@ async function resolveSearchTarget(
   profileId: string,
   filename: string | null,
 ): Promise<SearchTarget> {
-  const extractedDir = getKnowledgeBaseExtractedDir(profileId);
+  const knowledgeBaseDir = getKnowledgeBaseDir(profileId);
 
   if (!filename) {
-    return { kind: "dir", root: extractedDir, glob: "*.txt" };
+    return { kind: "dir", root: knowledgeBaseDir, glob: "*" };
   }
 
   const documents = await listKnowledgeBaseDocuments(profileId);
@@ -148,7 +148,7 @@ async function resolveSearchTarget(
   );
 
   if (!document) {
-    return { kind: "missing", root: extractedDir };
+    return { kind: "missing", root: knowledgeBaseDir };
   }
 
   return {
