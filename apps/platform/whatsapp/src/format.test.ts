@@ -34,6 +34,29 @@ describe("splitWhatsAppMessage", () => {
     expect(splitWhatsAppMessage("Hello")).toEqual(["Hello"]);
   });
 
+  test("splits on paragraph boundaries into chat bubbles", () => {
+    const first = "A".repeat(195);
+    const second = "B".repeat(195);
+    const third = "Third end.";
+    const text = `${first}\n\n${second}\n\n${third}`;
+    const chunks = splitWhatsAppMessage(text);
+
+    expect(chunks).toEqual([
+      `${first}\n\n${second}`,
+      third,
+    ]);
+  });
+
+  test("splits long paragraphs by words", () => {
+    const text = "word ".repeat(120).trim();
+    const chunks = splitWhatsAppMessage(text);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(400);
+    }
+  });
+
   test("splits text exceeding WhatsApp limit", () => {
     const text = "a".repeat(70_000);
     const chunks = splitWhatsAppMessage(text);
