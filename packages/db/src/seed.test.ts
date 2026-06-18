@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { BUILTIN_TOOL_IDS } from "@tinyclaw/core/tools/protected";
 import { createInMemoryDatabaseAdapter } from "./adapters/in-memory";
-import { ensureBuiltinTools, removeUnsupportedTools } from "./seed";
+import { ensureBuiltinTools, removeUnsupportedTools, seedDatabase } from "./seed";
 
 describe("seed cleanup", () => {
   test("removes unsupported tool handler types", async () => {
@@ -38,6 +38,31 @@ describe("seed cleanup", () => {
 });
 
 describe("seed built-in tools", () => {
+  test("backfills missing system profiles when the database is not empty", async () => {
+    const db = createInMemoryDatabaseAdapter();
+    const now = new Date().toISOString();
+
+    await db.upsertProfile({
+      id: "profile_custom",
+      name: "Custom Bot",
+      systemPrompt: "custom",
+      model: null,
+      isSuper: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await seedDatabase(db);
+
+    const profiles = await db.listProfiles();
+
+    expect(profiles.map((profile) => profile.id).sort()).toEqual([
+      "default",
+      "profile_custom",
+      "super_bot",
+    ]);
+  });
+
   test("backfills create_skill to all existing profiles", async () => {
     const db = createInMemoryDatabaseAdapter();
     const now = new Date().toISOString();

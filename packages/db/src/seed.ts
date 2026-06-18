@@ -11,11 +11,21 @@ const LEGACY_BUILTIN_TOOL_NAMES = new Set(["echo", "log", "delay", "search_works
 const SUPPORTED_TOOL_HANDLER_TYPES = new Set(["builtin", "bash", "javascript"]);
 
 export async function seedDatabase(db: DatabaseAdapter): Promise<void> {
+  await ensureSystemProfiles(db);
+
+  await removeLegacyBuiltinTools(db);
+  await removeUnsupportedTools(db);
+  await ensureBuiltinTools(db);
+  await ensureBashToolForSuperBot(db);
+  await ensureSuperBotSystemPrompt(db);
+}
+
+async function ensureSystemProfiles(db: DatabaseAdapter): Promise<void> {
   const existingProfiles = await db.listProfiles();
+  const existingProfileIds = new Set(existingProfiles.map((profile) => profile.id));
+  const now = new Date().toISOString();
 
-  if (existingProfiles.length === 0) {
-    const now = new Date().toISOString();
-
+  if (!existingProfileIds.has(SUPER_BOT_PROFILE_ID)) {
     await db.upsertProfile({
       id: SUPER_BOT_PROFILE_ID,
       name: "Super Bot",
@@ -25,7 +35,9 @@ export async function seedDatabase(db: DatabaseAdapter): Promise<void> {
       createdAt: now,
       updatedAt: now,
     });
+  }
 
+  if (!existingProfileIds.has(DEFAULT_PROFILE_ID)) {
     await db.upsertProfile({
       id: DEFAULT_PROFILE_ID,
       name: "Default Bot",
@@ -36,12 +48,6 @@ export async function seedDatabase(db: DatabaseAdapter): Promise<void> {
       updatedAt: now,
     });
   }
-
-  await removeLegacyBuiltinTools(db);
-  await removeUnsupportedTools(db);
-  await ensureBuiltinTools(db);
-  await ensureBashToolForSuperBot(db);
-  await ensureSuperBotSystemPrompt(db);
 }
 
 export async function removeLegacyBuiltinTools(db: DatabaseAdapter): Promise<void> {

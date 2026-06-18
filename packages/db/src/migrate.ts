@@ -18,6 +18,7 @@ export function migrateDatabase(db: Database): void {
   migrateMcpTables(db);
   migrateSkillsTables(db);
   migrateUsersTable(db);
+  migrateLegacyProfileIds(db);
 }
 
 function migrateProfilesTable(db: Database): void {
@@ -189,6 +190,110 @@ function migrateUsersTable(db: Database): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (email);
   `);
+}
+
+const LEGACY_PROFILE_ID_MAP = [
+  ["profile_default", "default"],
+  ["profile_super_bot", "super_bot"],
+] as const;
+
+function migrateLegacyProfileIds(db: Database): void {
+  const rows = db.prepare("SELECT id FROM profiles").all() as Array<{ id: string }>;
+  const existingIds = new Set(rows.map((row) => row.id));
+  const pending = LEGACY_PROFILE_ID_MAP.filter(([legacyId]) => existingIds.has(legacyId));
+
+  if (pending.length === 0) {
+    return;
+  }
+
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("BEGIN");
+
+  try {
+    for (const [legacyId, canonicalId] of pending) {
+      copyProfileRow(db, legacyId, canonicalId);
+      moveProfileReferences(db, legacyId, canonicalId);
+      db.prepare("DELETE FROM profiles WHERE id = ?").run(legacyId);
+    }
+
+    const violations = db.prepare("PRAGMA foreign_key_check").all() as Array<unknown>;
+
+    if (violations.length > 0) {
+      throw new Error("Legacy profile ID migration left foreign key violations.");
+    }
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function copyProfileRow(db: Database, legacyId: string, canonicalId: string): void {
+  db.prepare(`
+    INSERT INTO profiles (
+      id,
+      name,
+      system_prompt,
+      model,
+      thinking_enabled,
+      thinking_effort,
+      is_super,
+      created_at,
+      updated_at
+    )
+    SELECT
+      ?,
+      name,
+      system_prompt,
+      model,
+      thinking_enabled,
+      thinking_effort,
+      is_super,
+      created_at,
+      updated_at
+    FROM profiles
+    WHERE id = ?
+    ON CONFLICT(id) DO NOTHING
+  `).run(canonicalId, legacyId);
+}
+
+function moveProfileReferences(db: Database, legacyId: string, canonicalId: string): void {
+  db.prepare("UPDATE automations SET profile_id = ? WHERE profile_id = ?").run(
+    canonicalId,
+    legacyId,
+  );
+  db.prepare("UPDATE sessions SET profile_id = ? WHERE profile_id = ?").run(
+    canonicalId,
+    legacyId,
+  );
+  db.prepare("UPDATE tasks SET profile_id = ? WHERE profile_id = ?").run(
+    canonicalId,
+    legacyId,
+  );
+
+  moveProfileJoinReferences(db, "profile_tools", "tool_id", legacyId, canonicalId);
+  moveProfileJoinReferences(db, "profile_mcp_servers", "server_id", legacyId, canonicalId);
+  moveProfileJoinReferences(db, "profile_skills", "skill_id", legacyId, canonicalId);
+}
+
+function moveProfileJoinReferences(
+  db: Database,
+  tableName: "profile_tools" | "profile_mcp_servers" | "profile_skills",
+  relatedColumn: "tool_id" | "server_id" | "skill_id",
+  legacyId: string,
+  canonicalId: string,
+): void {
+  db.prepare(`
+    INSERT OR IGNORE INTO ${tableName} (profile_id, ${relatedColumn})
+    SELECT ?, ${relatedColumn}
+    FROM ${tableName}
+    WHERE profile_id = ?
+  `).run(canonicalId, legacyId);
+
+  db.prepare(`DELETE FROM ${tableName} WHERE profile_id = ?`).run(legacyId);
 }
 
 function migrateSessionsTable(db: Database): void {
