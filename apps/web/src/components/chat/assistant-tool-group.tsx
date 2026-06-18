@@ -8,11 +8,12 @@ import {
   formatToolCommand,
   formatToolResult,
 } from "@/lib/chat-stream";
+import { ThinkingContent } from "@/components/chat/thinking-content";
 import { cn } from "@/lib/utils";
 
 export type AssistantTurnSegment =
   | { kind: "work"; thinking?: ChatListItem; tools: ChatListItem[] }
-  | { kind: "text"; message: ChatListItem };
+  | { kind: "text"; message: ChatListItem; thinking?: ChatListItem };
 
 export function segmentAssistantTurn(messages: ChatListItem[]): AssistantTurnSegment[] {
   const segments: AssistantTurnSegment[] = [];
@@ -49,7 +50,7 @@ export function segmentAssistantTurn(messages: ChatListItem[]): AssistantTurnSeg
       }
 
       if (hasText) {
-        segments.push({ kind: "text", message });
+        segments.push({ kind: "text", message, ...(hasThinking ? { thinking: message } : {}) });
       }
     }
   }
@@ -92,14 +93,26 @@ function hasAssistantText(message: ChatListItem): boolean {
   return Boolean(message.content.trim() || (message.streaming && !message.thinkingStreaming));
 }
 
-export function AssistantTurnSegmentView({ segment }: { segment: AssistantTurnSegment }) {
+export function AssistantTurnSegmentView({
+  segment,
+  showThinking = true,
+}: {
+  segment: AssistantTurnSegment;
+  showThinking?: boolean;
+}) {
   if (segment.kind === "work") {
-    return <AssistantWorkGroup thinking={segment.thinking} tools={segment.tools} />;
+    return (
+      <AssistantWorkGroup
+        thinking={showThinking ? segment.thinking : undefined}
+        tools={segment.tools}
+      />
+    );
   }
 
   return (
     <Message from="assistant" className="max-w-full mr-0 ml-0 items-start justify-start">
       <MessageContent className="max-w-full ml-0 group-[.is-user]:ml-0">
+        {showThinking && segment.thinking ? <ThinkingBlock message={segment.thinking} /> : null}
         <AssistantTextContent message={segment.message} />
       </MessageContent>
     </Message>
@@ -171,13 +184,14 @@ function formatWorkGroupLabel(toolCount: number): string {
 function ThinkingBlock({ message }: { message: ChatListItem }) {
   const isStreaming = Boolean(message.thinkingStreaming);
   const text = message.thinking?.trim();
-  const [open, setOpen] = useState(isStreaming);
+  const shouldAutoOpen = Boolean(text) && Boolean(message.streaming);
+  const [open, setOpen] = useState(isStreaming || shouldAutoOpen);
 
   useEffect(() => {
-    if (isStreaming) {
+    if (isStreaming || shouldAutoOpen) {
       setOpen(true);
     }
-  }, [isStreaming]);
+  }, [isStreaming, shouldAutoOpen]);
 
   if (!text && !isStreaming) {
     return null;
@@ -191,9 +205,7 @@ function ThinkingBlock({ message }: { message: ChatListItem }) {
         label={isStreaming ? "Thinking…" : "Thought"}
       />
       {open && text ? (
-        <p className="mt-2 whitespace-pre-wrap pl-5 text-sm leading-relaxed text-muted-foreground">
-          {text}
-        </p>
+        <ThinkingContent className="mt-2 pl-5">{text}</ThinkingContent>
       ) : null}
     </div>
   );
@@ -214,7 +226,7 @@ function ThinkingInline({
 
   return (
     <div className={cn("relative", !isLast && "pb-3")}>
-      <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{text}</p>
+      <ThinkingContent>{text}</ThinkingContent>
     </div>
   );
 }
