@@ -63,8 +63,9 @@ export function createHonoApp(options: ServerOptions) {
   registerAutomationRoutes(app, options);
   registerTaskRoutes(app, options);
 
-  app.get("/openapi.json", () => {
-    return new Response(serializeHttpOpenApiSpec(app), {
+  app.get("/openapi.json", (c) => {
+    const serverUrl = new URL(c.req.url).origin;
+    return new Response(serializeHttpOpenApiSpec(app, serverUrl), {
       headers: { "Content-Type": "application/json; charset=utf-8" },
     });
   });

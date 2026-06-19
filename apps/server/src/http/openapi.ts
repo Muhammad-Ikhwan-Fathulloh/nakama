@@ -33,7 +33,7 @@ function buildNativeOpenApiApp(): HonoApp {
   return app;
 }
 
-export function buildHttpOpenApiSpec(app?: HonoApp) {
+export function buildHttpOpenApiSpec(app?: HonoApp, serverUrl?: string) {
   const openApiApp = app ?? buildNativeOpenApiApp();
   return openApiApp.getOpenAPI31Document({
     openapi: "3.1.0",
@@ -44,7 +44,7 @@ export function buildHttpOpenApiSpec(app?: HonoApp) {
     },
     servers: [
       {
-        url: DEFAULT_SERVER_URL,
+        url: serverUrl ?? DEFAULT_SERVER_URL,
         description: "Local dev server",
       },
     ],
@@ -66,6 +66,6 @@ export function buildHttpOpenApiSpec(app?: HonoApp) {
   });
 }
 
-export function serializeHttpOpenApiSpec(app?: HonoApp): string {
-  return JSON.stringify(buildHttpOpenApiSpec(app), null, 2);
+export function serializeHttpOpenApiSpec(app?: HonoApp, serverUrl?: string): string {
+  return JSON.stringify(buildHttpOpenApiSpec(app, serverUrl), null, 2);
 }
