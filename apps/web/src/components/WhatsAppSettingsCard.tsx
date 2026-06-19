@@ -259,7 +259,7 @@ export function WhatsAppSettingsCard({
     }
 
     return (
-      <Card className="w-full">
+      <Card className="w-full shadow-none">
         <CardContent className="py-3">{skeleton}</CardContent>
       </Card>
     );
@@ -565,7 +565,7 @@ export function WhatsAppSettingsCard({
   }
 
   return (
-    <Card className="w-full">
+    <Card className="w-full shadow-none">
       <CardContent className="p-0">{content}</CardContent>
     </Card>
   );

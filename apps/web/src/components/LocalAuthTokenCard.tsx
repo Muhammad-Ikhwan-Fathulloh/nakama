@@ -40,7 +40,7 @@ export function LocalAuthTokenCard() {
   const statusLine = formError ?? hint;
 
   return (
-    <Card className="w-full">
+    <Card className="w-full shadow-none">
       <CardContent className="divide-y divide-border p-0">
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
           <div className="min-w-0 space-y-0.5">

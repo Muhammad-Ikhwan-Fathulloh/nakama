@@ -634,14 +634,9 @@ function StatusSkeleton() {
 }
 
 function buildServiceColumns(status: SystemStatusResponse) {
-  const { server, telegramWorker, whatsappWorker } = status;
+  const { telegramWorker, whatsappWorker } = status;
 
   return [
-    {
-      icon: ServerIcon,
-      title: "Server",
-      ...serverServiceStatus(server),
-    },
     {
       icon: MessageCircleIcon,
       title: "Telegram",
@@ -653,21 +648,6 @@ function buildServiceColumns(status: SystemStatusResponse) {
       ...whatsappServiceStatus(whatsappWorker),
     },
   ];
-}
-
-function serverServiceStatus(server: SystemStatusResponse["server"]): {
-  status: string;
-  tone: ServiceStatusTone;
-} {
-  if (!server.ok) {
-    return { status: "Offline", tone: "bad" };
-  }
-
-  if (!server.providerConfigured) {
-    return { status: "No provider", tone: "warn" };
-  }
-
-  return { status: "Healthy", tone: "ok" };
 }
 
 function telegramServiceStatus(

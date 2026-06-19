@@ -52,7 +52,7 @@ export function ProviderSettingsCard({ formError, onFormError }: ProviderSetting
 
   return (
     <>
-      <Card className="w-full">
+      <Card className="w-full shadow-none">
         <CardHeader className="border-b border-border pb-3">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -151,7 +151,7 @@ export function ProviderSettingsCard({ formError, onFormError }: ProviderSetting
 
 function ProviderSettingsSkeleton() {
   return (
-    <Card className="w-full animate-pulse" aria-hidden="true">
+    <Card className="w-full animate-pulse shadow-none" aria-hidden="true">
       <CardContent className="space-y-5 p-4">
         <div className="space-y-2">
           <div className="h-4 w-32 rounded bg-muted" />
