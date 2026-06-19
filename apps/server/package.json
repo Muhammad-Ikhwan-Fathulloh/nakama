@@ -6,9 +6,7 @@
     "start": "NODE_ENV=production bun run dist/index.js",
     "dev": "bun run scripts/dev.ts",
     "build": "bun build ./src/index.ts --outdir dist --target bun",
-    "test": "bun test",
-    "openapi:generate": "bun run scripts/generate-openapi.ts",
-    "dev:docs": "bun run scripts/serve-docs.ts"
+    "test": "bun test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",

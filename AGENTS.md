@@ -56,4 +56,4 @@ Soul files are read by `loadSoulStack()` (`load.ts`) and injected by `composeSou
 - Routes live in `apps/server/src/http/routes/*`.
 - Auth and CSRF checks live in `apps/server/src/http/auth-middleware.ts` with helpers in `shared.ts`.
 - OpenAPI is generated from the Hono route registration in `apps/server/src/http/openapi.ts`.
-- `apps/server/openapi.json` is generated output, not the source of truth.
+- `/openapi.json` is served dynamically from the Hono app; route registration is the source of truth.

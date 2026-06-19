@@ -67,7 +67,7 @@ tinyclaw/
 │   ├── platform/
 │   │   └── telegram/        # Telegram bot bridge; auto-starts server
 │   │   └── whatsapp/        # WhatsApp bot bridge; auto-starts server
-│   └── server/              # HTTP API, agent runtime, LLM providers, openapi.json, scripts/
+│   └── server/              # HTTP API, agent runtime, LLM providers
 ├── packages/
 │   ├── core/                # Config, API types, provider interfaces, builtin tools
 │   ├── agent/               # Chat harness, tool loop, automation engine
@@ -136,7 +136,7 @@ See the [system overview](#system-overview) diagram for the full topology. At a 
 2. Hono auth middleware validates bearer auth or browser session auth, then enforces CSRF for mutating browser requests.
 3. A route handler in `apps/server/src/http/routes/*` parses the request and calls the right service.
 4. Service code calls `AgentService`, persistence, workers, MCP, automations, or tasks as needed.
-5. `/openapi.json` is generated from the same Hono route registration, so docs and runtime stay aligned.
+5. `/openapi.json` is served from the same Hono route registration, so docs and runtime stay aligned.
 
 ## Cross-cutting concerns
 
@@ -146,6 +146,6 @@ See the [system overview](#system-overview) diagram for the full topology. At a 
 
 **API versioning** — `TINYCLAW_API_VERSION` is returned by `/health`. The server uses it for singleton detection (don't start a duplicate). Clients should reject incompatible versions.
 
-**OpenAPI** — The HTTP surface is generated from Hono route registration in `apps/server/src/http/routes/*` via `apps/server/src/http/openapi.ts`. Regenerate with `bun run openapi:generate`. Treat route code as source of truth, not `openapi.json`.
+**OpenAPI** — The HTTP surface is generated from Hono route registration in `apps/server/src/http/routes/*` via `apps/server/src/http/openapi.ts` and served at `/openapi.json`. Treat route code as source of truth.
 
 **Offline-friendly startup** — The server starts without an API key. Chat and automation drafting degrade to heuristic fallbacks when no provider is configured.
