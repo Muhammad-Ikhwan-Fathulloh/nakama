@@ -8,7 +8,9 @@
     <script>
       (function () {
         var stored = localStorage.getItem("tinyclaw-theme");
-        var resolved = "dark";
+        var resolved = window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
         if (stored === "light" || stored === "dark") {
           resolved = stored;
         } else if (stored === "system") {

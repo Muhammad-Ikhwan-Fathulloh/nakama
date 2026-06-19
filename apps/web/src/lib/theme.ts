@@ -34,7 +34,7 @@ export function resolveTheme(theme: Theme): ResolvedTheme {
 }
 
 export function getInitialTheme(): Theme {
-  return getStoredTheme() ?? "dark";
+  return getStoredTheme() ?? "system";
 }
 
 export function applyTheme(theme: Theme): void {
