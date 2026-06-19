@@ -84,8 +84,10 @@ import type {
   StoredTask,
   TaskRunRecord,
   WorkerLogsResponse,
+  RotateLocalAuthTokenResponse,
 } from "@tinyclaw/core/contract";
 import { readApiErrorMessage, TinyClawApiError } from "@tinyclaw/core/api-error";
+import { loadLocalAuthToken } from "@tinyclaw/core/local-auth";
 import { resolveServerUrl } from "@tinyclaw/core/runtime";
 import {
   normalizeStreamHandlers,
@@ -879,9 +881,16 @@ export class TinyClawClient {
     });
   }
 
+  async rotateLocalAuthToken(): Promise<RotateLocalAuthTokenResponse> {
+    return this.request<RotateLocalAuthTokenResponse>("/v1/auth/local-token/rotate", {
+      method: "POST",
+    });
+  }
+
   private async request<T>(
     path: string,
     init?: RequestInit,
+    retried = false,
   ): Promise<T> {
     const method = (init?.method ?? "GET").toUpperCase();
     const headers = this.buildHeaders(method, init?.headers);
@@ -893,6 +902,19 @@ export class TinyClawClient {
     });
 
     if (!response.ok) {
+      if (
+        response.status === 401 &&
+        this.authToken &&
+        !retried &&
+        path !== "/v1/auth/local-token/rotate"
+      ) {
+        const freshToken = await loadLocalAuthToken();
+        if (freshToken && freshToken !== this.authToken) {
+          this.authToken = freshToken;
+          return this.request(path, init, true);
+        }
+      }
+
       throw await createApiError(response, path);
     }
 

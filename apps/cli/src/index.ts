@@ -4,6 +4,21 @@ import { runChat } from "./chat";
 import { parseCliProfileArgs } from "./profile";
 import { ensureUserConfiguredViaCli, ensureProviderConfiguredViaCli } from "./setup";
 import { ensureServerRunning, stopSpawnedServer } from "@tinyclaw/core/ensure-server";
+import {
+  formatRotateTokenError,
+  isRotateTokenCommand,
+  runRotateToken,
+} from "./rotate-token";
+
+if (isRotateTokenCommand()) {
+  try {
+    await runRotateToken();
+    process.exit(0);
+  } catch (error) {
+    console.error(formatRotateTokenError(error));
+    process.exit(1);
+  }
+}
 
 let spawnedChild: Bun.Subprocess | null = null;
 const abortController = new AbortController();

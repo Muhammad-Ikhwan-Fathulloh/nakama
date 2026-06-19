@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ProviderSettingsCard } from "@/components/settings/ProviderSettingsCard";
+import { LocalAuthTokenCard } from "@/components/LocalAuthTokenCard";
 import { TelegramSettingsCard } from "@/components/TelegramSettingsCard";
 import { WhatsAppSettingsCard } from "@/components/WhatsAppSettingsCard";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -105,6 +106,8 @@ export function SettingsPage() {
       <TelegramSettingsCard />
 
       <WhatsAppSettingsCard />
+
+      <LocalAuthTokenCard />
 
       <ProviderSettingsCard formError={formError} onFormError={setFormError} />
 

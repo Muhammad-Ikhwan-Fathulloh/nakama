@@ -1,4 +1,9 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { getUserConfigDir, saveUserConfig } from "@tinyclaw/core";
 import { createClient } from "./index";
 
 test("chat stream request includes cookie CSRF protection", async () => {
@@ -49,4 +54,50 @@ test("non-browser clients send local auth as a bearer token", async () => {
 
   const headers = new Headers(fetchCalls[0]!.init?.headers);
   expect(headers.get("Authorization")).toBe("Bearer local-auth-token");
+});
+
+test("non-browser clients reload the local auth token once after a 401", async () => {
+  const configDir = await mkdtemp(join(tmpdir(), "tinyclaw-client-auth-reload-"));
+  process.env.TINYCLAW_CONFIG_DIR = configDir;
+
+  try {
+    await writeFile(
+      join(getUserConfigDir(), "local-auth-token"),
+      "tc_local_stale\n",
+      "utf8",
+    );
+    await saveUserConfig({
+      defaultProviderId: null,
+      providers: [],
+      localAuthTokenHash: createHash("sha256").update("tc_local_fresh").digest("hex"),
+    });
+    await writeFile(
+      join(getUserConfigDir(), "local-auth-token"),
+      "tc_local_fresh\n",
+      "utf8",
+    );
+
+    let attempts = 0;
+    const client = createClient({
+      baseUrl: "http://localhost:4310",
+      authToken: "tc_local_stale",
+      fetch: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return new Response(JSON.stringify({ error: "Authentication required" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        return Response.json({ ok: true });
+      },
+    });
+
+    await expect(client.health()).resolves.toEqual({ ok: true });
+    expect(attempts).toBe(2);
+  } finally {
+    delete process.env.TINYCLAW_CONFIG_DIR;
+    await rm(configDir, { recursive: true, force: true });
+  }
 });

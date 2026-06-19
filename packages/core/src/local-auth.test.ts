@@ -3,7 +3,12 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadLocalAuthToken, verifyLocalAuthToken } from "./local-auth";
+import {
+  LocalAuthTokenManagedExternallyError,
+  loadLocalAuthToken,
+  rotateLocalAuthToken,
+  verifyLocalAuthToken,
+} from "./local-auth";
 import { getUserConfigDir, getUserConfigPath, saveUserConfig } from "./user-config";
 
 describe("loadLocalAuthToken", () => {
@@ -76,5 +81,28 @@ describe("loadLocalAuthToken", () => {
     await expect(verifyLocalAuthToken("tc_local_from_env")).resolves.toEqual({
       email: "local-client@tinyclaw.internal",
     });
+  });
+
+  test("rotateLocalAuthToken replaces the stored token and invalidates the old one", async () => {
+    configDir = await mkdtemp(join(tmpdir(), "tinyclaw-local-auth-"));
+    process.env.TINYCLAW_CONFIG_DIR = configDir;
+
+    const original = await loadLocalAuthToken();
+    const rotated = await rotateLocalAuthToken();
+
+    expect(rotated).toStartWith("tc_local_");
+    expect(rotated).not.toBe(original);
+    await expect(verifyLocalAuthToken(original!)).resolves.toBeNull();
+    await expect(verifyLocalAuthToken(rotated)).resolves.toEqual({
+      email: "local-client@tinyclaw.internal",
+    });
+    await expect(loadLocalAuthToken()).resolves.toBe(rotated);
+  });
+
+  test("rotateLocalAuthToken refuses when the token comes from env", async () => {
+    process.env.TINYCLAW_LOCAL_AUTH_TOKEN = "tc_local_from_env";
+    await expect(rotateLocalAuthToken()).rejects.toBeInstanceOf(
+      LocalAuthTokenManagedExternallyError,
+    );
   });
 });

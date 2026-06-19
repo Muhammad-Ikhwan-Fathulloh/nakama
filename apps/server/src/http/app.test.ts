@@ -194,6 +194,67 @@ describe("createHonoApp", () => {
     });
   });
 
+  test("rotates the local auth token from a browser session", async () => {
+    const configDir = await mkdtemp(join(tmpdir(), "tinyclaw-rotate-auth-"));
+    process.env.TINYCLAW_CONFIG_DIR = configDir;
+
+    try {
+      const app = createHonoApp(createServerOptions());
+      const setupResponse = await app.fetch(
+        new Request("http://localhost:4310/v1/auth/setup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "admin@example.com", password: "secret123" }),
+        }),
+      );
+      const setupCookies = extractSetCookies(setupResponse);
+
+      const rotateResponse = await app.fetch(
+        new Request("http://localhost:4310/v1/auth/local-token/rotate", {
+          method: "POST",
+          headers: {
+            Cookie: cookieHeaderFromSetCookies(setupCookies),
+            "X-CSRF-Token": cookieValue(setupCookies, "tinyclaw_csrf"),
+          },
+        }),
+      );
+
+      expect(rotateResponse.status).toBe(200);
+      const payload = (await rotateResponse.json()) as { token: string };
+      expect(payload.token).toStartWith("tc_local_");
+
+      const oldToken = await loadLocalAuthToken();
+      expect(oldToken).toBe(payload.token);
+    } finally {
+      delete process.env.TINYCLAW_CONFIG_DIR;
+      await rm(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects local auth token rotation from bearer auth", async () => {
+    const configDir = await mkdtemp(join(tmpdir(), "tinyclaw-rotate-auth-bearer-"));
+    process.env.TINYCLAW_CONFIG_DIR = configDir;
+
+    try {
+      const token = await loadLocalAuthToken();
+      const app = createHonoApp(createServerOptions());
+      const response = await app.fetch(
+        new Request("http://localhost:4310/v1/auth/local-token/rotate", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      );
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        error: "Sign in through the dashboard to rotate the local auth token.",
+      });
+    } finally {
+      delete process.env.TINYCLAW_CONFIG_DIR;
+      await rm(configDir, { recursive: true, force: true });
+    }
+  });
+
   test("serves health through the Hono fetch boundary", async () => {
     const app = createHonoApp(createServerOptions());
     const response = await app.fetch(new Request("http://localhost:4310/health"));

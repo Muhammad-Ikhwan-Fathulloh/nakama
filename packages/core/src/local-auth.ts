@@ -8,6 +8,15 @@ const LOCAL_CLIENT_EMAIL = "local-client@tinyclaw.internal";
 const LOCAL_AUTH_TOKEN_PREFIX = "tc_local_";
 const LOCAL_AUTH_TOKEN_FILENAME = "local-auth-token";
 
+export class LocalAuthTokenManagedExternallyError extends Error {
+  constructor() {
+    super(
+      "Local auth token is managed by TINYCLAW_LOCAL_AUTH_TOKEN and cannot be rotated on disk.",
+    );
+    this.name = "LocalAuthTokenManagedExternallyError";
+  }
+}
+
 function generateLocalAuthToken(): string {
   return `${LOCAL_AUTH_TOKEN_PREFIX}${nanoid(48)}`;
 }
@@ -74,6 +83,26 @@ export async function loadLocalAuthToken(
   _email = LOCAL_CLIENT_EMAIL,
 ): Promise<string | null> {
   return resolveLocalAuthToken();
+}
+
+export async function rotateLocalAuthToken(): Promise<string> {
+  if (process.env.TINYCLAW_LOCAL_AUTH_TOKEN?.trim()) {
+    throw new LocalAuthTokenManagedExternallyError();
+  }
+
+  const config = await loadUserConfig();
+  const token = generateLocalAuthToken();
+
+  await persistLocalAuthToken(token);
+  await saveUserConfig({
+    ...(config ?? {
+      defaultProviderId: null,
+      providers: [],
+    }),
+    localAuthTokenHash: hashLocalAuthToken(token),
+  });
+
+  return token;
 }
 
 export async function verifyLocalAuthToken(

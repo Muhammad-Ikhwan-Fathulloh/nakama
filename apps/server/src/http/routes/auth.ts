@@ -1,4 +1,9 @@
 import { createRoute, z } from "@hono/zod-openapi";
+import {
+  LocalAuthTokenManagedExternallyError,
+  rotateLocalAuthToken,
+  type RotateLocalAuthTokenResponse,
+} from "@tinyclaw/core";
 import type { HonoApp } from "../types";
 import type { ServerOptions } from "../context";
 import {
@@ -85,6 +90,28 @@ export function registerAuthRoutes(app: HonoApp, options: ServerOptions): void {
     operationId: "logoutAuth",
     responses: {
       200: { description: "Logged out", content: { "application/json": { schema: loggedOutSchema } } },
+      401: { description: "Error", content: { "application/json": { schema: errorSchema } } },
+      403: { description: "Error", content: { "application/json": { schema: errorSchema } } },
+      500: { description: "Error", content: { "application/json": { schema: errorSchema } } },
+    },
+  });
+
+  const rotateLocalAuthTokenSchema = z
+    .object({ token: z.string() })
+    .openapi("RotateLocalAuthTokenResponse");
+
+  const rotateLocalAuthTokenRoute = createRoute({
+    method: "post",
+    path: "/v1/auth/local-token/rotate",
+    tags: ["Auth"],
+    summary: "Rotate the local API token used by CLI and channel workers",
+    operationId: "rotateLocalAuthToken",
+    responses: {
+      200: {
+        description: "Rotated local auth token",
+        content: { "application/json": { schema: rotateLocalAuthTokenSchema } },
+      },
+      400: { description: "Error", content: { "application/json": { schema: errorSchema } } },
       401: { description: "Error", content: { "application/json": { schema: errorSchema } } },
       403: { description: "Error", content: { "application/json": { schema: errorSchema } } },
       500: { description: "Error", content: { "application/json": { schema: errorSchema } } },
@@ -179,5 +206,37 @@ export function registerAuthRoutes(app: HonoApp, options: ServerOptions): void {
     const headers = new Headers();
     clearBrowserSessionCookies(headers);
     return json({ ok: true }, 200, headers);
+  });
+
+  app.openAPIRegistry.registerPath(rotateLocalAuthTokenRoute);
+  app.post("/v1/auth/local-token/rotate", async (c) => {
+    if (!authService || !databaseAdapter) {
+      return errorResponse("Authentication not configured", 500);
+    }
+
+    const auth = await authenticateRequest(c.req.raw, authService, databaseAdapter);
+    if (!auth) {
+      return errorResponse("Authentication required", 401);
+    }
+
+    if (auth.mode !== "browser-session") {
+      return errorResponse(
+        "Sign in through the dashboard to rotate the local auth token.",
+        403,
+      );
+    }
+
+    assertBrowserCsrf(c.req.raw, auth, authService);
+
+    try {
+      const token = await rotateLocalAuthToken();
+      return json<RotateLocalAuthTokenResponse>({ token }, 200);
+    } catch (error) {
+      if (error instanceof LocalAuthTokenManagedExternallyError) {
+        return errorResponse(error.message, 400);
+      }
+
+      throw error;
+    }
   });
 }

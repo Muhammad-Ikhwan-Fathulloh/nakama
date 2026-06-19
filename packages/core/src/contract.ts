@@ -401,6 +401,10 @@ export interface UpdateThinkingRequest {
   effort?: ThinkingEffort;
 }
 
+export interface RotateLocalAuthTokenResponse {
+  token: string;
+}
+
 export interface TelegramSettingsResponse {
   configured: boolean;
   botTokenMasked: string | null;
