@@ -10,7 +10,11 @@ import type {
 } from "@tinyclaw/core";
 import { normalizeBaseUrl } from "@tinyclaw/core";
 import OpenAI from "openai";
-import { buildChatCompletionResult, parseJsonRecord } from "../shared";
+import {
+  buildChatCompletionResult,
+  normalizeThinkingEffort,
+  parseJsonRecord,
+} from "../shared";
 import {
   parseOpenAIToolCalls,
   toOpenAIMessages,
@@ -22,6 +26,7 @@ export interface OpenAICompatibleProviderOptions {
   baseUrl: string;
   model: string;
   displayName: string;
+  supportsThinking: boolean;
 }
 
 interface PendingToolCall {
@@ -63,6 +68,7 @@ export function createOpenAICompatibleProvider(
         system: input.system,
         messages: input.messages,
         tools: input.tools,
+        thinking: options.supportsThinking ? input.providerOptions?.thinking : undefined,
       });
     },
     streamChat(input: GenerateChatInput, handlers: StreamChatHandlers) {
@@ -71,6 +77,7 @@ export function createOpenAICompatibleProvider(
         system: input.system,
         messages: input.messages,
         tools: input.tools,
+        thinking: options.supportsThinking ? input.providerOptions?.thinking : undefined,
         handlers,
       });
     },
@@ -101,12 +108,16 @@ async function requestChatCompletion(
     system: string;
     messages: ChatMessage[];
     tools?: LlmToolDefinition[];
+    thinking?: GenerateChatInput["providerOptions"]["thinking"];
   },
 ): Promise<ChatCompletionResult> {
   try {
     const completion = await client.chat.completions.create({
       model: options.model,
       messages: await buildMessages(options.system, options.messages),
+      ...(options.thinking?.enabled
+        ? { reasoning: { effort: normalizeThinkingEffort(options.thinking.effort) } }
+        : {}),
       ...(options.tools?.length
         ? {
             tools: toOpenAITools(options.tools),
@@ -125,12 +136,16 @@ async function requestChatCompletion(
         | undefined,
     );
     const content = message?.content ?? "";
+    const thinking =
+      typeof (message as { reasoning?: string | null } | undefined)?.reasoning === "string"
+        ? (message as { reasoning?: string | null }).reasoning
+        : undefined;
 
-    if (!content.trim() && toolCalls.length === 0) {
+    if (!content.trim() && toolCalls.length === 0 && !thinking?.trim()) {
       throw new Error(`${label} returned an empty response.`);
     }
 
-    return buildChatCompletionResult({ content, toolCalls });
+    return buildChatCompletionResult({ content, toolCalls, thinking });
   } catch (error) {
     throw formatSdkError(label, error);
   }
@@ -144,6 +159,7 @@ async function streamChatCompletion(
     system: string;
     messages: ChatMessage[];
     tools?: LlmToolDefinition[];
+    thinking?: GenerateChatInput["providerOptions"]["thinking"];
     handlers: StreamChatHandlers;
   },
 ): Promise<ChatCompletionResult> {
@@ -152,6 +168,9 @@ async function streamChatCompletion(
       model: options.model,
       stream: true,
       messages: await buildMessages(options.system, options.messages),
+      ...(options.thinking?.enabled
+        ? { reasoning: { effort: normalizeThinkingEffort(options.thinking.effort) } }
+        : {}),
       ...(options.tools?.length
         ? {
             tools: toOpenAITools(options.tools),
@@ -161,6 +180,7 @@ async function streamChatCompletion(
     });
 
     let content = "";
+    let thinking = "";
     const pending = new Map<number, PendingToolCall>();
 
     for await (const chunk of stream) {
@@ -169,6 +189,16 @@ async function streamChatCompletion(
       if (delta?.content) {
         content += delta.content;
         options.handlers.onChunk(delta.content);
+      }
+
+      const reasoningDelta =
+        typeof (delta as { reasoning?: string } | undefined)?.reasoning === "string"
+          ? (delta as { reasoning?: string }).reasoning
+          : undefined;
+
+      if (reasoningDelta) {
+        thinking += reasoningDelta;
+        options.handlers.onThinking?.(reasoningDelta);
       }
 
       if (delta?.tool_calls) {
@@ -180,11 +210,11 @@ async function streamChatCompletion(
 
     const toolCalls = finalizePendingToolCalls(pending);
 
-    if (!content.trim() && toolCalls.length === 0) {
+    if (!content.trim() && toolCalls.length === 0 && !thinking.trim()) {
       throw new Error(`${label} returned an empty response.`);
     }
 
-    return buildChatCompletionResult({ content, toolCalls });
+    return buildChatCompletionResult({ content, toolCalls, thinking });
   } catch (error) {
     throw formatSdkError(label, error);
   }
