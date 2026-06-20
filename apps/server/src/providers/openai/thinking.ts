@@ -41,3 +41,8 @@ export function openAIModelSupportsThinking(
   // Unknown ids: omit reasoning to avoid upstream 400s.
   return false;
 }
+
+/** Models that reject `/v1/chat/completions` (Codex completion models). */
+export function openAIModelRequiresResponsesApi(model: string): boolean {
+  return model.trim().toLowerCase().includes("codex");
+}

@@ -328,7 +328,10 @@ export function appendOutgoingMessages(
   text: string,
   images: Array<{ mediaType: string; url: string }> = [],
   documents: Array<{ filename: string; mediaType: string }> = [],
-  options: { thinkingEnabled?: boolean } = {},
+  options: {
+    thinkingEnabled?: boolean;
+    imageAttachments?: Array<{ url?: string; mediaType: string; description?: string | null }>;
+  } = {},
 ): void {
   setMessages((current) => [
     ...current,
@@ -337,6 +340,10 @@ export function appendOutgoingMessages(
       role: "user",
       content: text,
       images: images.length > 0 ? images : undefined,
+      imageAttachments:
+        options.imageAttachments && options.imageAttachments.length > 0
+          ? options.imageAttachments
+          : undefined,
       documents: documents.length > 0 ? documents : undefined,
     },
     {

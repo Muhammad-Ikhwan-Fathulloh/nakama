@@ -94,7 +94,6 @@ import {
   replaceImagePartsWithDescriptions,
   resolveSoulStackForProfile,
   saveTelegramConfig,
-  saveUserVisionSettings,
   saveWhatsAppConfig,
   loadUserThinkingSettings,
   saveUserConfig,
@@ -107,6 +106,7 @@ import {
 import {
   DEFAULT_PROFILE_ID,
   SUPER_BOT_TOOL_AUTHORING_RULES,
+  WORKSPACE_SETTINGS_ID,
   type DatabaseAdapter,
   type StoredProfileRecord,
   type StoredTaskRunRecord,
@@ -123,6 +123,7 @@ import {
   isCostEstimated,
   resolveModel,
 } from "../providers";
+import { wrapProviderForNonVision } from "../providers/non-vision-wrap";
 import {
   applyProviderInstanceUpdate,
   buildProviderInstanceFromCreateRequest,
@@ -186,6 +187,7 @@ export class AgentService {
   private readonly sessions = new Map<string, StoredSession>();
   private readonly sessionTitleService: SessionTitleService;
   private _providerConfigured: boolean;
+  private visionSettingsPromise: Promise<void> | null = null;
 
   constructor(
     userConfig: UserConfig | null,
@@ -308,11 +310,13 @@ export class AgentService {
   }
 
   async getVisionSettings(): Promise<VisionSettingsResponse> {
+    await this.ensureVisionSettingsLoaded();
     const vision = await this.resolveVisionSettings();
     return { vision };
   }
 
   async setVisionSettings(input: UpdateVisionRequest): Promise<VisionSettingsResponse> {
+    await this.ensureVisionSettingsLoaded();
     const model = input.model?.trim() || null;
 
     if (model) {
@@ -332,7 +336,11 @@ export class AgentService {
     }
 
     const vision: VisionSettings = { model };
-    await saveUserVisionSettings(vision);
+    await this.db.upsertWorkspaceSettings({
+      id: WORKSPACE_SETTINGS_ID,
+      visionModel: model,
+      updatedAt: new Date().toISOString(),
+    });
 
     if (this.userConfig) {
       this.userConfig = {
@@ -346,12 +354,40 @@ export class AgentService {
     return { vision };
   }
 
-  private async resolveVisionSettings(): Promise<VisionSettings> {
-    if (this.userConfig?.visionModel !== undefined) {
-      return { model: this.userConfig.visionModel ?? null };
+  async ensureVisionSettingsLoaded(): Promise<void> {
+    if (!this.visionSettingsPromise) {
+      this.visionSettingsPromise = this.loadVisionSettingsFromDatabase();
     }
 
-    return loadUserVisionSettings();
+    await this.visionSettingsPromise;
+  }
+
+  private async loadVisionSettingsFromDatabase(): Promise<void> {
+    const stored = await this.db.getWorkspaceSettings();
+
+    if (stored) {
+      if (this.userConfig) {
+        this.userConfig = { ...this.userConfig, visionModel: stored.visionModel };
+      }
+      return;
+    }
+
+    const legacyModel =
+      this.userConfig?.visionModel ?? (await loadUserVisionSettings()).model ?? null;
+
+    await this.db.upsertWorkspaceSettings({
+      id: WORKSPACE_SETTINGS_ID,
+      visionModel: legacyModel,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (this.userConfig) {
+      this.userConfig = { ...this.userConfig, visionModel: legacyModel };
+    }
+  }
+
+  private async resolveVisionSettings(): Promise<VisionSettings> {
+    return { model: this.userConfig?.visionModel ?? null };
   }
 
   private async resolveThinkingSettings(): Promise<ThinkingSettings> {
@@ -1476,6 +1512,7 @@ export class AgentService {
     profileId: string,
     sessionId: string,
   ): Promise<AgentChatSession> {
+    await this.ensureVisionSettingsLoaded();
     const profile = await this.requireProfile(profileId);
     const tools = await this.resolveProfileTools(profile);
     const { systemPrompt, soulActive } = await this.resolveProfileSystemPrompt(
@@ -1624,9 +1661,15 @@ export class AgentService {
     }
 
     const provider = createProviderForInstance(resolved.instance, resolved.model);
+    const primarySupportsVision = resolvePrimaryModelVisionSupport(
+      this.userConfig,
+      profile.model,
+    );
+    const resolvedProvider =
+      primarySupportsVision === false ? wrapProviderForNonVision(provider) : provider;
 
     return this.createHarness({
-      provider,
+      provider: resolvedProvider,
       providerInstance: resolved.instance,
       modelId: resolved.model,
       thinking: this.resolveProfileThinkingSettings(profile),

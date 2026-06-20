@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import type { ChatMessage } from "./contract";
 import {
   extractImageParts,
+  formatImageDescriptionText,
+  isImageDescriptionText,
+  parseImageDescriptionText,
   replaceImagePartsWithDescriptions,
+  resolveMessagesForNonVisionProvider,
+  resolveUserContentForNonVisionProvider,
 } from "./image-content";
 
 const tinyPngBase64 =
@@ -24,7 +30,7 @@ describe("extractImageParts", () => {
 });
 
 describe("replaceImagePartsWithDescriptions", () => {
-  test("replaces image parts with text descriptions", () => {
+  test("annotates image parts with descriptions", () => {
     const result = replaceImagePartsWithDescriptions(
       [
         { type: "text", text: "What is this?" },
@@ -35,16 +41,84 @@ describe("replaceImagePartsWithDescriptions", () => {
 
     expect(result).toEqual([
       { type: "text", text: "What is this?" },
-      { type: "text", text: "[Image]\nA red square on white background." },
+      {
+        type: "image",
+        mediaType: "image/png",
+        data: tinyPngBase64,
+        description: "A red square on white background.",
+      },
     ]);
   });
 
-  test("returns plain string when only image descriptions remain", () => {
+  test("returns plain string when only image descriptions remain for string content", () => {
     const result = replaceImagePartsWithDescriptions(
       [{ type: "image", mediaType: "image/png", data: tinyPngBase64 }],
       ["A chart with three bars."],
     );
 
-    expect(result).toBe("[Image]\nA chart with three bars.");
+    expect(result).toEqual([
+      {
+        type: "image",
+        mediaType: "image/png",
+        data: tinyPngBase64,
+        description: "A chart with three bars.",
+      },
+    ]);
+  });
+});
+
+describe("image description text helpers", () => {
+  test("formats and parses image description text", () => {
+    const text = formatImageDescriptionText("A diagram with arrows.");
+    expect(isImageDescriptionText(text)).toBe(true);
+    expect(parseImageDescriptionText(text)).toBe("A diagram with arrows.");
+  });
+});
+
+describe("resolveUserContentForNonVisionProvider", () => {
+  test("converts described image parts to text", () => {
+    const result = resolveUserContentForNonVisionProvider([
+      { type: "text", text: "What is this?" },
+      {
+        type: "image",
+        mediaType: "image/png",
+        data: tinyPngBase64,
+        description: "A red square.",
+      },
+    ]);
+
+    expect(result).toEqual([
+      { type: "text", text: "What is this?" },
+      { type: "text", text: "[Image]\nA red square." },
+    ]);
+  });
+
+  test("passes through image parts without descriptions", () => {
+    const imagePart = { type: "image", mediaType: "image/png", data: tinyPngBase64 } as const;
+    expect(resolveUserContentForNonVisionProvider([imagePart])).toEqual([imagePart]);
+  });
+});
+
+describe("resolveMessagesForNonVisionProvider", () => {
+  test("maps only user messages", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            mediaType: "image/png",
+            data: tinyPngBase64,
+            description: "A chart.",
+          },
+        ],
+      },
+      { role: "assistant", content: "Looks like a chart." },
+    ];
+
+    expect(resolveMessagesForNonVisionProvider(messages)).toEqual([
+      { role: "user", content: "[Image]\nA chart." },
+      { role: "assistant", content: "Looks like a chart." },
+    ]);
   });
 });

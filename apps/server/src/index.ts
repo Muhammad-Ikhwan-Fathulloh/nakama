@@ -57,6 +57,7 @@ const authService = new AuthService();
 
 const llmUsageTracker = await LlmUsageTracker.create(database.adapter);
 const agent = new AgentService(userConfig, provider, database.adapter, llmUsageTracker);
+await agent.ensureVisionSettingsLoaded();
 const mcpClientManager = new McpClientManager();
 const mcpService = new McpService(database.adapter, mcpClientManager);
 const skillsService = new SkillsService(database.adapter);

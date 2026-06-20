@@ -17,6 +17,7 @@ export function migrateDatabase(db: Database): void {
   migrateUsersTable(db);
   migrateBrowserSessionsTable(db);
   migrateLegacyProfileIds(db);
+  migrateWorkspaceSettingsTable(db);
 }
 
 export function resolveSchemaPath(options: {
@@ -350,4 +351,14 @@ function migrateSessionsTable(db: Database): void {
       ALTER TABLE sessions ADD COLUMN agent_todos TEXT DEFAULT '[]' NOT NULL;
     `);
   }
+}
+
+function migrateWorkspaceSettingsTable(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workspace_settings (
+      id TEXT PRIMARY KEY NOT NULL,
+      vision_model TEXT,
+      updated_at TEXT NOT NULL
+    );
+  `);
 }

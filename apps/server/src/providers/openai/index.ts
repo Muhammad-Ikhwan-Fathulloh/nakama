@@ -13,7 +13,7 @@ import type {
 import { messagesIncludeUserDocuments, messagesIncludeUserImages, toOpenAIChatUserContent } from "@tinyclaw/core";
 import { generateOpenAIResponsesChat } from "./responses";
 import { buildChatCompletionResult, parseJsonRecord, readSseEvents } from "../shared";
-import { openAIModelSupportsThinking } from "./thinking";
+import { openAIModelSupportsThinking, openAIModelRequiresResponsesApi } from "./thinking";
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
@@ -139,6 +139,10 @@ function usesResponsesApi(
   model: string,
   customModels?: CustomModelEntry[],
 ): boolean {
+  if (openAIModelRequiresResponsesApi(model)) {
+    return true;
+  }
+
   if (messagesIncludeUserDocuments(input.messages)) {
     return true;
   }

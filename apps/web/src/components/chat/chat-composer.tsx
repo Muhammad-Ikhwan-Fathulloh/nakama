@@ -48,6 +48,7 @@ import {
 } from "@/lib/chat-stream";
 import { AgentTodoPanel } from "@/components/chat/AgentTodoPanel";
 import { TextAttachmentPreview } from "@/components/chat/text-attachment-preview";
+import { ImageAttachmentPreview } from "@/components/chat/image-attachment-preview";
 import { cn } from "@/lib/utils";
 import {
   isPastedTextDocument,
@@ -92,6 +93,7 @@ interface ChatComposerFullProps extends ChatComposerBaseProps {
   }>;
   profileModelId?: string | null;
   currentModelSelection: string | null;
+  primarySupportsVision?: boolean;
   onModelChange: (selection: string) => void;
   renderModelLabel: (selection: string | null) => string | null;
 }
@@ -163,7 +165,7 @@ export function ChatComposer(props: ChatComposerProps) {
                 onSubmit(text.trim(), files);
               }}
             >
-              <ChatAttachmentHeader />
+              <ChatAttachmentHeader primarySupportsVision={props.primarySupportsVision} />
               <PromptInputBody>
                 <PromptInputTextarea
                   className="min-h-11 max-h-36 px-1 py-1.5 text-base leading-relaxed placeholder:text-muted-foreground sm:min-h-10 sm:text-sm"
@@ -209,7 +211,9 @@ export function ChatComposer(props: ChatComposerProps) {
           onSubmit(text.trim(), files);
         }}
       >
-        {!isMinimal ? <ChatAttachmentHeader /> : null}
+        {!isMinimal ? (
+          <ChatAttachmentHeader primarySupportsVision={props.primarySupportsVision} />
+        ) : null}
         <PromptInputBody>
           <PromptInputTextarea
             className={
@@ -430,12 +434,18 @@ function ChatComposerFullFooter({
   );
 }
 
-function ChatAttachmentHeader() {
+function ChatAttachmentHeader({
+  primarySupportsVision,
+}: {
+  primarySupportsVision?: boolean;
+}) {
   const attachments = usePromptInputAttachments();
 
   if (attachments.files.length === 0) {
     return null;
   }
+
+  const useImageAttachmentPreview = primarySupportsVision === false;
 
   return (
     <PromptInputHeader className="pb-0">
@@ -445,6 +455,16 @@ function ChatAttachmentHeader() {
           const mediaType = file.mediaType ?? "";
 
           if (isImageFilePart(file)) {
+            if (useImageAttachmentPreview) {
+              return (
+                <ImageAttachmentPreview
+                  key={file.id}
+                  url={file.url}
+                  onRemove={() => attachments.remove(file.id)}
+                />
+              );
+            }
+
             return (
               <div
                 key={file.id}

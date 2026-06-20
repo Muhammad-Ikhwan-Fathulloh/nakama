@@ -1,4 +1,8 @@
 import type { DocumentAttachment, ImageAttachment, MessageContentPart } from "@tinyclaw/core/contract";
+import {
+  isImageDescriptionText,
+  parseImageDescriptionText,
+} from "@tinyclaw/core/image-content";
 import { normalizeDocumentMediaType, parseDataUrl, parseDocumentDataUrl } from "@tinyclaw/core/message-content";
 import type { FileUIPart } from "ai";
 import {
@@ -79,11 +83,78 @@ export function userContentToDisplayImages(
   }
 
   return content
-    .filter((part): part is Extract<typeof part, { type: "image" }> => part.type === "image")
+    .filter(
+      (part): part is Extract<typeof part, { type: "image" }> =>
+        part.type === "image" && !part.description?.trim(),
+    )
     .map((part) => ({
       mediaType: part.mediaType,
       url: `data:${part.mediaType};base64,${part.data}`,
     }));
+}
+
+export interface DisplayImageAttachment {
+  url?: string;
+  mediaType: string;
+  description?: string | null;
+}
+
+export function userContentToDisplayImageAttachments(
+  content: string | MessageContentPart[],
+): DisplayImageAttachment[] {
+  const attachments: DisplayImageAttachment[] = [];
+
+  if (typeof content === "string") {
+    if (isImageDescriptionText(content)) {
+      attachments.push({
+        mediaType: "image/unknown",
+        description: parseImageDescriptionText(content),
+      });
+    }
+
+    return attachments;
+  }
+
+  for (const part of content) {
+    if (part.type === "image" && part.description?.trim()) {
+      attachments.push({
+        mediaType: part.mediaType,
+        url: `data:${part.mediaType};base64,${part.data}`,
+        description: part.description.trim(),
+      });
+      continue;
+    }
+
+    if (part.type === "text" && isImageDescriptionText(part.text)) {
+      attachments.push({
+        mediaType: "image/unknown",
+        description: parseImageDescriptionText(part.text),
+      });
+    }
+  }
+
+  return attachments;
+}
+
+export function stripImageDescriptionsFromDisplayText(
+  content: string | MessageContentPart[],
+): string {
+  if (typeof content === "string") {
+    return isImageDescriptionText(content) ? "" : content;
+  }
+
+  return content
+    .filter(
+      (part): part is Extract<MessageContentPart, { type: "text" }> =>
+        part.type === "text" && !isImageDescriptionText(part.text),
+    )
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
+}
+
+export function parseLegacyImageDescriptionText(text: string): string | null {
+  return parseImageDescriptionText(text);
 }
 
 export function filePartsToDisplayDocuments(files: FileUIPart[]): DisplayDocument[] {

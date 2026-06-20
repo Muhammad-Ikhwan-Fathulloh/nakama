@@ -1,7 +1,9 @@
-import type { MessageContentPart } from "./contract";
+import type { ChatMessage, MessageContentPart } from "./contract";
 
 export const IMAGE_VISION_SYSTEM_PROMPT =
   "Describe the image in detail for another AI that cannot see it. Include visible text, UI elements, diagrams, colors, layout, and any other relevant context. Be concise but complete.";
+
+export const IMAGE_DESCRIPTION_PREFIX = "[Image]\n";
 
 export function extractImageParts(
   content: string | MessageContentPart[],
@@ -16,6 +18,22 @@ export function extractImageParts(
   );
 }
 
+export function formatImageDescriptionText(description: string): string {
+  return `${IMAGE_DESCRIPTION_PREFIX}${description.trim()}`;
+}
+
+export function isImageDescriptionText(text: string): boolean {
+  return text.startsWith(IMAGE_DESCRIPTION_PREFIX);
+}
+
+export function parseImageDescriptionText(text: string): string | null {
+  if (!isImageDescriptionText(text)) {
+    return null;
+  }
+
+  return text.slice(IMAGE_DESCRIPTION_PREFIX.length).trim() || null;
+}
+
 export function replaceImagePartsWithDescriptions(
   content: string | MessageContentPart[],
   descriptions: string[],
@@ -25,9 +43,7 @@ export function replaceImagePartsWithDescriptions(
       return content;
     }
 
-    return descriptions
-      .map((description) => `[Image]\n${description.trim()}`)
-      .join("\n\n");
+    return descriptions.map((description) => formatImageDescriptionText(description)).join("\n\n");
   }
 
   const parts: MessageContentPart[] = [];
@@ -42,8 +58,8 @@ export function replaceImagePartsWithDescriptions(
       }
 
       parts.push({
-        type: "text",
-        text: `[Image]\n${description}`,
+        ...part,
+        description,
       });
       descriptionIndex += 1;
       continue;
@@ -56,5 +72,42 @@ export function replaceImagePartsWithDescriptions(
     throw new Error("Image description count does not match image parts.");
   }
 
+  return parts;
+}
+
+export function resolveUserContentForNonVisionProvider(
+  content: string | MessageContentPart[],
+): string | MessageContentPart[] {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  const parts: MessageContentPart[] = [];
+
+  for (const part of content) {
+    if (part.type === "image" && part.description?.trim()) {
+      parts.push({
+        type: "text",
+        text: formatImageDescriptionText(part.description),
+      });
+      continue;
+    }
+
+    parts.push(part);
+  }
+
   return parts.length === 1 && parts[0]?.type === "text" ? parts[0].text : parts;
+}
+
+export function resolveMessagesForNonVisionProvider(messages: readonly ChatMessage[]): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.role !== "user") {
+      return message;
+    }
+
+    return {
+      ...message,
+      content: resolveUserContentForNonVisionProvider(message.content),
+    };
+  });
 }

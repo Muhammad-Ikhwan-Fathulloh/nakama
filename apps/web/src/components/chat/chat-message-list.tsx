@@ -29,6 +29,7 @@ import {
 import { formatSessionTimestamp, type ChatListItem } from "@/lib/chat-history";
 import { isPastedTextDocument } from "@/lib/pasted-text";
 import { TextAttachmentPreview } from "@/components/chat/text-attachment-preview";
+import { ImageAttachmentPreview } from "@/components/chat/image-attachment-preview";
 import { cn } from "@/lib/utils";
 
 interface ChatMessageListProps {
@@ -342,6 +343,18 @@ function UserMessageContent({ message }: { message: ChatListItem }) {
 
   return (
     <div className="space-y-2">
+      {message.imageAttachments?.length ? (
+        <div className="flex flex-wrap gap-2">
+          {message.imageAttachments.map((image, index) => (
+            <ImageAttachmentPreview
+              key={image.url ?? `image-attachment-${index}`}
+              url={image.url}
+              description={image.description}
+              caption={message.content || null}
+            />
+          ))}
+        </div>
+      ) : null}
       {message.images?.length ? (
         <div className="flex flex-wrap gap-2">
           {message.images.map((image) => (

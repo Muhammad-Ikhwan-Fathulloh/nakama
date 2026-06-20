@@ -1,5 +1,5 @@
 import { getUserMessageText, type MessageContentPart } from "@tinyclaw/core";
-import { LLM_USAGE_STATS_ID } from "../constants";
+import { LLM_USAGE_STATS_ID, WORKSPACE_SETTINGS_ID } from "../constants";
 import type {
   DatabaseAdapter,
   StoredBrowserSessionRecord,
@@ -17,6 +17,7 @@ import type {
   StoredTaskRunRecord,
   StoredToolRecord,
   StoredUserRecord,
+  StoredWorkspaceSettingsRecord,
 } from "../types";
 
 export function createInMemoryDatabaseAdapter(): DatabaseAdapter {
@@ -41,6 +42,7 @@ export function createInMemoryDatabaseAdapter(): DatabaseAdapter {
   const usersByEmail = new Map<string, StoredUserRecord>();
   const browserSessionsByHash = new Map<string, StoredBrowserSessionRecord>();
   let llmUsageStats: StoredLlmUsageStatsRecord | null = null;
+  let workspaceSettings: StoredWorkspaceSettingsRecord | null = null;
 
   return {
     async getUserByEmail(email) {
@@ -364,6 +366,14 @@ export function createInMemoryDatabaseAdapter(): DatabaseAdapter {
         estimatedCostUsd: llmUsageStats.estimatedCostUsd + delta.estimatedCostUsd,
         updatedAt,
       };
+    },
+
+    async getWorkspaceSettings() {
+      return workspaceSettings;
+    },
+
+    async upsertWorkspaceSettings(record) {
+      workspaceSettings = record;
     },
 
     async listMcpServers() {

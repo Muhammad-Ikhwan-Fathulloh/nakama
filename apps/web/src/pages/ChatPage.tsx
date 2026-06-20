@@ -35,6 +35,7 @@ import {
   extractModelId,
   groupModelsByProvider,
   resolveModelThinkingSupport,
+  resolveModelVisionSupport,
 } from "@/lib/models";
 import { SETUP_PATH } from "@/lib/navigation";
 
@@ -132,6 +133,10 @@ export function ChatPage() {
 
   const activeModelSupportsThinking = useMemo(() => {
     return resolveModelThinkingSupport(currentModelSelection, providerModelGroups);
+  }, [currentModelSelection, providerModelGroups]);
+
+  const activeModelSupportsVision = useMemo(() => {
+    return resolveModelVisionSupport(currentModelSelection, providerModelGroups);
   }, [currentModelSelection, providerModelGroups]);
 
   const showThinking =
@@ -382,15 +387,22 @@ export function ChatPage() {
         }
       }
 
+      const displayImages = images.map((image) => ({
+        mediaType: image.mediaType,
+        url: `data:${image.mediaType};base64,${image.data}`,
+      }));
+      const useImageAttachments = activeModelSupportsVision === false;
+
       appendOutgoingMessages(
         setMessages,
         text,
-        images.map((image) => ({
-          mediaType: image.mediaType,
-          url: `data:${image.mediaType};base64,${image.data}`,
-        })),
+        useImageAttachments ? [] : displayImages,
         displayDocuments.length > 0 ? displayDocuments : undefined,
-        { thinkingEnabled: showThinking },
+        {
+          thinkingEnabled: showThinking,
+          imageAttachments:
+            useImageAttachments && displayImages.length > 0 ? displayImages : undefined,
+        },
       );
 
       const abortController = new AbortController();
@@ -446,7 +458,7 @@ export function ChatPage() {
         setBusy(false);
       }
     },
-    [session, busy, profileId, syncChatUrl, showThinking],
+    [session, busy, profileId, syncChatUrl, showThinking, activeModelSupportsVision],
   );
 
   const handleTryAgainMessage = useCallback(
@@ -543,6 +555,7 @@ export function ChatPage() {
       providerModelGroups={providerModelGroups}
       profileModelId={extractModelId(activeProfile?.model)}
       currentModelSelection={currentModelSelection}
+      primarySupportsVision={activeModelSupportsVision}
       onModelChange={handleModelChange}
       renderModelLabel={renderModelLabel}
       todos={agentTodos}

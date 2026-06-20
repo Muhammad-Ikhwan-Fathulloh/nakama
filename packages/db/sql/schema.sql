@@ -191,3 +191,9 @@ CREATE TABLE IF NOT EXISTS browser_sessions (
 
 CREATE UNIQUE INDEX IF NOT EXISTS browser_sessions_token_hash_unique
   ON browser_sessions (session_token_hash);
+
+CREATE TABLE IF NOT EXISTS workspace_settings (
+  id TEXT PRIMARY KEY NOT NULL,
+  vision_model TEXT,
+  updated_at TEXT NOT NULL
+);

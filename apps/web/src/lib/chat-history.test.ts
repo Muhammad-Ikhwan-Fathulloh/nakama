@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { ChatMessage, SessionMessageMeta } from "@tinyclaw/core/contract";
 import { chatMessagesToListItems } from "./chat-history";
 
+const tinyPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
 describe("chatMessagesToListItems", () => {
   test("preserves history index and metadata for rendered items", () => {
     const messages: ChatMessage[] = [
@@ -40,6 +43,62 @@ describe("chatMessagesToListItems", () => {
       historyIndex: 3,
       createdAt: "2026-06-14T10:00:03.000Z",
       content: "Done",
+    });
+  });
+
+  test("renders described images as attachments and keeps vision-native images inline", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is this?" },
+          {
+            type: "image",
+            mediaType: "image/png",
+            data: tinyPngBase64,
+            description: "A red square.",
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Another one" },
+          { type: "image", mediaType: "image/png", data: tinyPngBase64 },
+        ],
+      },
+      {
+        role: "user",
+        content: "[Image]\nLegacy description only.",
+      },
+    ];
+
+    const items = chatMessagesToListItems(messages);
+
+    expect(items[0]).toMatchObject({
+      content: "What is this?",
+      imageAttachments: [
+        {
+          mediaType: "image/png",
+          url: `data:image/png;base64,${tinyPngBase64}`,
+          description: "A red square.",
+        },
+      ],
+    });
+    expect(items[0]?.images).toBeUndefined();
+    expect(items[1]).toMatchObject({
+      content: "Another one",
+      images: [
+        {
+          mediaType: "image/png",
+          url: `data:image/png;base64,${tinyPngBase64}`,
+        },
+      ],
+    });
+    expect(items[1]?.imageAttachments).toBeUndefined();
+    expect(items[2]).toMatchObject({
+      content: "",
+      imageAttachments: [{ mediaType: "image/unknown", description: "Legacy description only." }],
     });
   });
 });

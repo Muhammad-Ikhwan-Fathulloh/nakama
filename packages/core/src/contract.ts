@@ -203,7 +203,7 @@ export interface CompactionResponse {
 
 export type MessageContentPart =
   | { type: "text"; text: string }
-  | { type: "image"; mediaType: string; data: string }
+  | { type: "image"; mediaType: string; data: string; description?: string }
   | { type: "document"; filename: string; mediaType: string; data: string };
 
 export interface ImageAttachment {

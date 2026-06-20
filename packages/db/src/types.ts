@@ -108,6 +108,12 @@ export interface StoredLlmUsageStatsRecord {
   updatedAt: string;
 }
 
+export interface StoredWorkspaceSettingsRecord {
+  id: string;
+  visionModel: string | null;
+  updatedAt: string;
+}
+
 export interface LlmUsageStatsDelta {
   requestCount: number;
   inputTokens: number;
@@ -244,6 +250,9 @@ export interface DatabaseAdapter {
     delta: LlmUsageStatsDelta,
     trackedSince: string,
   ): Promise<void>;
+
+  getWorkspaceSettings(): Promise<StoredWorkspaceSettingsRecord | null>;
+  upsertWorkspaceSettings(record: StoredWorkspaceSettingsRecord): Promise<void>;
 
   listMcpServers(): Promise<StoredMcpServerRecord[]>;
   getMcpServer(id: string): Promise<StoredMcpServerRecord | null>;

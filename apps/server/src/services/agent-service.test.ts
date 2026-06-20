@@ -178,3 +178,35 @@ describe("AgentService thinking provider options", () => {
     expect(options?.thinking).toEqual({ enabled: true, effort: "high" });
   });
 });
+
+describe("AgentService vision settings", () => {
+  test("persists vision model in the database", async () => {
+    const db = createInMemoryDatabaseAdapter();
+    const service = new AgentService(
+      {
+        defaultProviderId: "p-openai-1",
+        providers: [
+          {
+            id: "p-openai-1",
+            type: "openai",
+            label: "OpenAI",
+            apiKey: "test-key",
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      },
+      null,
+      db,
+    );
+
+    const saved = await service.setVisionSettings({ model: "p-openai-1::gpt-4o-mini" });
+
+    expect(saved).toEqual({ vision: { model: "p-openai-1::gpt-4o-mini" } });
+    expect(await db.getWorkspaceSettings()).toMatchObject({
+      visionModel: "p-openai-1::gpt-4o-mini",
+    });
+    expect(await service.getVisionSettings()).toEqual({
+      vision: { model: "p-openai-1::gpt-4o-mini" },
+    });
+  });
+});

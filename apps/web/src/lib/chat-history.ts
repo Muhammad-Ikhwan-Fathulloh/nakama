@@ -1,10 +1,9 @@
 import type {
   ChatMessage,
-  MessageContentPart,
   SessionMessageMeta,
 } from "@tinyclaw/core/contract";
 import { extractThinkingFromAssistantMessage } from "@tinyclaw/core/thinking-content";
-import { userContentToDisplayDocuments, userContentToDisplayImages } from "@/lib/chat-images";
+import { userContentToDisplayDocuments, userContentToDisplayImageAttachments, userContentToDisplayImages, stripImageDescriptionsFromDisplayText } from "@/lib/chat-images";
 
 export interface RequestedChatSession {
   profileId: string;
@@ -57,6 +56,7 @@ export interface ChatListItem {
   thinking?: string;
   thinkingStreaming?: boolean;
   images?: Array<{ url: string; mediaType: string }>;
+  imageAttachments?: Array<{ url?: string; mediaType: string; description?: string | null }>;
   documents?: Array<{ filename: string; mediaType: string }>;
   streaming?: boolean;
   toolCallId?: string;
@@ -101,13 +101,10 @@ export function chatMessagesToListItems(
 
     if (message.role === "user") {
       const content = message.content;
-      const text =
-        typeof content === "string"
-          ? content
-          : content
-              .filter((part): part is Extract<MessageContentPart, { type: "text" }> => part.type === "text")
-              .map((part) => part.text)
-              .join("\n");
+      const text = stripImageDescriptionsFromDisplayText(content);
+      const images = userContentToDisplayImages(content);
+      const imageAttachments = userContentToDisplayImageAttachments(content);
+      const documents = userContentToDisplayDocuments(content);
 
       items.push({
         id: `history-${index}`,
@@ -115,8 +112,9 @@ export function chatMessagesToListItems(
         createdAt: meta?.createdAt,
         role: "user",
         content: text,
-        images: userContentToDisplayImages(content),
-        documents: userContentToDisplayDocuments(content),
+        ...(images.length > 0 ? { images } : {}),
+        ...(imageAttachments.length > 0 ? { imageAttachments } : {}),
+        ...(documents.length > 0 ? { documents } : {}),
       });
       continue;
     }

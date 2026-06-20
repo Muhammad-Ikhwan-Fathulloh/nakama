@@ -3,7 +3,7 @@ import type { ChatMessage } from "@tinyclaw/core";
 import { getUserMessageText } from "@tinyclaw/core";
 import { ensureDatabaseDirectory, resolveDatabasePath } from "../database-url";
 import { migrateDatabase } from "../migrate";
-import { LLM_USAGE_STATS_ID } from "../constants";
+import { LLM_USAGE_STATS_ID, WORKSPACE_SETTINGS_ID } from "../constants";
 import type {
   DatabaseAdapter,
   StoredBrowserSessionRecord,
@@ -21,6 +21,7 @@ import type {
   StoredTaskRunRecord,
   StoredToolRecord,
   StoredUserRecord,
+  StoredWorkspaceSettingsRecord,
 } from "../types";
 
 export interface SqliteDatabase {
@@ -129,6 +130,12 @@ interface LlmUsageStatsRow {
   output_tokens: number;
   estimated_cost_usd: number;
   tracked_since: string;
+  updated_at: string;
+}
+
+interface WorkspaceSettingsRow {
+  id: string;
+  vision_model: string | null;
   updated_at: string;
 }
 
@@ -474,6 +481,16 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
       input_tokens = llm_usage_stats.input_tokens + excluded.input_tokens,
       output_tokens = llm_usage_stats.output_tokens + excluded.output_tokens,
       estimated_cost_usd = llm_usage_stats.estimated_cost_usd + excluded.estimated_cost_usd,
+      updated_at = excluded.updated_at
+  `);
+  const getWorkspaceSettingsStmt = db.prepare(
+    "SELECT * FROM workspace_settings WHERE id = ?",
+  );
+  const upsertWorkspaceSettingsStmt = db.prepare(`
+    INSERT INTO workspace_settings (id, vision_model, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      vision_model = excluded.vision_model,
       updated_at = excluded.updated_at
   `);
 
@@ -864,6 +881,17 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
       );
     },
 
+    async getWorkspaceSettings() {
+      const row = getWorkspaceSettingsStmt.get(WORKSPACE_SETTINGS_ID) as
+        | WorkspaceSettingsRow
+        | null;
+      return row ? toWorkspaceSettingsRecord(row) : null;
+    },
+
+    async upsertWorkspaceSettings(record) {
+      upsertWorkspaceSettingsStmt.run(record.id, record.visionModel, record.updatedAt);
+    },
+
     async listMcpServers() {
       return listMcpServersStmt.all().map((row) => toMcpServerRecord(row as McpServerRow));
     },
@@ -1167,6 +1195,14 @@ function toLlmUsageStatsRecord(row: LlmUsageStatsRow): StoredLlmUsageStatsRecord
     outputTokens: row.output_tokens,
     estimatedCostUsd: row.estimated_cost_usd,
     trackedSince: row.tracked_since,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toWorkspaceSettingsRecord(row: WorkspaceSettingsRow): StoredWorkspaceSettingsRecord {
+  return {
+    id: row.id,
+    visionModel: row.vision_model?.trim() || null,
     updatedAt: row.updated_at,
   };
 }
