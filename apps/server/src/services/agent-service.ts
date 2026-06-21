@@ -44,10 +44,14 @@ import type {
   SyncSkillsResponse,
   SoulStatusResponse,
   TelegramSettingsResponse,
+  EmailSettingsResponse,
+  SendEmailTestRequest,
+  SendEmailTestResponse,
   ToolDefinition,
   UpdateProfileRequest,
   UpdateSoulFileRequest,
   UpdateTelegramSettingsRequest,
+  UpdateEmailSettingsRequest,
   UpdateWhatsAppSettingsRequest,
   UpdateUserContextRequest,
   UserContextStatusResponse,
@@ -85,6 +89,11 @@ import {
   isWritableSoulFileKey,
   loadSoulStack,
   loadTelegramSettingsPublic,
+  loadEmailSettingsPublic,
+  loadEmailConfig,
+  isEmailConfigComplete,
+  emailConfigToMailboxConfig,
+  saveEmailConfig,
   loadWhatsAppSettingsPublic,
   loadUserTimezone,
   loadUserVisionSettings,
@@ -95,6 +104,7 @@ import {
   resolveSoulStackForProfile,
   saveTelegramConfig,
   saveWhatsAppConfig,
+  createSmtpSender,
   loadUserThinkingSettings,
   saveUserConfig,
   saveUserThinkingSettings,
@@ -151,7 +161,7 @@ import { ProfileService } from "./profile-service";
 import type { SkillsService } from "./skills-service";
 import { SessionTitleService } from "./session-title-service";
 import { SuperBotSessionState } from "./super-bot-session-state";
-import { resolveToolsFromStorage } from "./tool-resolver";
+import { resolveProfileStoredTools } from "./tool-resolver";
 import { wrapProviderWithUsageTracking } from "../providers/usage-tracking";
 import type { LlmUsageTracker } from "./llm-usage-tracker";
 import {
@@ -455,6 +465,41 @@ export class AgentService {
 
   async regenerateTelegramHandshake(): Promise<TelegramSettingsResponse> {
     return regenerateTelegramHandshake();
+  }
+
+  async getEmailSettings(): Promise<EmailSettingsResponse> {
+    return loadEmailSettingsPublic();
+  }
+
+  async setEmailSettings(input: UpdateEmailSettingsRequest): Promise<EmailSettingsResponse> {
+    return saveEmailConfig(input);
+  }
+
+  async sendEmailTest(recipient: string): Promise<SendEmailTestResponse> {
+    const config = await loadEmailConfig();
+
+    if (!isEmailConfigComplete(config)) {
+      throw new Error("Complete email settings before sending a test message.");
+    }
+
+    const to = recipient.trim();
+
+    if (!to) {
+      throw new Error("Recipient email is required.");
+    }
+
+    const sender = createSmtpSender(emailConfigToMailboxConfig(config!));
+    const result = await sender.send({
+      to,
+      subject: "TinyClaw test email",
+      text: "This is a test email from your TinyClaw deployment.",
+    });
+
+    return {
+      ok: true,
+      to,
+      messageId: result.messageId,
+    };
   }
 
   async getWhatsAppSettings(): Promise<WhatsAppSettingsResponse> {
@@ -1510,7 +1555,7 @@ export class AgentService {
     const builtinOverrides = this.skillsService
       ? [createCreateSkillTool(this.skillsService)]
       : [];
-    const tools = await resolveToolsFromStorage(storedTools, builtinOverrides);
+    const tools = await resolveProfileStoredTools(storedTools, builtinOverrides);
     const includeAutomationTools = options.includeAutomationTools ?? true;
     const includeTodoTools = options.includeTodoTools ?? true;
 

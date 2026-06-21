@@ -580,6 +580,43 @@ export interface UpdateTelegramSettingsRequest {
   profileId?: string;
 }
 
+export interface EmailSettingsResponse {
+  configured: boolean;
+  imapHost: string | null;
+  imapPort: number | null;
+  imapSecure: boolean | null;
+  smtpHost: string | null;
+  smtpPort: number | null;
+  smtpSecure: boolean | null;
+  username: string | null;
+  from: string | null;
+  fromName: string | null;
+  passwordMasked: string | null;
+}
+
+export interface UpdateEmailSettingsRequest {
+  imapHost?: string;
+  imapPort?: number;
+  imapSecure?: boolean;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  username?: string;
+  password?: string;
+  from?: string;
+  fromName?: string;
+}
+
+export interface SendEmailTestRequest {
+  to?: string;
+}
+
+export interface SendEmailTestResponse {
+  ok: true;
+  to: string;
+  messageId: string;
+}
+
 export interface WhatsAppSettingsResponse {
   configured: boolean;
   phoneNumberMasked: string | null;
