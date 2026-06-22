@@ -75,7 +75,7 @@ import {
   composeKnowledgeBaseCatalog,
   composeSoulSystemPrompt,
   createId,
-  createSessionId,
+  nanoid,
   extractImageParts,
   findProviderInstance,
   getActiveProviderInstance,
@@ -680,7 +680,7 @@ export class AgentService {
     userId?: string | null,
   ): Promise<string> {
     const resolvedProfileId = await this.resolveSessionProfile(profileId);
-    const sessionId = createSessionId();
+    const sessionId = nanoid();
 
     await this.db.upsertSession({
       id: sessionId,
@@ -756,7 +756,7 @@ export class AgentService {
       throw new Error("messageIndex is out of bounds.");
     }
 
-    const nextSessionId = createSessionId();
+    const nextSessionId = nanoid();
     const sourceTitle = record.title?.trim();
     const branchTitle = sourceTitle ? `${sourceTitle} (Branch)` : "Untitled (Branch)";
 

@@ -26,4 +26,17 @@ Call the weather tool with a city name.
       "YAML frontmatter",
     );
   });
+
+  test("normalizes uppercase skill names to lowercase", () => {
+    const parsed = parseSkillMarkdown(
+      `---
+name: Opencode
+description: Test skill.
+---
+`,
+      "/tmp/skills/Opencode/SKILL.md",
+    );
+
+    expect(parsed.frontmatter.name).toBe("opencode");
+  });
 });

@@ -38,7 +38,7 @@ export function composeSkillMarkdown(options: {
 }
 
 export async function createSkillFile(options: CreateSkillFileOptions): Promise<string> {
-  const name = options.name.trim();
+  const name = options.name.trim().toLowerCase();
   const description = options.description.trim();
   const skillsRoot = options.profileId
     ? getProfileSkillsDir(options.profileId)

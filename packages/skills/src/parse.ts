@@ -50,10 +50,10 @@ function parseFrontmatter(raw: string, sourcePath: string): SkillFrontmatter {
     fields.set(key, stripQuotes(value));
   }
 
-  const name = fields.get("name")?.trim() ?? "";
+  const rawName = fields.get("name")?.trim() ?? "";
   const description = fields.get("description")?.trim() ?? "";
 
-  if (!name) {
+  if (!rawName) {
     throw new Error(`Skill frontmatter requires name: ${sourcePath}`);
   }
 
@@ -61,7 +61,7 @@ function parseFrontmatter(raw: string, sourcePath: string): SkillFrontmatter {
     throw new Error(`Skill frontmatter requires description: ${sourcePath}`);
   }
 
-  validateSkillName(name, sourcePath);
+  const name = validateSkillName(rawName, sourcePath);
 
   return {
     name,
@@ -99,10 +99,14 @@ function parseBooleanField(value: string | undefined): boolean | undefined {
   return undefined;
 }
 
-function validateSkillName(name: string, sourcePath: string): void {
-  if (!/^[a-z0-9-]{1,64}$/.test(name)) {
+function validateSkillName(name: string, sourcePath: string): string {
+  const normalized = name.toLowerCase();
+
+  if (!/^[a-z0-9-]{1,64}$/.test(normalized)) {
     throw new Error(
       `Skill name must be lowercase letters, numbers, or hyphens (max 64 chars): ${sourcePath}`,
     );
   }
+
+  return normalized;
 }
