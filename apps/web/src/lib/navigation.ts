@@ -65,6 +65,16 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "System",
         description: "Identity stack files and registered agent tools",
       },
+      {
+        id: "automations",
+        label: "Automations",
+        description: "Draft workflows from natural language",
+      },
+      {
+        id: "tasks",
+        label: "Tasks",
+        description: "Agent swarm kanban board",
+      },
     ],
   },
   {
@@ -75,16 +85,6 @@ export const NAV_GROUPS: NavGroup[] = [
         id: "status",
         label: "Status",
         description: "Server and automation worker health",
-      },
-      {
-        id: "automations",
-        label: "Automations",
-        description: "Draft workflows from natural language",
-      },
-      {
-        id: "tasks",
-        label: "Tasks",
-        description: "Agent swarm kanban board",
       },
       {
         id: "integrations",
