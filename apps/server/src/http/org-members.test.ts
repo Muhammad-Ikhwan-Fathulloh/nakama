@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { LOCAL_CLIENT_EMAIL } from "@tinyclaw/core/local-auth";
 import { createHonoApp } from "./app";
 import { AuthService } from "../services/auth-service";
 import { OrgService } from "../services/org-service";
@@ -183,7 +184,12 @@ describe("org member management (AE2)", () => {
     );
     expect(listResponse.status).toBe(200);
     const listed = (await listResponse.json()) as { members: Array<{ email: string }> };
-    expect(listed.members).toHaveLength(2);
+    expect(listed.members).toHaveLength(3);
+    expect(listed.members.map((member) => member.email).sort()).toEqual([
+      "admin-mgmt@acme.com",
+      LOCAL_CLIENT_EMAIL,
+      "member-mgmt@acme.com",
+    ]);
 
     const patchResponse = await app.fetch(
       new Request(`http://localhost:4310/v1/orgs/${orgId}/members/${added.member.userId}`, {
@@ -220,7 +226,10 @@ describe("org member management (AE2)", () => {
       }),
     );
     const remaining = (await afterDelete.json()) as { members: Array<{ email: string }> };
-    expect(remaining.members).toHaveLength(1);
-    expect(remaining.members[0]?.email).toBe("admin-mgmt@acme.com");
+    expect(remaining.members).toHaveLength(2);
+    expect(remaining.members.map((member) => member.email).sort()).toEqual([
+      "admin-mgmt@acme.com",
+      LOCAL_CLIENT_EMAIL,
+    ]);
   });
 });

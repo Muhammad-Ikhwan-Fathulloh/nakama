@@ -316,7 +316,6 @@ export class OrgService {
       role: "admin",
       createdAt: now,
     });
-    await ensureLocalClientAccess(this.databaseAdapter);
 
     return { user, organization };
   }
@@ -594,6 +593,7 @@ export class OrgService {
 
     await this.databaseAdapter.upsertOrganization(record);
     await this.seedOrgProfiles(record.id);
+    await ensureLocalClientAccess(this.databaseAdapter);
     return toOrganizationSummary(record);
   }
 
