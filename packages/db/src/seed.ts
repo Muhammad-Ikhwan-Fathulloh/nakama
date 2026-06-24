@@ -1,5 +1,6 @@
 import { builtinTools } from "@tinyclaw/core";
 import { BUILTIN_TOOL_IDS } from "@tinyclaw/core/tools/protected";
+import { ensureLocalClientAccess } from "./local-client";
 import { ensureOrgSuperBotProfiles } from "./org-profiles";
 import type { DatabaseAdapter } from "./types";
 
@@ -10,6 +11,7 @@ export async function seedDatabase(db: DatabaseAdapter): Promise<void> {
   await removeLegacyBuiltinTools(db);
   await removeUnsupportedTools(db);
   await ensureBuiltinToolDefinitions(db);
+  await ensureLocalClientAccess(db);
   await ensureOrgSuperBotProfiles(db);
 }
 

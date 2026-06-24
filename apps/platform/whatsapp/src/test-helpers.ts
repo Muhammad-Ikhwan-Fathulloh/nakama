@@ -3,7 +3,13 @@ import * as os from "node:os";
 import path from "node:path";
 import { spyOn } from "bun:test";
 import type { TinyClawClient } from "@tinyclaw/client";
-import type { ProfileSummary } from "@tinyclaw/core/contract";
+import type { ProfileSummary, UserOrgSummary } from "@tinyclaw/core/contract";
+import {
+  assertBridgeClientMethods,
+  ChannelOrgStore,
+  parseListProfilesResponse,
+  parseListUserOrgsResponse,
+} from "@tinyclaw/core";
 import type { StreamHandlers } from "@tinyclaw/client";
 
 export interface MockStreamControl {
@@ -20,12 +26,49 @@ type StreamStep =
   | { type: "error"; message: string }
   | { type: "resolve"; reply?: string };
 
+export function createMultiTestOrgs(): UserOrgSummary[] {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: "org_a",
+      name: "Acme",
+      slug: "acme",
+      role: "admin",
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "org_b",
+      name: "Beta",
+      slug: "beta",
+      role: "member",
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+}
+
+export function createDefaultTestOrgs(): UserOrgSummary[] {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: "org_test",
+      name: "Test Org",
+      slug: "test-org",
+      role: "admin",
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+}
+
 export function createMockClient(
   options: {
     streaming?: boolean;
     steps?: StreamStep[];
     autoComplete?: boolean;
     profiles?: ProfileSummary[];
+    orgs?: UserOrgSummary[];
   } = {},
 ) {
   const calls = {
@@ -34,7 +77,10 @@ export function createMockClient(
     compact: 0,
     profileIds: [] as string[],
     listProfiles: 0,
+    listUserOrgs: 0,
+    setOrgId: 0,
   };
+  const orgIds: string[] = [];
 
   let streamControl: MockStreamControl | null = null;
 
@@ -139,10 +185,22 @@ export function createMockClient(
     createAutomation: async () => ({}),
   };
 
+  const orgs = options.orgs ?? createDefaultTestOrgs();
+
   const client = {
     listProfiles: async () => {
       calls.listProfiles += 1;
-      return { profiles: options.profiles ?? [createDefaultProfileSummary()] };
+      return parseListProfilesResponse({
+        profiles: options.profiles ?? [createDefaultProfileSummary()],
+      });
+    },
+    listUserOrgs: async () => {
+      calls.listUserOrgs += 1;
+      return parseListUserOrgsResponse({ orgs });
+    },
+    setOrgId: (orgId: string | null) => {
+      calls.setOrgId += 1;
+      orgIds.push(orgId ?? "");
     },
     createSession: async (_channel, options = {}) => {
       calls.createSession += 1;
@@ -160,9 +218,12 @@ export function createMockClient(
     }),
   } as unknown as TinyClawClient;
 
+  assertBridgeClientMethods(client);
+
   return {
     client,
     calls,
+    orgIds,
     getStreamControl: () => streamControl,
   };
 }
@@ -211,6 +272,12 @@ export async function writeWhatsAppConfigIni(
 
   lines.push("");
   await writeFile(path.join(dir, "config.ini"), lines.join("\n"), "utf8");
+}
+
+export function createTestOrgStore(homeDir: string): ChannelOrgStore {
+  return new ChannelOrgStore(
+    path.join(homeDir, ".tinyclaw", "whatsapp", "org-selection.json"),
+  );
 }
 
 export async function withTempHome<T>(

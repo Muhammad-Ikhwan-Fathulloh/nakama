@@ -1,4 +1,5 @@
 import { createClient } from "@tinyclaw/client";
+import { ChannelOrgStore, getChannelOrgSelectionPath } from "@tinyclaw/core";
 import { ensureServerRunning, stopSpawnedServer } from "@tinyclaw/core/ensure-server";
 import { loadLocalAuthToken } from "@tinyclaw/core/local-auth";
 import {
@@ -54,6 +55,9 @@ try {
   const sessionStore = new SessionStore();
   await sessionStore.load();
 
+  const orgStore = new ChannelOrgStore(getChannelOrgSelectionPath("whatsapp"));
+  await orgStore.load();
+
   const authStore = new WhatsAppAuthStore();
   await authStore.reload();
 
@@ -62,6 +66,7 @@ try {
     config,
     authStore,
     sessionStore,
+    orgStore,
     getSocket: () => socketHandle ? (socketHandle as any).socket ?? null : null,
   });
 

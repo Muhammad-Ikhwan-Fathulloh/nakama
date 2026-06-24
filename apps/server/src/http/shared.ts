@@ -1,6 +1,7 @@
 import type { OrgRole } from "@tinyclaw/core";
 import {
   formatServerError,
+  LOCAL_CLIENT_EMAIL,
   TinyClawApiError,
   type AgentChannel,
   type AgentQuestionnaire,
@@ -18,6 +19,7 @@ import type {
   StoredBrowserSessionRecord,
   StoredUserRecord,
 } from "@tinyclaw/db";
+import { ensureLocalClientAccess } from "@tinyclaw/db";
 import type { AppEnv } from "./types";
 
 const SESSION_COOKIE_NAME = "tinyclaw_session";
@@ -129,7 +131,11 @@ export async function authenticateRequest(
       return null;
     }
 
-    const user = await databaseAdapter.getUserByEmail(payload.email);
+    let user = await databaseAdapter.getUserByEmail(payload.email);
+    if (!user && payload.email === LOCAL_CLIENT_EMAIL) {
+      await ensureLocalClientAccess(databaseAdapter);
+      user = await databaseAdapter.getUserByEmail(payload.email);
+    }
     if (!user) {
       return null;
     }

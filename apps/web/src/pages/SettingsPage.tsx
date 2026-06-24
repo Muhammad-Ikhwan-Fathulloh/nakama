@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { ProviderSettingsCard } from "@/components/settings/ProviderSettingsCard";
 import { OrgMembersCard } from "@/components/settings/OrgMembersCard";
 import { VisionSettingsCard } from "@/components/settings/VisionSettingsCard";
-import { LocalAuthTokenCard } from "@/components/LocalAuthTokenCard";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { UserContextSettings } from "@/components/UserContextCard";
 import { TimezoneSelect } from "@/components/TimezoneSelect";
@@ -112,8 +111,6 @@ export function SettingsPage() {
 
       {isOrgAdmin ? (
         <>
-          <LocalAuthTokenCard />
-
           <ProviderSettingsCard formError={formError} onFormError={setFormError} />
 
           <Card className="w-full shadow-none">

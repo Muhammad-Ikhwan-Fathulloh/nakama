@@ -4,6 +4,13 @@ import path from "node:path";
 import { spyOn } from "bun:test";
 import type { TinyClawClient } from "@tinyclaw/client";
 import type { AgentTodo } from "@tinyclaw/core/contract";
+import {
+  assertBridgeClientMethods,
+  ChannelOrgStore,
+  parseListProfilesResponse,
+  parseListUserOrgsResponse,
+  type UserOrgSummary,
+} from "@tinyclaw/core";
 import type { StreamHandlers } from "@tinyclaw/client";
 import type { Context } from "grammy";
 
@@ -58,19 +65,60 @@ type StreamStep =
   | { type: "error"; message: string }
   | { type: "resolve"; reply?: string };
 
+export function createMultiTestOrgs(): UserOrgSummary[] {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: "org_a",
+      name: "Acme",
+      slug: "acme",
+      role: "admin",
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "org_b",
+      name: "Beta",
+      slug: "beta",
+      role: "member",
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+}
+
+export function createDefaultTestOrgs(): UserOrgSummary[] {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: "org_test",
+      name: "Test Org",
+      slug: "test-org",
+      role: "admin",
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+}
+
 export function createMockClient(
   options: {
     streaming?: boolean;
     steps?: StreamStep[];
     autoComplete?: boolean;
     profiles?: Array<{ id: string; model?: string | null }>;
+    orgs?: UserOrgSummary[];
   } = {},
 ) {
   const calls = {
     createSession: 0,
     sendStream: 0,
     compact: 0,
+    listProfiles: 0,
+    listUserOrgs: 0,
+    setOrgId: 0,
   };
+  const orgIds: string[] = [];
   let lastCreateSessionProfileId: string | undefined;
 
   let streamControl: MockStreamControl | null = null;
@@ -188,6 +236,7 @@ export function createMockClient(
   };
 
   const profiles = options.profiles ?? [{ id: "default", model: null }];
+  const orgs = options.orgs ?? createDefaultTestOrgs();
 
   const client = {
     createSession: async (_channel: string, input?: { profileId?: string }) => {
@@ -197,9 +246,24 @@ export function createMockClient(
     },
     createChatSession: () => session,
     health: async () => ({ ok: true, providerConfigured: false }),
-    listProfiles: async () => ({
-      profiles,
-    }),
+    listProfiles: async () => {
+      calls.listProfiles += 1;
+      return parseListProfilesResponse({
+        profiles: profiles.map((profile) => ({
+          id: profile.id,
+          name: profile.id,
+          model: profile.model ?? null,
+        })),
+      });
+    },
+    listUserOrgs: async () => {
+      calls.listUserOrgs += 1;
+      return parseListUserOrgsResponse({ orgs });
+    },
+    setOrgId: (orgId: string | null) => {
+      calls.setOrgId += 1;
+      orgIds.push(orgId ?? "");
+    },
     getModels: async () => ({
       provider: null,
       currentProviderId: null,
@@ -209,9 +273,12 @@ export function createMockClient(
     }),
   } as unknown as TinyClawClient;
 
+  assertBridgeClientMethods(client);
+
   return {
     client,
     calls,
+    orgIds,
     getLastCreateSessionProfileId: () => lastCreateSessionProfileId,
     getStreamControl: () => streamControl,
   };
@@ -250,6 +317,12 @@ export async function writeTelegramConfigIni(
 
   lines.push("");
   await writeFile(path.join(dir, "config.ini"), lines.join("\n"), "utf8");
+}
+
+export function createTestOrgStore(homeDir: string): ChannelOrgStore {
+  return new ChannelOrgStore(
+    path.join(homeDir, ".tinyclaw", "telegram", "org-selection.json"),
+  );
 }
 
 export async function withTempHome<T>(

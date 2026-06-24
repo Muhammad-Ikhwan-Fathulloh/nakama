@@ -10,6 +10,7 @@ export type { ResolveDatabasePathOptions } from "./database-url";
 
 export * from "./automation-store";
 export * from "./constants";
+export * from "./local-client";
 export * from "./org-profiles";
 export * from "./seed";
 export * from "./types";

@@ -6,6 +6,8 @@ import { SessionStore } from "./session-store";
 import {
   createMessageContext,
   createMockClient,
+  createMultiTestOrgs,
+  createTestOrgStore,
   withTempHome,
   writeTelegramConfigIni,
 } from "./test-helpers";
@@ -24,11 +26,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies } = createMessageContext({
@@ -58,11 +63,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies } = createMessageContext({ text: "hello" });
@@ -88,11 +96,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies } = createMessageContext({
@@ -122,11 +133,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies } = createMessageContext({
@@ -157,11 +171,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const pairAttempt = createMessageContext({
@@ -206,11 +223,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "missing_profile" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const pairAttempt = createMessageContext({
@@ -244,11 +264,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const firstUser = createMessageContext({ userId: 1001, text: "ABCD1234" });
@@ -276,11 +299,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies } = createMessageContext({
@@ -309,11 +335,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies } = createMessageContext({
@@ -342,11 +371,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const chatAttempt = createMessageContext({
@@ -386,11 +418,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies } = createMessageContext({
@@ -437,11 +472,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies, edits } = createMessageContext({
@@ -490,11 +528,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies, edits } = createMessageContext({
@@ -534,11 +575,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const chatAttempt = createMessageContext({
@@ -596,11 +640,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies, edits } = createMessageContext({
@@ -656,11 +703,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies, edits } = createMessageContext({
@@ -697,11 +747,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies } = createMessageContext({
@@ -730,11 +783,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies } = createMessageContext({
@@ -762,11 +818,14 @@ describe("createChatHandler security", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const handleMessage = createChatHandler({
         client,
         config: { botToken: "1234567890:TEST", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
       });
 
       const { ctx, replies } = createMessageContext({
@@ -778,6 +837,143 @@ describe("createChatHandler security", () => {
 
       expect(replies[0]).toContain("not linked yet");
       expect(calls.sendStream).toBe(0);
+    });
+  });
+});
+
+describe("bridge API integration", () => {
+  test("calls org and profile APIs before creating a chat session", async () => {
+    await withTempHome(async (homeDir) => {
+      await writeTelegramConfigIni(homeDir, {
+        botToken: "1234567890:TEST",
+        pairedUserIds: [1001],
+      });
+
+      const authStore = new TelegramAuthStore();
+      await authStore.reload();
+      const { client, calls, orgIds } = createMockClient();
+      const sessionStore = new SessionStore(
+        path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
+      );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
+      const handleMessage = createChatHandler({
+        client,
+        config: { botToken: "1234567890:TEST", profileId: "default" },
+        authStore,
+        sessionStore,
+        orgStore,
+      });
+
+      const { ctx } = createMessageContext({ userId: 1001, text: "hello" });
+      await handleMessage(ctx);
+
+      expect(calls.listUserOrgs).toBeGreaterThanOrEqual(1);
+      expect(calls.setOrgId).toBeGreaterThanOrEqual(1);
+      expect(orgIds).toContain("org_test");
+      expect(calls.listProfiles).toBeGreaterThanOrEqual(1);
+      expect(calls.createSession).toBe(1);
+      expect(calls.sendStream).toBe(1);
+    });
+  });
+
+  test("auto-selects a single org without prompting", async () => {
+    await withTempHome(async (homeDir) => {
+      await writeTelegramConfigIni(homeDir, {
+        botToken: "1234567890:TEST",
+        pairedUserIds: [1001],
+      });
+
+      const authStore = new TelegramAuthStore();
+      await authStore.reload();
+      const { client } = createMockClient();
+      const sessionStore = new SessionStore(
+        path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
+      );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
+      const handleMessage = createChatHandler({
+        client,
+        config: { botToken: "1234567890:TEST", profileId: "default" },
+        authStore,
+        sessionStore,
+        orgStore,
+      });
+
+      const { ctx, replies } = createMessageContext({ userId: 1001, text: "hello" });
+      await handleMessage(ctx);
+
+      expect(replies.some((reply) => reply.includes("Choose an organization"))).toBe(false);
+      expect(orgStore.get("1001")?.orgId).toBe("org_test");
+    });
+  });
+
+  test("prompts for org selection when multiple orgs exist", async () => {
+    await withTempHome(async (homeDir) => {
+      await writeTelegramConfigIni(homeDir, {
+        botToken: "1234567890:TEST",
+        pairedUserIds: [1001],
+      });
+
+      const authStore = new TelegramAuthStore();
+      await authStore.reload();
+      const { client, calls } = createMockClient({ orgs: createMultiTestOrgs() });
+      const sessionStore = new SessionStore(
+        path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
+      );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
+      const handleMessage = createChatHandler({
+        client,
+        config: { botToken: "1234567890:TEST", profileId: "default" },
+        authStore,
+        sessionStore,
+        orgStore,
+      });
+
+      const { ctx, replies } = createMessageContext({ userId: 1001, text: "hello" });
+      await handleMessage(ctx);
+
+      expect(replies.join("\n")).toContain("Choose an organization");
+      expect(calls.createSession).toBe(0);
+      expect(calls.sendStream).toBe(0);
+    });
+  });
+
+  test("continues chatting after the user selects an org", async () => {
+    await withTempHome(async (homeDir) => {
+      await writeTelegramConfigIni(homeDir, {
+        botToken: "1234567890:TEST",
+        pairedUserIds: [1001],
+      });
+
+      const authStore = new TelegramAuthStore();
+      await authStore.reload();
+      const { client, calls, orgIds } = createMockClient({ orgs: createMultiTestOrgs() });
+      const sessionStore = new SessionStore(
+        path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
+      );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
+      const handleMessage = createChatHandler({
+        client,
+        config: { botToken: "1234567890:TEST", profileId: "default" },
+        authStore,
+        sessionStore,
+        orgStore,
+      });
+
+      const pick = createMessageContext({ userId: 1001, text: "2" });
+      await handleMessage(pick.ctx);
+
+      expect(orgIds).toContain("org_b");
+      expect(pick.replies.join("\n")).toContain("Now using Beta");
+
+      const chat = createMessageContext({ userId: 1001, text: "hello" });
+      await handleMessage(chat.ctx);
+
+      expect(calls.createSession).toBe(1);
+      expect(calls.sendStream).toBe(1);
     });
   });
 });

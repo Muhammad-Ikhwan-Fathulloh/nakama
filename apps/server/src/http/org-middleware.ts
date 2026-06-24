@@ -50,7 +50,11 @@ export function createOrgContextMiddleware(options: ServerOptions): MiddlewareHa
       return;
     }
 
-    const orgId = resolveOrgId(c.req.raw, auth);
+    let orgId = resolveOrgId(c.req.raw, auth);
+    if (!orgId && auth.mode === "local-token") {
+      const memberships = await databaseAdapter.listUserOrganizations(auth.user.id);
+      orgId = memberships[0]?.organization.id ?? null;
+    }
     if (!orgId) {
       c.res = errorResponse("Organization context required", 400);
       return;

@@ -10,6 +10,7 @@ import { loadLocalAuthToken, verifyLocalAuthToken } from "@tinyclaw/core";
 import {
   buildSetupAuthBody,
   createPlatformAdminUser,
+  LOCAL_CLIENT_EMAIL,
   seedLocalClientUser,
   seedOrgForUser,
   TEST_ORG_ID,
@@ -193,6 +194,63 @@ describe("createHonoApp", () => {
 
       expect(whatsappResponse.status).toBe(200);
       await expect(whatsappResponse.json()).resolves.toEqual({ enabled: false });
+    } finally {
+      delete process.env.TINYCLAW_CONFIG_DIR;
+      await rm(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test("auto-provisions local client user on first bearer auth", async () => {
+    const configDir = await mkdtemp(join(tmpdir(), "tinyclaw-bearer-auth-autoprovision-"));
+    process.env.TINYCLAW_CONFIG_DIR = configDir;
+
+    try {
+      const options = createServerOptions();
+      const token = await loadLocalAuthToken();
+      const now = new Date().toISOString();
+      await options.databaseAdapter.upsertOrganization({
+        id: TEST_ORG_ID,
+        name: "Test Org",
+        slug: "test-org",
+        createdAt: now,
+        updatedAt: now,
+      });
+      const app = createHonoApp(options);
+
+      expect(await options.databaseAdapter.getUserByEmail(LOCAL_CLIENT_EMAIL)).toBeNull();
+
+      const response = await app.fetch(
+        new Request("http://localhost:4310/v1/profiles", {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await options.databaseAdapter.getUserByEmail(LOCAL_CLIENT_EMAIL)).not.toBeNull();
+    } finally {
+      delete process.env.TINYCLAW_CONFIG_DIR;
+      await rm(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test("resolves org context for bearer auth without X-Org-Id", async () => {
+    const configDir = await mkdtemp(join(tmpdir(), "tinyclaw-bearer-auth-org-"));
+    process.env.TINYCLAW_CONFIG_DIR = configDir;
+
+    try {
+      const options = createServerOptions();
+      const token = await loadLocalAuthToken();
+      await seedLocalClientUser(options.databaseAdapter);
+      await seedOrgForUser(options.databaseAdapter, LOCAL_CLIENT_EMAIL);
+      const app = createHonoApp(options);
+
+      const profilesResponse = await app.fetch(
+        new Request("http://localhost:4310/v1/profiles", {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      );
+
+      expect(profilesResponse.status).toBe(200);
     } finally {
       delete process.env.TINYCLAW_CONFIG_DIR;
       await rm(configDir, { recursive: true, force: true });

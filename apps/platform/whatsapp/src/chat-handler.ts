@@ -1,7 +1,14 @@
 import type { TinyClawClient, RemoteChatSession } from "@tinyclaw/client";
 import type { SendMessageInput } from "@tinyclaw/core";
 import type { WASocket } from "@whiskeysockets/baileys";
-import { pickProfileForOrg } from "@tinyclaw/core";
+import {
+  findOrgBySelectionInput,
+  formatOrgSelectionPrompt,
+  formatOrgSwitchConfirmation,
+  pickProfileForOrg,
+  prepareChannelOrgContext,
+  type ChannelOrgStore,
+} from "@tinyclaw/core";
 import { normalizePairingCode } from "@tinyclaw/core/whatsapp-config";
 import {
   clearActiveStream,
@@ -33,11 +40,12 @@ export interface ChatHandlerDeps {
   config: WhatsAppBridgeConfig;
   authStore: WhatsAppAuthStore;
   sessionStore: SessionStore;
+  orgStore: ChannelOrgStore;
   getSocket: () => WASocket | null;
 }
 
 export function createChatHandler(deps: ChatHandlerDeps) {
-  const { client, config, authStore, sessionStore, getSocket } = deps;
+  const { client, config, authStore, sessionStore, orgStore, getSocket } = deps;
 
   return async function handleMessage(data: { jid: string; text: string }): Promise<void> {
     const { jid, text } = data;
@@ -63,6 +71,16 @@ export function createChatHandler(deps: ChatHandlerDeps) {
       if (!authorized) {
         await handlePairing(jid, trimmed);
         return;
+      }
+
+      const command = trimmed.startsWith("/") ? parseCommand(trimmed) : null;
+      const bypassOrgGate = command === "/help" || command === "/start" || command === "/org";
+
+      if (!bypassOrgGate) {
+        const orgReady = await ensureOrgReady(jid, trimmed);
+        if (!orgReady) {
+          return;
+        }
       }
 
       if (trimmed.startsWith("/")) {
@@ -139,9 +157,77 @@ export function createChatHandler(deps: ChatHandlerDeps) {
         await replyStatus(jid);
         return;
 
+      case "/org":
+        await handleOrgCommand(jid, text);
+        return;
+
       default:
         await sendText(jid, "Unknown command. Try /help");
     }
+  }
+
+  async function ensureOrgReady(jid: string, messageText: string): Promise<boolean> {
+    const orgContext = await prepareChannelOrgContext({
+      listOrgs: () => client.listUserOrgs(),
+      getSelectedOrgId: () => orgStore.get(jid)?.orgId,
+      saveSelectedOrgId: async (orgId) => {
+        orgStore.set(jid, orgId);
+        await orgStore.save();
+      },
+      text: messageText.startsWith("/") ? undefined : messageText,
+    });
+
+    if (orgContext.status === "empty") {
+      await sendText(jid, "No organizations are configured yet.");
+      return false;
+    }
+
+    if (orgContext.status === "prompt") {
+      await sendText(jid, orgContext.message);
+      return false;
+    }
+
+    client.setOrgId(orgContext.orgId);
+
+    if (orgContext.justSelected) {
+      await sendText(jid, formatOrgSwitchConfirmation(orgContext.orgName));
+      return false;
+    }
+
+    return true;
+  }
+
+  async function handleOrgCommand(jid: string, text: string): Promise<void> {
+    const { orgs } = await client.listUserOrgs();
+
+    if (orgs.length === 0) {
+      await sendText(jid, "No organizations are configured yet.");
+      return;
+    }
+
+    const arg = text.trim().split(/\s+/).slice(1).join(" ");
+    if (!arg) {
+      await sendText(jid, formatOrgSelectionPrompt(orgs, orgStore.get(jid)?.orgId));
+      return;
+    }
+
+    const picked = findOrgBySelectionInput(arg, orgs);
+    if (!picked) {
+      await sendText(jid, "Unknown organization. Send /org to see the list.");
+      return;
+    }
+
+    const previousOrgId = orgStore.get(jid)?.orgId;
+    orgStore.set(jid, picked.id);
+    await orgStore.save();
+    client.setOrgId(picked.id);
+
+    if (previousOrgId && previousOrgId !== picked.id) {
+      sessionStore.delete(jid);
+      await sessionStore.save();
+    }
+
+    await sendText(jid, formatOrgSwitchConfirmation(picked.name));
   }
 
   async function handleChatMessage(

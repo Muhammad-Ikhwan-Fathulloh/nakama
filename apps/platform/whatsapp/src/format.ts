@@ -154,6 +154,7 @@ export const HELP_TEXT = `TinyClaw WhatsApp commands:
 /clear \u2014 clear chat history
 /compact \u2014 compact conversation history
 /new \u2014 start a new conversation
+/org \u2014 choose or switch organization
 /status \u2014 server and model status
 
 Send text to chat with the agent.`;

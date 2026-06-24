@@ -4,7 +4,10 @@ import { WhatsAppAuthStore } from "./auth-store";
 import { createChatHandler } from "./chat-handler";
 import { SessionStore } from "./session-store";
 import {
+  createDefaultTestOrgs,
   createMockClient,
+  createMultiTestOrgs,
+  createTestOrgStore,
   withTempHome,
   writeWhatsAppConfigIni,
 } from "./test-helpers";
@@ -70,6 +73,8 @@ describe("createChatHandler", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const { socket, sent } = createMockSocket();
 
       const handleMessage = createChatHandler({
@@ -77,6 +82,7 @@ describe("createChatHandler", () => {
         config: { phoneNumber: "1234567890", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
         getSocket: () => socket as any,
       });
 
@@ -128,6 +134,8 @@ describe("createChatHandler", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const { socket, sent } = createMockSocket();
 
       const handleMessage = createChatHandler({
@@ -135,6 +143,7 @@ describe("createChatHandler", () => {
         config: { phoneNumber: "1234567890", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
         getSocket: () => socket as any,
       });
 
@@ -186,6 +195,8 @@ describe("createChatHandler", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const { socket, sent } = createMockSocket();
 
       const handleMessage = createChatHandler({
@@ -193,6 +204,7 @@ describe("createChatHandler", () => {
         config: { phoneNumber: "1234567890", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
         getSocket: () => socket as any,
       });
 
@@ -249,6 +261,8 @@ describe("createChatHandler", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const { socket } = createMockSocket();
 
       const handleMessage = createChatHandler({
@@ -256,6 +270,7 @@ describe("createChatHandler", () => {
         config: { phoneNumber: "1234567890", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
         getSocket: () => socket as any,
       });
 
@@ -306,6 +321,8 @@ describe("createChatHandler", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const { socket } = createMockSocket();
 
       const handleMessage = createChatHandler({
@@ -313,6 +330,7 @@ describe("createChatHandler", () => {
         config: { phoneNumber: "6281379292556", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
         getSocket: () => socket as any,
       });
 
@@ -336,6 +354,8 @@ describe("createChatHandler", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const { socket, sent } = createMockSocket();
 
       const handleMessage = createChatHandler({
@@ -343,6 +363,7 @@ describe("createChatHandler", () => {
         config: { phoneNumber: "1234567890", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
         getSocket: () => socket as any,
       });
 
@@ -367,6 +388,8 @@ describe("createChatHandler", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const { socket, sent } = createMockSocket();
 
       const handleMessage = createChatHandler({
@@ -374,6 +397,7 @@ describe("createChatHandler", () => {
         config: { phoneNumber: "1234567890", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
         getSocket: () => socket as any,
       });
 
@@ -398,6 +422,8 @@ describe("createChatHandler", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const { socket, sent } = createMockSocket();
 
       const handleMessage = createChatHandler({
@@ -405,6 +431,7 @@ describe("createChatHandler", () => {
         config: { phoneNumber: "1234567890", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
         getSocket: () => socket as any,
       });
 
@@ -429,6 +456,8 @@ describe("createChatHandler", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const { socket, sent } = createMockSocket();
 
       const handleMessage = createChatHandler({
@@ -436,6 +465,7 @@ describe("createChatHandler", () => {
         config: { phoneNumber: "1234567890", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
         getSocket: () => socket as any,
       });
 
@@ -466,6 +496,8 @@ describe("createChatHandler", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const { socket, sent } = createMockSocket();
 
       const handleMessage = createChatHandler({
@@ -473,6 +505,7 @@ describe("createChatHandler", () => {
         config: { phoneNumber: "1234567890", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
         getSocket: () => socket as any,
       });
 
@@ -496,6 +529,8 @@ describe("createChatHandler", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const { socket, sent } = createMockSocket();
 
       const handleMessage = createChatHandler({
@@ -503,6 +538,7 @@ describe("createChatHandler", () => {
         config: { phoneNumber: "1234567890", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
         getSocket: () => socket as any,
       });
 
@@ -543,6 +579,8 @@ describe("createChatHandler", () => {
       const sessionStore = new SessionStore(
         path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
       );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
       const { socket, sent } = createMockSocket();
 
       const handleMessage = createChatHandler({
@@ -550,6 +588,7 @@ describe("createChatHandler", () => {
         config: { phoneNumber: "1234567890", profileId: "default" },
         authStore,
         sessionStore,
+        orgStore,
         getSocket: () => socket as any,
       });
 
@@ -558,6 +597,146 @@ describe("createChatHandler", () => {
       expect(calls.listProfiles).toBe(1);
       expect(calls.profileIds).toEqual(["profile_tensetutor"]);
       expect(sent[0]?.text).toContain("Started a new conversation.");
+    });
+  });
+});
+
+describe("bridge API integration", () => {
+  test("calls org and profile APIs before creating a chat session", async () => {
+    await withTempHome(async (homeDir) => {
+      await writeWhatsAppConfigIni(homeDir, {
+        phoneNumber: "1234567890",
+        pairedJid: PAIRED_JID,
+      });
+
+      const authStore = new WhatsAppAuthStore();
+      await authStore.reload();
+      const { client, calls, orgIds } = createMockClient();
+      const sessionStore = new SessionStore(
+        path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
+      );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
+      const { socket } = createMockSocket();
+      const handleMessage = createChatHandler({
+        client,
+        config: { phoneNumber: "1234567890", profileId: "default" },
+        authStore,
+        sessionStore,
+        orgStore,
+        getSocket: () => socket as any,
+      });
+
+      await handleMessage({ jid: PAIRED_JID, text: "hello" });
+
+      expect(calls.listUserOrgs).toBeGreaterThanOrEqual(1);
+      expect(calls.setOrgId).toBeGreaterThanOrEqual(1);
+      expect(orgIds).toContain("org_test");
+      expect(calls.listProfiles).toBeGreaterThanOrEqual(1);
+      expect(calls.createSession).toBe(1);
+      expect(calls.sendStream).toBe(1);
+    });
+  });
+
+  test("auto-selects a single org without prompting", async () => {
+    await withTempHome(async (homeDir) => {
+      await writeWhatsAppConfigIni(homeDir, {
+        phoneNumber: "1234567890",
+        pairedJid: PAIRED_JID,
+      });
+
+      const authStore = new WhatsAppAuthStore();
+      await authStore.reload();
+      const { client } = createMockClient();
+      const sessionStore = new SessionStore(
+        path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
+      );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
+      const { socket, sent } = createMockSocket();
+      const handleMessage = createChatHandler({
+        client,
+        config: { phoneNumber: "1234567890", profileId: "default" },
+        authStore,
+        sessionStore,
+        orgStore,
+        getSocket: () => socket as any,
+      });
+
+      await handleMessage({ jid: PAIRED_JID, text: "hello" });
+
+      expect(sent.some((message) => message.text.includes("Choose an organization"))).toBe(
+        false,
+      );
+      expect(orgStore.get(PAIRED_JID)?.orgId).toBe("org_test");
+    });
+  });
+
+  test("prompts for org selection when multiple orgs exist", async () => {
+    await withTempHome(async (homeDir) => {
+      await writeWhatsAppConfigIni(homeDir, {
+        phoneNumber: "1234567890",
+        pairedJid: PAIRED_JID,
+      });
+
+      const authStore = new WhatsAppAuthStore();
+      await authStore.reload();
+      const { client, calls } = createMockClient({ orgs: createMultiTestOrgs() });
+      const sessionStore = new SessionStore(
+        path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
+      );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
+      const { socket, sent } = createMockSocket();
+      const handleMessage = createChatHandler({
+        client,
+        config: { phoneNumber: "1234567890", profileId: "default" },
+        authStore,
+        sessionStore,
+        orgStore,
+        getSocket: () => socket as any,
+      });
+
+      await handleMessage({ jid: PAIRED_JID, text: "hello" });
+
+      expect(sent.some((message) => message.text.includes("Choose an organization"))).toBe(true);
+      expect(calls.createSession).toBe(0);
+      expect(calls.sendStream).toBe(0);
+    });
+  });
+
+  test("continues chatting after the user selects an org", async () => {
+    await withTempHome(async (homeDir) => {
+      await writeWhatsAppConfigIni(homeDir, {
+        phoneNumber: "1234567890",
+        pairedJid: PAIRED_JID,
+      });
+
+      const authStore = new WhatsAppAuthStore();
+      await authStore.reload();
+      const { client, calls, orgIds } = createMockClient({ orgs: createMultiTestOrgs() });
+      const sessionStore = new SessionStore(
+        path.join(homeDir, ".tinyclaw", "whatsapp", "chat-sessions.json"),
+      );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
+      const { socket, sent } = createMockSocket();
+      const handleMessage = createChatHandler({
+        client,
+        config: { phoneNumber: "1234567890", profileId: "default" },
+        authStore,
+        sessionStore,
+        orgStore,
+        getSocket: () => socket as any,
+      });
+
+      await handleMessage({ jid: PAIRED_JID, text: "2" });
+      expect(orgIds).toContain("org_b");
+      expect(sent.some((message) => message.text.includes("Now using Beta"))).toBe(true);
+
+      await handleMessage({ jid: PAIRED_JID, text: "hello" });
+      expect(calls.createSession).toBe(1);
+      expect(calls.sendStream).toBe(1);
     });
   });
 });

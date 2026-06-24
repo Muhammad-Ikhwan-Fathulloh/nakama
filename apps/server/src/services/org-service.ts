@@ -16,6 +16,7 @@ import type {
   UserOrgSummary,
 } from "@tinyclaw/core/contract";
 import {
+  ensureLocalClientAccess,
   ORG_INVITE_EXPIRY_DAYS,
   ORG_ROLES,
   seedOrgDefaultProfile,
@@ -315,6 +316,7 @@ export class OrgService {
       role: "admin",
       createdAt: now,
     });
+    await ensureLocalClientAccess(this.databaseAdapter);
 
     return { user, organization };
   }

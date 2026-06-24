@@ -9,7 +9,8 @@ import {
   type UserConfig,
 } from "./user-config";
 
-const LOCAL_CLIENT_EMAIL = "local-client@tinyclaw.internal";
+export const LOCAL_CLIENT_EMAIL = "local-client@tinyclaw.internal";
+export const LOCAL_CLIENT_USER_ID = "user_local_client";
 const LOCAL_AUTH_TOKEN_PREFIX = "tc_local_";
 const LOCAL_AUTH_TOKEN_FILENAME = "local-auth-token";
 

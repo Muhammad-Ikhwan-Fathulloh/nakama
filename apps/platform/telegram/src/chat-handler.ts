@@ -1,6 +1,13 @@
 import type { TinyClawClient, RemoteChatSession } from "@tinyclaw/client";
 import type { SendMessageInput } from "@tinyclaw/core";
-import { pickProfileForOrg } from "@tinyclaw/core";
+import {
+  findOrgBySelectionInput,
+  formatOrgSelectionPrompt,
+  formatOrgSwitchConfirmation,
+  pickProfileForOrg,
+  prepareChannelOrgContext,
+  type ChannelOrgStore,
+} from "@tinyclaw/core";
 import type { Context } from "grammy";
 import {
   clearActiveStream,
@@ -35,10 +42,11 @@ export interface ChatHandlerDeps {
   config: TelegramBridgeConfig;
   authStore: TelegramAuthStore;
   sessionStore: SessionStore;
+  orgStore: ChannelOrgStore;
 }
 
 export function createChatHandler(deps: ChatHandlerDeps) {
-  const { client, config, authStore, sessionStore } = deps;
+  const { client, config, authStore, sessionStore, orgStore } = deps;
 
   return async function handleMessage(ctx: Context): Promise<void> {
     if (!ctx.chat || ctx.chat.type !== "private") {
@@ -80,6 +88,16 @@ export function createChatHandler(deps: ChatHandlerDeps) {
 
         await handlePairing(ctx, text, userId);
         return;
+      }
+
+      const command = text?.startsWith("/") ? parseTelegramCommand(text) : null;
+      const bypassOrgGate = command === "/help" || command === "/start" || command === "/org";
+
+      if (!bypassOrgGate) {
+        const orgReady = await ensureOrgReady(ctx, userId, text, chatId);
+        if (!orgReady) {
+          return;
+        }
       }
 
       const imageInput = await tryBuildImageInput(ctx);
@@ -177,6 +195,10 @@ export function createChatHandler(deps: ChatHandlerDeps) {
         await replyStatus(ctx);
         return;
 
+      case "/org":
+        await handleOrgCommand(ctx, text, userId, chatId);
+        return;
+
       default:
         await ctx.reply(`Unknown command. Try /help`);
     }
@@ -263,6 +285,85 @@ export function createChatHandler(deps: ChatHandlerDeps) {
     }
 
     await ctx.reply("(empty reply)");
+  }
+
+  async function ensureOrgReady(
+    ctx: Context,
+    userId: number,
+    messageText: string | undefined,
+    chatId: string,
+  ): Promise<boolean> {
+    const channelUserId = String(userId);
+    const orgContext = await prepareChannelOrgContext({
+      listOrgs: () => client.listUserOrgs(),
+      getSelectedOrgId: () => orgStore.get(channelUserId)?.orgId,
+      saveSelectedOrgId: async (orgId) => {
+        orgStore.set(channelUserId, orgId);
+        await orgStore.save();
+      },
+      text: messageText?.startsWith("/") ? undefined : messageText,
+    });
+
+    if (orgContext.status === "empty") {
+      await ctx.reply("No organizations are configured yet.");
+      return false;
+    }
+
+    if (orgContext.status === "prompt") {
+      await replyChunks(ctx, orgContext.message);
+      return false;
+    }
+
+    client.setOrgId(orgContext.orgId);
+
+    if (orgContext.justSelected) {
+      await ctx.reply(formatOrgSwitchConfirmation(orgContext.orgName));
+      return false;
+    }
+
+    return true;
+  }
+
+  async function handleOrgCommand(
+    ctx: Context,
+    text: string,
+    userId: number,
+    chatId: string,
+  ): Promise<void> {
+    const channelUserId = String(userId);
+    const { orgs } = await client.listUserOrgs();
+
+    if (orgs.length === 0) {
+      await ctx.reply("No organizations are configured yet.");
+      return;
+    }
+
+    const arg = text.trim().split(/\s+/).slice(1).join(" ");
+    if (!arg) {
+      await replyChunks(
+        ctx,
+        formatOrgSelectionPrompt(orgs, orgStore.get(channelUserId)?.orgId),
+      );
+      return;
+    }
+
+    const picked = findOrgBySelectionInput(arg, orgs);
+    if (!picked) {
+      await ctx.reply("Unknown organization. Send /org to see the list.");
+      return;
+    }
+
+    const previousOrgId = orgStore.get(channelUserId)?.orgId;
+    orgStore.set(channelUserId, picked.id);
+    await orgStore.save();
+    client.setOrgId(picked.id);
+
+    if (previousOrgId && previousOrgId !== picked.id) {
+      sessionStore.delete(chatId);
+      await sessionStore.save();
+    }
+
+    await ctx.reply(formatOrgSwitchConfirmation(picked.name));
   }
 
   async function replyStatus(ctx: Context): Promise<void> {

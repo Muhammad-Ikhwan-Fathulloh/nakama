@@ -44,6 +44,10 @@ export class SessionStore {
     this.map[chatId] = record;
   }
 
+  delete(chatId: string): void {
+    delete this.map[chatId];
+  }
+
   async save(): Promise<void> {
     await writePrivateTextFile(this.path, `${JSON.stringify(this.map, null, 2)}\n`, {
       ensureDir: getTelegramConfigDir(),

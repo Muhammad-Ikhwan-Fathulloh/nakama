@@ -1,4 +1,5 @@
 import { createClient } from "@tinyclaw/client";
+import { ChannelOrgStore, getChannelOrgSelectionPath } from "@tinyclaw/core";
 import { ensureServerRunning, stopSpawnedServer } from "@tinyclaw/core/ensure-server";
 import { loadLocalAuthToken } from "@tinyclaw/core/local-auth";
 import {
@@ -40,13 +41,28 @@ try {
     );
   }
 
+  try {
+    await client.listUserOrgs();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `TinyClaw API authentication failed: ${message}\n` +
+        "Restart the server so it can provision the local client user:\n" +
+        "  bun run dev:server",
+    );
+    process.exit(1);
+  }
+
   const sessionStore = new SessionStore();
   await sessionStore.load();
+
+  const orgStore = new ChannelOrgStore(getChannelOrgSelectionPath("telegram"));
+  await orgStore.load();
 
   const authStore = new TelegramAuthStore();
   await authStore.reload();
 
-  const bot = createBot(config, { client, sessionStore, authStore });
+  const bot = createBot(config, { client, sessionStore, authStore, orgStore });
 
   console.log("TinyClaw Telegram bridge running (long polling).");
   console.log(`Server: ${serverUrl}`);
