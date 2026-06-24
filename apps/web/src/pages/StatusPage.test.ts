@@ -52,6 +52,23 @@ describe("StatusPage helpers", () => {
     });
   });
 
+  test("tells users to start the automation worker when it is stopped", () => {
+    const status = {
+      ...healthyStatus,
+      automationWorker: {
+        ...healthyStatus.automationWorker,
+        ok: false,
+        running: false,
+      },
+    };
+
+    expect(deriveSummary(status)).toEqual({
+      tone: "bad",
+      title: "Automation worker stopped",
+      description: "Start the automation worker to resume scheduled runs.",
+    });
+  });
+
   test("maps bridge health to service columns", () => {
     const columns = buildServiceColumns(healthyStatus);
     expect(columns.map((column) => column.title)).toEqual(["Telegram", "WhatsApp"]);

@@ -700,7 +700,7 @@ export function deriveSummary(status: SystemStatusResponse): {
     return {
       tone: "bad",
       title: "Automation worker stopped",
-      description: "Restart the server to resume scheduled runs.",
+      description: "Start the automation worker to resume scheduled runs.",
     };
   }
 
