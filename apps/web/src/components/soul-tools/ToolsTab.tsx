@@ -50,7 +50,6 @@ export function ToolsTab() {
   const errorMessage = actionError ?? (error ? formatError(error) : null);
   const customTools = tools.filter(isDeletableTool);
   const builtinTools = tools.filter((tool) => !isDeletableTool(tool));
-  const playgroundToolCount = customTools.filter((tool) => tool.handlerType === "javascript").length;
 
   function goToCreateTool() {
     if (!superBotProfile) {
@@ -93,18 +92,6 @@ export function ToolsTab() {
       {errorMessage ? (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {errorMessage}
-        </p>
-      ) : null}
-
-      {canUsePlayground && playgroundToolCount === 0 ? (
-        <p
-          className="mb-4 rounded-md border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200"
-          role="status"
-        >
-          The Tools Playground lives at{" "}
-          <code className="type-code">/system/playground/&lt;tool-id&gt;</code>. Create a custom
-          JavaScript tool with Super Bot first — built-in tools like{" "}
-          <code className="type-code">web_search</code> do not have a playground.
         </p>
       ) : null}
 
