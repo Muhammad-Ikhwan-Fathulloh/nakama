@@ -376,9 +376,12 @@ export const webFetchTool: ToolDefinition<WebFetchInput, WebFetchOutput> = {
     try {
       parsed = webFetchInputSchema.parse(input);
     } catch (err) {
-      throw new Error(
-        `web_fetch: invalid parameters: ${(err as Error).message.split("\n")[0]}`,
-      );
+      if (err instanceof z.ZodError) {
+        const issue = err.issues[0];
+        const at = issue.path && issue.path.length > 0 ? ` at ${issue.path.join(".")}` : "";
+        throw new Error(`web_fetch: invalid parameter${at}: ${issue.message}`);
+      }
+      throw err instanceof Error ? err : new Error(String(err));
     }
 
     const raw = Boolean(parsed.raw);
