@@ -75,6 +75,19 @@ import {
 } from "@/lib/models";
 
 const defaultCreatePrompt = "You are a helpful assistant.";
+const PROFILE_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+
+function slugifyProfileName(name: string): string {
+  return (
+    name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64) || "profile"
+  );
+}
+
 const sectionClass = "rounded-md border border-border bg-card";
 const identityBoxClass = "p-3";
 const profilesTagline = "Separate prompt, tools, and soul for each bot.";
@@ -155,6 +168,8 @@ export function ProfilesPage() {
   const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [createName, setCreateName] = useState("");
+  const [createId, setCreateId] = useState("");
+  const [createIdEdited, setCreateIdEdited] = useState(false);
   const [createPrompt, setCreatePrompt] = useState(defaultCreatePrompt);
   const [createAvatarFile, setCreateAvatarFile] = useState<File | null>(null);
   const [createAvatarPreview, setCreateAvatarPreview] = useState<string | null>(null);
@@ -602,10 +617,21 @@ export function ProfilesPage() {
     setCreateToolIds((current) => current.filter((id) => id !== toolId));
   }
 
+  const createIdTrimmed = createId.trim();
+  const createIdValid = Boolean(createIdTrimmed) && PROFILE_ID_PATTERN.test(createIdTrimmed);
+
+  useEffect(() => {
+    if (!createOpen || createIdEdited) {
+      return;
+    }
+
+    setCreateId(createName.trim() ? slugifyProfileName(createName) : "");
+  }, [createName, createIdEdited, createOpen]);
+
   async function handleCreate(event: React.FormEvent) {
     event.preventDefault();
 
-    if (!createName.trim()) {
+    if (!createName.trim() || !createIdValid) {
       return;
     }
 
@@ -613,6 +639,7 @@ export function ProfilesPage() {
 
     try {
       const response = await createMutation.mutateAsync({
+        id: createIdTrimmed,
         name: createName.trim(),
         systemPrompt: createPrompt.trim() || undefined,
       });
@@ -844,6 +871,8 @@ export function ProfilesPage() {
 
     if (!open) {
       setCreateName("");
+      setCreateId("");
+      setCreateIdEdited(false);
       setCreatePrompt(defaultCreatePrompt);
       setCreateToolIds([]);
       setCreateAssignToolId("");
@@ -1338,7 +1367,9 @@ export function ProfilesPage() {
           <form className="space-y-6" onSubmit={(event) => void handleCreate(event)}>
             <DialogHeader className="gap-2">
               <DialogTitle>Create profile</DialogTitle>
-              <DialogDescription>Name and system prompt for the new bot profile.</DialogDescription>
+              <DialogDescription>
+                Name, profile id, and system prompt for the new bot profile.
+              </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4">
@@ -1398,6 +1429,23 @@ export function ProfilesPage() {
                   autoFocus
                   onChange={(event) => setCreateName(event.target.value)}
                 />
+              </Field>
+              <Field label="Profile id" htmlFor="create-profile-id">
+                <Input
+                  id="create-profile-id"
+                  placeholder="research-assistant"
+                  value={createId}
+                  disabled={busy}
+                  className="font-mono text-sm"
+                  aria-invalid={!createIdValid}
+                  onChange={(event) => {
+                    setCreateIdEdited(true);
+                    setCreateId(event.target.value);
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Defaults to a slug from the profile name. Edit to customize.
+                </p>
               </Field>
               <ExpandableTextarea
                 label="System prompt"
@@ -1486,7 +1534,7 @@ export function ProfilesPage() {
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={busy || !createName.trim()}>
+              <Button type="submit" disabled={busy || !createName.trim() || !createIdValid}>
                 {createMutation.isPending ||
                 uploadAvatarMutation.isPending ||
                 assignMutation.isPending ? (

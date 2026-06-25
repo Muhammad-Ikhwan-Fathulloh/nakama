@@ -57,6 +57,10 @@ export function createSuperBotTools(
       parameters: {
         type: "object",
         properties: {
+          id: {
+            type: "string",
+            description: "Optional stable profile id. Auto-generated when omitted.",
+          },
           name: { type: "string", description: "Display name for the profile." },
           systemPrompt: { type: "string", description: "System prompt for the bot." },
           model: {
@@ -79,6 +83,7 @@ export function createSuperBotTools(
         }
 
         return profileService.createProfile(requireOrgId(context), {
+          id: readString(input, "id") ?? undefined,
           name,
           systemPrompt: readString(input, "systemPrompt") ?? undefined,
           model: readOptionalString(input, "model"),

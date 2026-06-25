@@ -326,9 +326,8 @@ export function registerProfileRoutes(app: HonoApp, options: ServerOptions): voi
   });
 
   app.get("/v1/profiles/:profileId/avatar", async (c) => {
-    const orgId = requireActiveOrgIdFromContext(c);
     const profileId = decodeURIComponent(c.req.param("profileId"));
-    const avatar = await agent.getProfileAvatar(orgId, profileId);
+    const avatar = await agent.getProfileAvatarByProfileId(profileId);
     return new Response(avatar.bytes, {
       headers: { "Content-Type": avatar.mediaType },
     });

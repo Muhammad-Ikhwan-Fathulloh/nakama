@@ -983,6 +983,7 @@ export interface ProfileResponse {
 }
 
 export interface CreateProfileRequest {
+  id?: string;
   name: string;
   systemPrompt?: string;
   model?: string | null;

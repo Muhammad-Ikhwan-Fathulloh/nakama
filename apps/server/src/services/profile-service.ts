@@ -22,7 +22,6 @@ import type {
 } from "@tinyclaw/core";
 import {
   createId,
-  nanoid,
   deleteKnowledgeBaseDocument as removeKnowledgeBaseDocument,
   deleteProfileAvatar,
   getProfileSoulDir,
@@ -42,6 +41,19 @@ import { loadJavascriptTool, validateJavascriptToolModule } from "./javascript-t
 import { toMcpServerSummaries } from "./mcp-service";
 import { toSkillSummaries } from "./skills-service";
 import { readToolSource } from "./tool-source";
+
+const PROFILE_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+
+function slugifyProfileName(name: string): string {
+  return (
+    name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64) || "profile"
+  );
+}
 
 export class ProfileService {
   constructor(private readonly db: DatabaseAdapter) {}
@@ -73,10 +85,17 @@ export class ProfileService {
   }
 
   async createProfile(orgId: string, request: CreateProfileRequest): Promise<ProfileResponse> {
+    const name = request.name.trim();
+
+    if (!name) {
+      throw new Error("Profile name is required.");
+    }
+
+    const profileId = await this.resolveNewProfileId(request.id, name);
     const now = new Date().toISOString();
     const profile: StoredProfileRecord = {
-      id: nanoid(),
-      name: request.name.trim(),
+      id: profileId,
+      name,
       systemPrompt: request.systemPrompt?.trim() ?? "You are a helpful personal assistant.",
       model: request.model ?? null,
       isSuper: request.isSuper ?? false,
@@ -85,10 +104,6 @@ export class ProfileService {
       createdAt: now,
       updatedAt: now,
     };
-
-    if (!profile.name) {
-      throw new Error("Profile name is required.");
-    }
 
     await this.db.upsertProfile(profile);
     await initSoulDirectory(getProfileSoulDir(orgId, profile.id));
@@ -343,6 +358,18 @@ export class ProfileService {
     return avatar;
   }
 
+  async getProfileAvatarByProfileId(
+    profileId: string,
+  ): Promise<{ mediaType: string; bytes: Buffer }> {
+    const profile = await this.db.getProfile(profileId);
+
+    if (!profile?.orgId) {
+      throw new TinyClawApiError("Profile not found.", 404);
+    }
+
+    return this.getProfileAvatar(profile.orgId, profileId);
+  }
+
   async deleteProfileAvatar(orgId: string, profileId: string): Promise<void> {
     const profile = await this.requireProfile(orgId, profileId);
     const removed = await deleteProfileAvatar(orgId, profileId);
@@ -393,6 +420,28 @@ export class ProfileService {
     }
 
     return { deleted: true, profileId, documentId };
+  }
+
+  private async resolveNewProfileId(
+    requestedId: string | undefined,
+    name: string,
+  ): Promise<string> {
+    const trimmed = requestedId?.trim() || slugifyProfileName(name);
+
+    if (!PROFILE_ID_PATTERN.test(trimmed)) {
+      throw new TinyClawApiError(
+        "Profile id must start with a letter or number and use only letters, numbers, underscores, and hyphens (max 64 characters).",
+        400,
+      );
+    }
+
+    const existing = await this.db.getProfile(trimmed);
+
+    if (existing) {
+      throw new TinyClawApiError("Profile id already exists.", 409);
+    }
+
+    return trimmed;
   }
 
   private async requireProfile(orgId: string, profileId: string): Promise<StoredProfileRecord> {

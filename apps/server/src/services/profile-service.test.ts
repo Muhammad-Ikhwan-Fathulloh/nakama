@@ -101,6 +101,10 @@ describe("profile service avatar", () => {
     expect(avatar.mediaType).toBe("image/png");
     expect(avatar.bytes.length).toBeGreaterThan(0);
 
+    const publicAvatar = await service.getProfileAvatarByProfileId(profileId);
+    expect(publicAvatar.mediaType).toBe("image/png");
+    expect(publicAvatar.bytes.length).toBeGreaterThan(0);
+
     await service.deleteProfileAvatar(ORG_ID, profileId);
 
     const afterDelete = await service.getProfile(ORG_ID, profileId);
@@ -177,6 +181,47 @@ describe("profile service createProfile", () => {
     });
 
     expect(updated.profile.model).toBe("anthropic:claude-sonnet-4");
+  });
+
+  test("uses a slug from the profile name when id is omitted", async () => {
+    tempConfigDir = await mkdtemp(path.join(os.tmpdir(), "tinyclaw-profile-slug-id-"));
+    process.env.TINYCLAW_CONFIG_DIR = tempConfigDir;
+
+    const service = new ProfileService(createInMemoryDatabaseAdapter());
+    const created = await service.createProfile(ORG_ID, { name: "Research Assistant" });
+
+    expect(created.profile.id).toBe("research-assistant");
+  });
+
+  test("uses a custom profile id when provided", async () => {
+    tempConfigDir = await mkdtemp(path.join(os.tmpdir(), "tinyclaw-profile-custom-id-"));
+    process.env.TINYCLAW_CONFIG_DIR = tempConfigDir;
+
+    const service = new ProfileService(createInMemoryDatabaseAdapter());
+    const created = await service.createProfile(ORG_ID, {
+      id: "research-bot",
+      name: "Research Bot",
+    });
+
+    expect(created.profile.id).toBe("research-bot");
+  });
+
+  test("rejects duplicate custom profile ids", async () => {
+    const service = new ProfileService(createInMemoryDatabaseAdapter());
+
+    await service.createProfile(ORG_ID, { id: "support", name: "Support" });
+
+    await expect(
+      service.createProfile(ORG_ID, { id: "support", name: "Support 2" }),
+    ).rejects.toThrow(/already exists/i);
+  });
+
+  test("rejects invalid custom profile ids", async () => {
+    const service = new ProfileService(createInMemoryDatabaseAdapter());
+
+    await expect(
+      service.createProfile(ORG_ID, { id: "../escape", name: "Bad Bot" }),
+    ).rejects.toThrow(/profile id must/i);
   });
 });
 
