@@ -21,4 +21,5 @@ docs/brainstorms/*
 .worktrees/
 scripts/
 outputs/
-
+pitch-deck.html
+pitch-deck.md

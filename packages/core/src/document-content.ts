@@ -1,5 +1,6 @@
 import type { DocumentAttachment, MessageContentPart, ProviderName } from "./contract";
 import { TinyClawApiError } from "./api-error";
+import { extractPdfText } from "./pdf-text";
 
 export type DocumentTextParser = (
   document: DocumentAttachment,
@@ -14,6 +15,8 @@ function decodeDocumentText(data: string): string {
 const BUILTIN_DOCUMENT_TEXT_PARSERS: Record<string, DocumentTextParser> = {
   "text/plain": (document) => decodeDocumentText(document.data),
   "text/csv": (document) => decodeDocumentText(document.data),
+  "application/pdf": async (document) =>
+    extractPdfText(Buffer.from(document.data, "base64")),
 };
 
 const NATIVE_DOCUMENT_MEDIA_TYPES: Record<ProviderName, ReadonlySet<string>> = {

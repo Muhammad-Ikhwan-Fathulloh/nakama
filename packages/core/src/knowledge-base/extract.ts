@@ -1,4 +1,5 @@
 import { MAX_DOCUMENT_BYTES } from "../message-content";
+import { extractPdfText } from "../pdf-text";
 
 const KB_ALLOWED_MEDIA_TYPES = new Set([
   "application/pdf",
@@ -57,18 +58,6 @@ export async function extractText(
   }
 
   return bytes.toString("utf8").trim();
-}
-
-async function extractPdfText(bytes: Buffer): Promise<string> {
-  const { PDFParse } = await import("pdf-parse");
-  const parser = new PDFParse({ data: bytes });
-
-  try {
-    const result = await parser.getText();
-    return result.text.trim();
-  } finally {
-    await parser.destroy();
-  }
 }
 
 export function buildExtractedTextHeader(options: {
