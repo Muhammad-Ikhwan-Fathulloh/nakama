@@ -149,6 +149,7 @@ export function createMockClient(
     listProfiles: 0,
     listUserOrgs: 0,
     setOrgId: 0,
+    transcribeAudio: 0,
   };
   const orgIds: string[] = [];
   let lastCreateSessionProfileId: string | undefined;
@@ -312,6 +313,10 @@ export function createMockClient(
       models: [],
       displayName: null,
     }),
+    transcribeAudio: async () => {
+      calls.transcribeAudio += 1;
+      return { text: "Transcribed voice message" };
+    },
   } as unknown as TinyClawClient;
 
   assertBridgeClientMethods(client);

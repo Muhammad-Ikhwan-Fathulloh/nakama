@@ -151,6 +151,7 @@ export interface StoredLlmUsageModelStatsRecord {
 export interface StoredWorkspaceSettingsRecord {
   id: string;
   visionModel: string | null;
+  transcriptionModel: string | null;
   updatedAt: string;
   orgId?: string | null;
 }

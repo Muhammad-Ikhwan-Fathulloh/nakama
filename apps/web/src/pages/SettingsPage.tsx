@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ProviderSettingsCard } from "@/components/settings/ProviderSettingsCard";
 import { OrgMembersCard } from "@/components/settings/OrgMembersCard";
 import { VisionSettingsCard } from "@/components/settings/VisionSettingsCard";
+import { TranscriptionSettingsCard } from "@/components/settings/TranscriptionSettingsCard";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { UserContextSettings } from "@/components/UserContextCard";
 import { TimezoneSelect } from "@/components/TimezoneSelect";
@@ -116,6 +117,7 @@ export function SettingsPage() {
           <Card className="w-full shadow-none">
             <CardContent className="divide-y divide-border p-0">
               <VisionSettingsCard />
+              <TranscriptionSettingsCard />
             </CardContent>
           </Card>
 

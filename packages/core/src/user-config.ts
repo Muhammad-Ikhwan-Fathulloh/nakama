@@ -11,6 +11,7 @@ import type {
   ProviderChatOptions,
   ThinkingEffort,
   ThinkingSettings,
+  TranscriptionSettings,
   VisionSettings,
 } from "./contract";
 import { ensureDir, readTextOrNull, writePrivateTextFile } from "./fs";
@@ -43,6 +44,7 @@ export interface UserConfig {
   thinkingEnabled?: boolean;
   thinkingEffort?: ThinkingEffort;
   visionModel?: string | null;
+  transcriptionModel?: string | null;
   localAuthTokenHash?: string;
   localAuthToken?: string;
 }
@@ -187,6 +189,7 @@ export async function loadUserConfig(): Promise<UserConfig | null> {
     thinkingEnabled: thinking.enabled,
     thinkingEffort: thinking.effort,
     visionModel: readVisionModel(parsed.global),
+    transcriptionModel: readTranscriptionModel(parsed.global),
     ...(parsed.global.local_auth_token_hash?.trim()
       ? { localAuthTokenHash: parsed.global.local_auth_token_hash.trim() }
       : {}),
@@ -208,6 +211,11 @@ export async function loadUserTimezone(): Promise<string> {
 
 function readVisionModel(global: Record<string, string>): string | null {
   const trimmed = global.vision_model?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function readTranscriptionModel(global: Record<string, string>): string | null {
+  const trimmed = global.transcription_model?.trim();
   return trimmed ? trimmed : null;
 }
 
@@ -239,6 +247,16 @@ export async function saveUserVisionSettings(settings: VisionSettings): Promise<
   await writePrivateTextFile(getUserConfigPath(), lines.join("\n"), {
     ensureDir: getUserConfigDir(),
   });
+}
+
+export async function loadUserTranscriptionSettings(): Promise<TranscriptionSettings> {
+  const raw = await readTextOrNull(getUserConfigPath());
+
+  if (raw === null) {
+    return { model: null };
+  }
+
+  return { model: readTranscriptionModel(parseIniWithSections(raw).global) };
 }
 
 export async function loadUserThinkingSettings(): Promise<ThinkingSettings> {
@@ -339,6 +357,7 @@ export async function saveUserConfig(config: UserConfig): Promise<void> {
     thinking: thinking.enabled ? "on" : "off",
     thinking_effort: thinking.effort,
     vision_model: config.visionModel ?? "",
+    transcription_model: config.transcriptionModel ?? "",
     local_auth_token_hash: config.localAuthTokenHash,
   };
 

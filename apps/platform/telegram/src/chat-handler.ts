@@ -31,6 +31,11 @@ import {
   UNSUPPORTED_MEDIA_REPLY,
 } from "./attachments";
 import { buildTelegramImageInput } from "./images";
+import {
+  buildTelegramAudioInput,
+  formatTelegramAudioError,
+  hasTelegramAudio,
+} from "./audio";
 import { normalizeHandshakeInput } from "@tinyclaw/core/telegram-config";
 import type { TelegramBridgeConfig } from "./config";
 import type { TelegramAuthStore } from "./auth-store";
@@ -128,7 +133,7 @@ export function createChatHandler(deps: ChatHandlerDeps) {
             return;
           }
 
-          if (hasTelegramDocument(ctx)) {
+          if (hasTelegramDocument(ctx) || hasTelegramAudio(ctx)) {
             await ctx.reply("Send your pairing code as text to link this chat.");
             return;
           }
@@ -171,6 +176,13 @@ export function createChatHandler(deps: ChatHandlerDeps) {
 
       if (documentInput) {
         await handleChatMessage(ctx, withGroupContext(documentInput, isGroup), chatId);
+        return;
+      }
+
+      const audioInput = await tryBuildAudioInput(ctx);
+
+      if (audioInput) {
+        await handleChatMessage(ctx, withGroupContext(audioInput, isGroup), chatId);
         return;
       }
 
@@ -314,6 +326,19 @@ export function createChatHandler(deps: ChatHandlerDeps) {
       return result.input;
     } catch {
       await ctx.reply(DOWNLOAD_FAILED_REPLY);
+      return null;
+    }
+  }
+
+  async function tryBuildAudioInput(ctx: Context): Promise<SendMessageInput | null> {
+    if (!hasTelegramAudio(ctx)) {
+      return null;
+    }
+
+    try {
+      return await buildTelegramAudioInput(ctx, client);
+    } catch (error) {
+      await ctx.reply(formatTelegramAudioError(error));
       return null;
     }
   }

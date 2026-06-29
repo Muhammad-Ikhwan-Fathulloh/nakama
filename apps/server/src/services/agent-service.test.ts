@@ -230,9 +230,42 @@ describe("AgentService vision settings", () => {
     expect(saved).toEqual({ vision: { model: "p-openai-1::gpt-4o-mini" } });
     expect(await db.getWorkspaceSettings()).toMatchObject({
       visionModel: "p-openai-1::gpt-4o-mini",
+      transcriptionModel: null,
     });
     expect(await service.getVisionSettings()).toEqual({
       vision: { model: "p-openai-1::gpt-4o-mini" },
+    });
+  });
+});
+
+describe("AgentService transcription settings", () => {
+  test("persists transcription model in the database", async () => {
+    const db = createInMemoryDatabaseAdapter();
+    const service = new AgentService(
+      {
+        defaultProviderId: "p-openai-1",
+        providers: [
+          {
+            id: "p-openai-1",
+            type: "openai",
+            label: "OpenAI",
+            apiKey: "test-key",
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      },
+      null,
+      db,
+    );
+
+    const saved = await service.setTranscriptionSettings({ model: "p-openai-1::whisper-1" });
+
+    expect(saved).toEqual({ transcription: { model: "p-openai-1::whisper-1" } });
+    expect(await db.getWorkspaceSettings()).toMatchObject({
+      transcriptionModel: "p-openai-1::whisper-1",
+    });
+    expect(await service.getTranscriptionSettings()).toEqual({
+      transcription: { model: "p-openai-1::whisper-1" },
     });
   });
 });

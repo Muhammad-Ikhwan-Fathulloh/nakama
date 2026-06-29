@@ -23,6 +23,10 @@ import {
   type UpdateThinkingRequest,
   type UpdateTimezoneRequest,
   type UpdateVisionRequest,
+  type UpdateTranscriptionRequest,
+  type TranscribeAudioRequest,
+  type TranscribeAudioResponse,
+  type TranscriptionSettingsResponse,
   type UpdateWhatsAppSettingsRequest,
   type VisionSettingsResponse,
   type WhatsAppSettingsResponse,
@@ -50,6 +54,18 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
   const timezoneSettingsSchema = z.object({ timezone: z.string() }).openapi("TimezoneSettingsResponse");
   const thinkingSettingsSchema = z.object({}).passthrough().openapi("ThinkingSettingsResponse");
   const visionSettingsSchema = z.object({}).passthrough().openapi("VisionSettingsResponse");
+  const transcriptionSettingsSchema = z
+    .object({})
+    .passthrough()
+    .openapi("TranscriptionSettingsResponse");
+  const transcribeAudioRequestSchema = z
+    .object({})
+    .passthrough()
+    .openapi("TranscribeAudioRequest");
+  const transcribeAudioResponseSchema = z
+    .object({})
+    .passthrough()
+    .openapi("TranscribeAudioResponse");
   const telegramSettingsSchema = z.object({}).passthrough().openapi("TelegramSettingsResponse");
   const emailSettingsSchema = z.object({}).passthrough().openapi("EmailSettingsResponse");
   const sendEmailTestRequestSchema = z.object({ to: z.string().optional() }).openapi("SendEmailTestRequest");
@@ -195,6 +211,63 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
     responses: {
       200: { description: "Vision settings", content: { "application/json": { schema: visionSettingsSchema } } },
       400: { description: "Error", content: { "application/json": { schema: errorSchema } } },
+    },
+  }));
+  const updateTranscriptionRequestSchema = z
+    .object({ model: z.string().nullable() })
+    .openapi("UpdateTranscriptionRequest");
+  app.openAPIRegistry.registerPath(createRoute({
+    method: "get",
+    path: "/v1/settings/transcription",
+    tags: ["Models"],
+    summary: "Get transcription settings",
+    operationId: "getTranscriptionSettings",
+    responses: {
+      200: {
+        description: "Transcription settings",
+        content: { "application/json": { schema: transcriptionSettingsSchema } },
+      },
+    },
+  }));
+  app.openAPIRegistry.registerPath(createRoute({
+    method: "put",
+    path: "/v1/settings/transcription",
+    tags: ["Models"],
+    summary: "Update transcription settings",
+    operationId: "setTranscriptionSettings",
+    request: {
+      body: {
+        required: true,
+        content: { "application/json": { schema: updateTranscriptionRequestSchema } },
+      },
+    },
+    responses: {
+      200: {
+        description: "Transcription settings",
+        content: { "application/json": { schema: transcriptionSettingsSchema } },
+      },
+      400: { description: "Error", content: { "application/json": { schema: errorSchema } } },
+    },
+  }));
+  app.openAPIRegistry.registerPath(createRoute({
+    method: "post",
+    path: "/v1/audio/transcribe",
+    tags: ["Models"],
+    summary: "Transcribe audio with configured Whisper model",
+    operationId: "transcribeAudio",
+    request: {
+      body: {
+        required: true,
+        content: { "application/json": { schema: transcribeAudioRequestSchema } },
+      },
+    },
+    responses: {
+      200: {
+        description: "Transcription result",
+        content: { "application/json": { schema: transcribeAudioResponseSchema } },
+      },
+      400: { description: "Error", content: { "application/json": { schema: errorSchema } } },
+      502: { description: "Upstream error", content: { "application/json": { schema: errorSchema } } },
     },
   }));
   app.openAPIRegistry.registerPath(createRoute({
@@ -360,6 +433,40 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
 
     try {
       return json<VisionSettingsResponse>(await agent.setVisionSettings(body));
+    } catch (error) {
+      if (error instanceof TinyClawApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.get("/v1/settings/transcription", async () => {
+    return json<TranscriptionSettingsResponse>(await agent.getTranscriptionSettings());
+  });
+
+  app.put("/v1/settings/transcription", async (c) => {
+    const body = await readJson<UpdateTranscriptionRequest>(c.req.raw);
+
+    try {
+      return json<TranscriptionSettingsResponse>(await agent.setTranscriptionSettings(body));
+    } catch (error) {
+      if (error instanceof TinyClawApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.post("/v1/audio/transcribe", async (c) => {
+    const body = await readJson<TranscribeAudioRequest>(c.req.raw);
+
+    try {
+      return json<TranscribeAudioResponse>(await agent.transcribeAudio(body));
     } catch (error) {
       if (error instanceof TinyClawApiError) {
         return errorResponse(error.message, error.status);

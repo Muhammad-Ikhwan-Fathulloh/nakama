@@ -75,6 +75,11 @@ import type {
   UpdateAutomationRequest,
   UpdateThinkingRequest,
   UpdateVisionRequest,
+  UpdateTranscriptionRequest,
+  TranscribeAudioRequest,
+  TranscribeAudioResponse,
+  TranscriptionSettings,
+  TranscriptionSettingsResponse,
   UpdateTelegramSettingsRequest,
   UpdateEmailSettingsRequest,
   UpdateWhatsAppSettingsRequest,
@@ -892,6 +897,31 @@ export class TinyClawClient {
       body: JSON.stringify({ model } satisfies UpdateVisionRequest),
     });
     return response.vision;
+  }
+
+  async getTranscriptionSettings(): Promise<TranscriptionSettings> {
+    const response = await this.request<TranscriptionSettingsResponse>(
+      "/v1/settings/transcription",
+    );
+    return response.transcription;
+  }
+
+  async setTranscriptionSettings(model: string | null): Promise<TranscriptionSettings> {
+    const response = await this.request<TranscriptionSettingsResponse>(
+      "/v1/settings/transcription",
+      {
+        method: "PUT",
+        body: JSON.stringify({ model } satisfies UpdateTranscriptionRequest),
+      },
+    );
+    return response.transcription;
+  }
+
+  async transcribeAudio(input: TranscribeAudioRequest): Promise<TranscribeAudioResponse> {
+    return this.request<TranscribeAudioResponse>("/v1/audio/transcribe", {
+      method: "POST",
+      body: JSON.stringify(input satisfies TranscribeAudioRequest),
+    });
   }
 
   async getTelegramSettings(): Promise<TelegramSettingsResponse> {

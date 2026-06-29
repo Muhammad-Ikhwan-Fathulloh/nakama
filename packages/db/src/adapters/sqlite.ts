@@ -172,6 +172,7 @@ interface LlmUsageModelStatsRow {
 interface WorkspaceSettingsRow {
   id: string;
   vision_model: string | null;
+  transcription_model: string | null;
   updated_at: string;
 }
 
@@ -625,10 +626,11 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
     "SELECT * FROM workspace_settings WHERE id = ?",
   );
   const upsertWorkspaceSettingsStmt = db.prepare(`
-    INSERT INTO workspace_settings (id, vision_model, updated_at)
-    VALUES (?, ?, ?)
+    INSERT INTO workspace_settings (id, vision_model, transcription_model, updated_at)
+    VALUES (?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       vision_model = excluded.vision_model,
+      transcription_model = excluded.transcription_model,
       updated_at = excluded.updated_at
   `);
 
@@ -1388,7 +1390,12 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
     },
 
     async upsertWorkspaceSettings(record) {
-      upsertWorkspaceSettingsStmt.run(record.id, record.visionModel, record.updatedAt);
+      upsertWorkspaceSettingsStmt.run(
+        record.id,
+        record.visionModel,
+        record.transcriptionModel,
+        record.updatedAt,
+      );
     },
 
     async listMcpServers() {
@@ -1813,6 +1820,7 @@ function toWorkspaceSettingsRecord(row: WorkspaceSettingsRow): StoredWorkspaceSe
   return {
     id: row.id,
     visionModel: row.vision_model?.trim() || null,
+    transcriptionModel: row.transcription_model?.trim() || null,
     updatedAt: row.updated_at,
   };
 }

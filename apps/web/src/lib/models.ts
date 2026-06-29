@@ -652,6 +652,12 @@ export function resolveModelVisionSupport(
   return model.supportsVision !== false;
 }
 
+export const TRANSCRIPTION_MODEL_OPTIONS = [
+  { id: "whisper-1", name: "Whisper" },
+  { id: "gpt-4o-transcribe", name: "GPT-4o Transcribe" },
+  { id: "gpt-4o-mini-transcribe", name: "GPT-4o mini Transcribe" },
+] as const;
+
 export function modelsFromCustomRows(
   rows: Array<{ id: string; name?: string; default?: boolean; inputPerMillionUsd?: number; outputPerMillionUsd?: number }>,
 ): ProviderModelOption[] {

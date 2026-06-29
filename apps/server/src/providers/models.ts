@@ -443,3 +443,20 @@ export function modelSupportsVision(
 
   return undefined;
 }
+
+export const TRANSCRIPTION_MODEL_IDS = new Set([
+  "whisper-1",
+  "gpt-4o-transcribe",
+  "gpt-4o-mini-transcribe",
+]);
+
+export function modelSupportsTranscription(
+  modelId: string,
+  provider: ProviderName,
+): boolean {
+  if (provider !== "openai") {
+    return false;
+  }
+
+  return TRANSCRIPTION_MODEL_IDS.has(modelId.trim());
+}

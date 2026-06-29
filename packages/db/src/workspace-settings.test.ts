@@ -11,24 +11,28 @@ describe("workspace settings", () => {
     await db.upsertWorkspaceSettings({
       id: WORKSPACE_SETTINGS_ID,
       visionModel: "p-openai::gpt-4o-mini",
+      transcriptionModel: null,
       updatedAt: "2026-06-20T10:00:00.000Z",
     });
 
     expect(await db.getWorkspaceSettings()).toEqual({
       id: WORKSPACE_SETTINGS_ID,
       visionModel: "p-openai::gpt-4o-mini",
+      transcriptionModel: null,
       updatedAt: "2026-06-20T10:00:00.000Z",
     });
 
     await db.upsertWorkspaceSettings({
       id: WORKSPACE_SETTINGS_ID,
       visionModel: null,
+      transcriptionModel: "p-openai::whisper-1",
       updatedAt: "2026-06-20T10:05:00.000Z",
     });
 
     expect(await db.getWorkspaceSettings()).toEqual({
       id: WORKSPACE_SETTINGS_ID,
       visionModel: null,
+      transcriptionModel: "p-openai::whisper-1",
       updatedAt: "2026-06-20T10:05:00.000Z",
     });
   });

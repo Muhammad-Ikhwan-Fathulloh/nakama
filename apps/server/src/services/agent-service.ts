@@ -67,6 +67,11 @@ import type {
   UpdateVisionRequest,
   VisionSettings,
   VisionSettingsResponse,
+  UpdateTranscriptionRequest,
+  TranscriptionSettings,
+  TranscriptionSettingsResponse,
+  TranscribeAudioRequest,
+  TranscribeAudioResponse,
   UploadKnowledgeBaseRequest,
   UploadKnowledgeBaseResponse,
   ProviderChatOptions,
@@ -103,6 +108,7 @@ import {
   loadWhatsAppSettingsPublic,
   loadUserTimezone,
   loadUserVisionSettings,
+  loadUserTranscriptionSettings,
   messageContentHasImages,
   persistInlineAttachmentsInContent,
   rehydrateAttachmentRefsInContent,
@@ -189,6 +195,11 @@ import {
   VISION_MODEL_REQUIRED_MESSAGE,
 } from "./image-vision-fallback";
 import {
+  resolveTranscriptionProviderSelection,
+  transcribeAudioWithOpenAI,
+  TRANSCRIPTION_MODEL_REQUIRED_MESSAGE,
+} from "./audio-transcription";
+import {
   createAttachmentLoader,
   createAttachmentSaver,
 } from "./attachment-service";
@@ -226,6 +237,7 @@ export class AgentService {
   private readonly sessionTitleService: SessionTitleService;
   private _providerConfigured: boolean;
   private visionSettingsPromise: Promise<void> | null = null;
+  private transcriptionSettingsPromise: Promise<void> | null = null;
 
   constructor(
     userConfig: UserConfig | null,
@@ -372,9 +384,11 @@ export class AgentService {
     }
 
     const vision: VisionSettings = { model };
+    const existing = await this.db.getWorkspaceSettings();
     await this.db.upsertWorkspaceSettings({
       id: WORKSPACE_SETTINGS_ID,
       visionModel: model,
+      transcriptionModel: existing?.transcriptionModel ?? this.userConfig?.transcriptionModel ?? null,
       updatedAt: new Date().toISOString(),
     });
 
@@ -390,6 +404,137 @@ export class AgentService {
     return { vision };
   }
 
+  async getTranscriptionSettings(): Promise<TranscriptionSettingsResponse> {
+    await this.ensureTranscriptionSettingsLoaded();
+    const transcription = await this.resolveTranscriptionSettings();
+    return { transcription };
+  }
+
+  async setTranscriptionSettings(
+    input: UpdateTranscriptionRequest,
+  ): Promise<TranscriptionSettingsResponse> {
+    await this.ensureTranscriptionSettingsLoaded();
+    const model = input.model?.trim() || null;
+
+    if (model) {
+      const resolved = resolveTranscriptionProviderSelection({
+        ...this.userConfig,
+        transcriptionModel: model,
+        providers: this.userConfig?.providers ?? [],
+        defaultProviderId: this.userConfig?.defaultProviderId ?? null,
+      });
+
+      if (!resolved) {
+        throw new TinyClawApiError(
+          "Selected audio transcription model is unavailable. Choose an OpenAI Whisper model.",
+          400,
+        );
+      }
+    }
+
+    const transcription: TranscriptionSettings = { model };
+    const existing = await this.db.getWorkspaceSettings();
+    await this.db.upsertWorkspaceSettings({
+      id: WORKSPACE_SETTINGS_ID,
+      visionModel: existing?.visionModel ?? this.userConfig?.visionModel ?? null,
+      transcriptionModel: model,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (this.userConfig) {
+      this.userConfig = {
+        ...this.userConfig,
+        transcriptionModel: model,
+      };
+    }
+
+    return { transcription };
+  }
+
+  async transcribeAudio(input: TranscribeAudioRequest): Promise<TranscribeAudioResponse> {
+    await this.ensureTranscriptionSettingsLoaded();
+
+    const data = input.data?.trim();
+    const mediaType = input.mediaType?.trim();
+
+    if (!data || !mediaType) {
+      throw new TinyClawApiError("Audio data and media type are required.", 400);
+    }
+
+    let bytes: Buffer;
+
+    try {
+      bytes = Buffer.from(data, "base64");
+    } catch {
+      throw new TinyClawApiError("Audio data must be valid base64.", 400);
+    }
+
+    if (bytes.length === 0) {
+      throw new TinyClawApiError("Audio data is empty.", 400);
+    }
+
+    const selection = resolveTranscriptionProviderSelection(this.userConfig);
+
+    if (!selection) {
+      throw new TinyClawApiError(TRANSCRIPTION_MODEL_REQUIRED_MESSAGE, 400);
+    }
+
+    const text = await transcribeAudioWithOpenAI(
+      selection.instance.apiKey,
+      selection.instance.baseUrl,
+      selection.model,
+      {
+        bytes,
+        filename: input.filename?.trim() || "audio.ogg",
+        mediaType,
+      },
+    );
+
+    return { text };
+  }
+
+  async ensureTranscriptionSettingsLoaded(): Promise<void> {
+    if (!this.transcriptionSettingsPromise) {
+      this.transcriptionSettingsPromise = this.loadTranscriptionSettingsFromDatabase();
+    }
+
+    await this.transcriptionSettingsPromise;
+  }
+
+  private async loadTranscriptionSettingsFromDatabase(): Promise<void> {
+    const stored = await this.db.getWorkspaceSettings();
+
+    if (stored) {
+      if (this.userConfig) {
+        this.userConfig = {
+          ...this.userConfig,
+          transcriptionModel: stored.transcriptionModel,
+        };
+      }
+      return;
+    }
+
+    const legacyModel =
+      this.userConfig?.transcriptionModel ??
+      (await loadUserTranscriptionSettings()).model ??
+      null;
+
+    await this.db.upsertWorkspaceSettings({
+      id: WORKSPACE_SETTINGS_ID,
+      visionModel: this.userConfig?.visionModel ?? null,
+      transcriptionModel: legacyModel,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (this.userConfig) {
+      this.userConfig = { ...this.userConfig, transcriptionModel: legacyModel };
+    }
+  }
+
+  private async resolveTranscriptionSettings(): Promise<TranscriptionSettings> {
+    return { model: this.userConfig?.transcriptionModel ?? null };
+  }
+
   async ensureVisionSettingsLoaded(): Promise<void> {
     if (!this.visionSettingsPromise) {
       this.visionSettingsPromise = this.loadVisionSettingsFromDatabase();
@@ -403,22 +548,35 @@ export class AgentService {
 
     if (stored) {
       if (this.userConfig) {
-        this.userConfig = { ...this.userConfig, visionModel: stored.visionModel };
+        this.userConfig = {
+          ...this.userConfig,
+          visionModel: stored.visionModel,
+          transcriptionModel: stored.transcriptionModel,
+        };
       }
       return;
     }
 
-    const legacyModel =
+    const legacyVisionModel =
       this.userConfig?.visionModel ?? (await loadUserVisionSettings()).model ?? null;
+    const legacyTranscriptionModel =
+      this.userConfig?.transcriptionModel ??
+      (await loadUserTranscriptionSettings()).model ??
+      null;
 
     await this.db.upsertWorkspaceSettings({
       id: WORKSPACE_SETTINGS_ID,
-      visionModel: legacyModel,
+      visionModel: legacyVisionModel,
+      transcriptionModel: legacyTranscriptionModel,
       updatedAt: new Date().toISOString(),
     });
 
     if (this.userConfig) {
-      this.userConfig = { ...this.userConfig, visionModel: legacyModel };
+      this.userConfig = {
+        ...this.userConfig,
+        visionModel: legacyVisionModel,
+        transcriptionModel: legacyTranscriptionModel,
+      };
     }
   }
 

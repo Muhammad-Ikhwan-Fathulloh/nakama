@@ -1442,6 +1442,55 @@ describe("createChatHandler document attachments", () => {
     });
   });
 
+  test("transcribes voice messages and forwards text to the agent", async () => {
+    await withTempHome(async (homeDir) => {
+      await writeTelegramConfigIni(homeDir, {
+        botToken: "1234567890:TEST",
+        allowedUserIds: [4242],
+      });
+
+      const authStore = new TelegramAuthStore();
+      await authStore.reload();
+      const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(Buffer.from("voice-bytes"), {
+          status: 200,
+          headers: { "content-type": "audio/ogg" },
+        }),
+      );
+      const { client, calls, getLastStreamInput } = createMockClient();
+      const sessionStore = new SessionStore(
+        path.join(homeDir, ".tinyclaw", "telegram", "chat-sessions.json"),
+      );
+      const orgStore = createTestOrgStore(homeDir);
+      await orgStore.load();
+      const handleMessage = createChatHandler({
+        client,
+        config: { botToken: "1234567890:TEST", profileId: "default" },
+        authStore,
+        sessionStore,
+        orgStore,
+      });
+
+      const { ctx, replies } = createMessageContext({ userId: 4242 });
+      (ctx as { message: Record<string, unknown> }).message = {
+        voice: { file_id: "voice-1" },
+      };
+      (ctx as { api: Record<string, unknown> }).api = {
+        ...((ctx as { api?: Record<string, unknown> }).api ?? {}),
+        token: "test-token",
+        getFile: async () => ({ file_path: "voice/file.ogg" }),
+      };
+
+      await handleMessage(ctx);
+
+      expect(calls.transcribeAudio).toBe(1);
+      expect(calls.sendStream).toBe(1);
+      expect(getLastStreamInput()).toEqual({ message: "Transcribed voice message" });
+      expect(replies.at(-1)).toBe("Agent reply");
+      fetchSpy.mockRestore();
+    });
+  });
+
   test("replies with supported media guidance for other non-text messages", async () => {
     await withTempHome(async (homeDir) => {
       await writeTelegramConfigIni(homeDir, {
@@ -1467,7 +1516,7 @@ describe("createChatHandler document attachments", () => {
 
       const { ctx, replies } = createMessageContext({ userId: 4242 });
       (ctx as { message: Record<string, unknown> }).message = {
-        voice: { file_id: "voice-1" },
+        sticker: { file_id: "sticker-1" },
       };
 
       await handleMessage(ctx);

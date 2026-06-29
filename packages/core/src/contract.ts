@@ -622,6 +622,28 @@ export interface UpdateVisionRequest {
   model: string | null;
 }
 
+export interface TranscriptionSettings {
+  model: string | null;
+}
+
+export interface TranscriptionSettingsResponse {
+  transcription: TranscriptionSettings;
+}
+
+export interface UpdateTranscriptionRequest {
+  model: string | null;
+}
+
+export interface TranscribeAudioRequest {
+  mediaType: string;
+  data: string;
+  filename?: string;
+}
+
+export interface TranscribeAudioResponse {
+  text: string;
+}
+
 export interface RotateLocalAuthTokenResponse {
   token: string;
 }

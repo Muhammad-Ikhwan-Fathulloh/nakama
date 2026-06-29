@@ -19,7 +19,7 @@ export const UNSUPPORTED_DOCUMENT_TYPES_REPLY =
 export const OVERSIZED_FILE_REPLY = "File is too large. Maximum size is 5 MB.";
 
 export const UNSUPPORTED_MEDIA_REPLY =
-  "Send text, a photo, or a supported document (pdf, docx, txt, csv — max 5 MB).";
+  "Send text, a photo, voice message, or a supported document (pdf, docx, txt, csv — max 5 MB).";
 
 export const DOWNLOAD_FAILED_REPLY = "Could not download that file. Try again.";
 

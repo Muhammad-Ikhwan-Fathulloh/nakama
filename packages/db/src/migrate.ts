@@ -637,6 +637,17 @@ function migrateWorkspaceSettingsTable(db: Database): void {
       updated_at TEXT NOT NULL
     );
   `);
+
+  const columns = db
+    .prepare("PRAGMA table_info(workspace_settings)")
+    .all() as Array<{ name: string }>;
+  const columnNames = new Set(columns.map((column) => column.name));
+
+  if (!columnNames.has("transcription_model")) {
+    db.exec(`
+      ALTER TABLE workspace_settings ADD COLUMN transcription_model TEXT;
+    `);
+  }
 }
 
 function migrateAttachmentsTable(db: Database): void {
