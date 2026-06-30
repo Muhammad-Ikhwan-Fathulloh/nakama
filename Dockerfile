@@ -11,7 +11,7 @@ COPY package.json bun.lock ./
 COPY apps apps
 COPY packages packages
 
-RUN bun install --frozen-lockfile \
+RUN bun install --frozen-lockfile --ignore-scripts \
   && bun run --filter @tinyclaw/web build
 
 # --- Production runtime (server + workspace packages + built static assets) ---
@@ -35,7 +35,7 @@ COPY apps/web/package.json apps/web/
 COPY apps/cli/package.json apps/cli/
 COPY --from=web-builder /app/apps/web/dist apps/web/dist
 
-RUN bun install --frozen-lockfile --production \
+RUN bun install --frozen-lockfile --production --ignore-scripts \
       --filter '@tinyclaw/server' \
       --filter '@tinyclaw/automation' \
       --filter '@tinyclaw/telegram' \
