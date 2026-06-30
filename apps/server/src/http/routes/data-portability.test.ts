@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getUserConfigDir, previewTinyClawDataImport } from "@tinyclaw/core";
+import { getUserConfigDir } from "@tinyclaw/core";
 import { createInMemoryDatabaseAdapter } from "@tinyclaw/db";
+import { previewTinyClawDataImport } from "../../services/data-portability";
 import { createHonoApp } from "../app";
 import { AuthService } from "../../services/auth-service";
 import { OrgService } from "../../services/org-service";

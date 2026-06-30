@@ -22,13 +22,13 @@ import {
 } from "node:path";
 import { unzipSync, zipSync } from "fflate";
 import {
+  getUserConfigDir,
   TINYCLAW_API_VERSION,
   type DataExportManifest,
   type DataExportSkippedItem,
   type DataImportPreviewResponse,
   type RestoreDataImportResponse,
-} from "./contract";
-import { getUserConfigDir } from "./user-config";
+} from "@tinyclaw/core";
 
 export const TINYCLAW_EXPORT_MANIFEST = "tinyclaw-export.json";
 export const TINYCLAW_EXPORT_FORMAT_VERSION = 1;

@@ -1,13 +1,15 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import {
-  createTinyClawDataExport,
-  previewTinyClawDataImport,
-  restoreTinyClawDataImport,
   type DataImportPreviewResponse,
   type PreviewDataImportRequest,
   type RestoreDataImportRequest,
   type RestoreDataImportResponse,
 } from "@tinyclaw/core";
+import {
+  createTinyClawDataExport,
+  previewTinyClawDataImport,
+  restoreTinyClawDataImport,
+} from "../../services/data-portability";
 import { errorResponse, json, readJson } from "../shared";
 import { requirePlatformAdminFromContext } from "../org-guards";
 import type { ServerOptions } from "../context";

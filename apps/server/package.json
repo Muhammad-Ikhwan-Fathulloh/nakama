@@ -20,6 +20,7 @@
     "@tinyclaw/db": "workspace:*",
     "bcryptjs": "^3.0.3",
     "croner": "^10.0.1",
+    "fflate": "^0.8.3",
     "hono": "^4.12.22",
     "openai": "^6.41.0",
     "pm2": "^6.0.0",
