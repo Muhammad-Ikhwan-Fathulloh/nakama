@@ -44,7 +44,7 @@ On first run, TinyClaw asks for your provider and API key if they are not config
 
 ## Backup and restore
 
-Platform admins can export local TinyClaw data from the dashboard System page.
+Platform admins can export local TinyClaw data from **Agent → System → Data → Export ZIP**.
 The export is a `.zip` backup of the configured TinyClaw data root, which defaults to `~/.tinyclaw` and follows `TINYCLAW_CONFIG_DIR` when set.
 
 Importing is a whole-install restore: preview the ZIP first, then confirm restore to replace the current local data root.

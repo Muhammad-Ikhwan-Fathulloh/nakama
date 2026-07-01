@@ -251,7 +251,8 @@ Upload documents via the profile dashboard or API. Search only indexes extracted
 
 ### Data portability
 
-Platform admins can export and import the whole local TinyClaw data root from the dashboard System page.
+Platform admins can export and import the whole local TinyClaw data root from **Agent → System → Data** in the dashboard.
+Use **Export ZIP** to download a backup.
 Exports are `.zip` backups and should be handled as sensitive files because they can include local auth, provider configuration, custom tools, skills, profile workspaces, and a local SQLite database.
 
 Import first previews the ZIP manifest and restore impact.
