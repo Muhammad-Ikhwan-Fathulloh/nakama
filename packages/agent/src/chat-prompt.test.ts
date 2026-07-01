@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { buildChatSystemPrompt } from "./chat-prompt";
+import { buildAutomationSystemPrompt } from "./prompt";
 
 test("buildChatSystemPrompt includes automation skill pointer when create_automation is available", () => {
   const prompt = buildChatSystemPrompt(
@@ -148,4 +149,12 @@ test("buildChatSystemPrompt adds group chat guidance for telegram", () => {
   expect(prompt).toContain("Telegram group chat");
   expect(prompt).toContain("Everyone in the group");
   expect(prompt).toContain("Write in normal Markdown");
+});
+
+test("buildAutomationSystemPrompt includes delivery guidance", () => {
+  const prompt = buildAutomationSystemPrompt([]);
+
+  expect(prompt).toContain('"delivery"');
+  expect(prompt).toContain("delivery.to is required");
+  expect(prompt).toContain("keep the task itself in the automation prompt");
 });

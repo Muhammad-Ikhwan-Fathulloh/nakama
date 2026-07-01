@@ -1,6 +1,8 @@
 import {
   createId,
+  normalizeAutomationDelivery,
   type AutomationDefinition,
+  type AutomationDelivery,
   type AutomationStep,
   type AutomationTrigger,
   type ToolDefinition,
@@ -11,6 +13,7 @@ interface GeneratedAutomationPayload {
   description?: unknown;
   trigger?: unknown;
   steps?: unknown;
+  delivery?: unknown;
 }
 
 export function parseAutomationResponse(
@@ -24,6 +27,7 @@ export function parseAutomationResponse(
   const description = sanitizeDescription(payload.description, request.prompt);
   const trigger = parseTrigger(payload.trigger);
   const steps = parseSteps(payload.steps, allowedTools);
+  const delivery = parseDelivery(payload.delivery);
 
   return {
     id: createId("automation"),
@@ -33,6 +37,7 @@ export function parseAutomationResponse(
     trigger,
     steps,
     version: 1,
+    ...(delivery ? { delivery } : {}),
   };
 }
 
@@ -133,6 +138,10 @@ function parseSteps(
   }
 
   return steps;
+}
+
+function parseDelivery(value: unknown): AutomationDelivery | undefined {
+  return normalizeAutomationDelivery(value);
 }
 
 function deriveName(text: string): string {
