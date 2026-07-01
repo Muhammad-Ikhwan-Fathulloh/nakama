@@ -104,7 +104,6 @@ import type {
   CreateOrganizationResponse,
   ListOrganizationsResponse,
   ListUserOrgsResponse,
-  DataFolderMigrationResponse,
   DataImportPreviewResponse,
   PreviewDataImportRequest,
   RestoreDataImportRequest,
@@ -210,12 +209,6 @@ export class TinyClawClient {
     return this.request<RestoreDataImportResponse>("/v1/platform/data/import/restore", {
       method: "POST",
       body: JSON.stringify(request),
-    });
-  }
-
-  async migrateDataFolders(): Promise<DataFolderMigrationResponse> {
-    return this.request<DataFolderMigrationResponse>("/v1/platform/data/migrate-folders", {
-      method: "POST",
     });
   }
 

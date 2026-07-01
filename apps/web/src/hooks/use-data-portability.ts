@@ -1,12 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { client } from "@/lib/client";
 
-export function useMigrateDataFolders() {
-  return useMutation({
-    mutationFn: () => client.migrateDataFolders(),
-  });
-}
-
 export function useExportData() {
   return useMutation({
     mutationFn: () => client.exportData(),
