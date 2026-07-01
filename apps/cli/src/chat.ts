@@ -183,14 +183,6 @@ async function runStickyChat(
     };
   }
 
-  function finishStreamOutput(aborted: boolean): void {
-    thinkingIndicator.stop();
-
-    if (aborted) {
-      renderer.appendOutputLine(styledLine("[stopped]", { dim: true }));
-    }
-  }
-
   async function sendMessageStream(input: SendMessageInput): Promise<{ aborted: boolean }> {
     if (!thinkingIndicator.isActive()) {
       thinkingIndicator.start();
@@ -231,16 +223,28 @@ async function runStickyChat(
       renderer.appendUserMessage(message.line, { placement: "scroll" });
     }
 
+    let aborted = false;
+    let caught: unknown = undefined;
+
     try {
-      const { aborted } = await sendMessageStream(message.sendInput);
-      finishStreamOutput(aborted);
+      const result = await sendMessageStream(message.sendInput);
+      aborted = result.aborted;
     } catch (error) {
-      writeOutput(formatError(error));
+      caught = error;
     } finally {
       isStreaming = false;
       abortController = null;
+      thinkingIndicator.stop();
       renderer.endStream();
       await drainQueue();
+    }
+
+    // Post-stream output — the stream buffer is now flushed into the VirtualMessageList,
+    // so any appended output appears after the assistant's response, not before it.
+    if (caught !== undefined) {
+      renderer.appendOutputLine(formatError(caught));
+    } else if (aborted) {
+      renderer.appendOutputLine(styledLine("[stopped]", { dim: true }));
     }
   }
 
