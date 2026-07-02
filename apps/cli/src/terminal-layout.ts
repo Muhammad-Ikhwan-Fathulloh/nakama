@@ -338,12 +338,13 @@ export class TerminalLayout {
 
     const rows = getTerminalRows();
     const cols = getTerminalColumns();
+    const GAP_ROWS = 1;
     const transcriptCount = this.messages.totalLines(cols);
     const streamContent = this.streamLines();
     const fullLength = transcriptCount + streamContent.length;
     const statusRows = this.statusLine ? 1 : 0;
     const debugRows = this.debugOverlay ? 1 : 0;
-    const neededRows = Math.max(1, fullLength + statusRows + this.reservedRows + debugRows);
+    const neededRows = Math.max(1, fullLength + statusRows + GAP_ROWS + this.reservedRows + debugRows);
     const anchor = Math.min(rows, Math.max(1, this.anchorRow));
     const initialViewportRows = Math.max(1, rows - anchor + 1);
     const targetViewportRows = Math.min(rows, Math.max(initialViewportRows, neededRows));
@@ -354,9 +355,9 @@ export class TerminalLayout {
     const viewportRows = Math.max(1, rows - viewportTop + 1);
     const visibleInputRows = getVisiblePinnedInputRows(this.reservedRows, viewportRows);
     const visibleInput = this.inputLines.slice(-visibleInputRows);
-    const pinned = fullLength + statusRows + debugRows + visibleInput.length > viewportRows;
+    const pinned = fullLength + statusRows + GAP_ROWS + debugRows + visibleInput.length > viewportRows;
     const contentCapacity = pinned
-      ? Math.max(0, viewportRows - visibleInput.length - statusRows - debugRows)
+      ? Math.max(0, viewportRows - visibleInput.length - statusRows - GAP_ROWS - debugRows)
       : fullLength;
     this.contentWindowRows = Math.max(1, contentCapacity);
     const maxOffset = Math.max(0, fullLength - contentCapacity);
@@ -394,14 +395,14 @@ export class TerminalLayout {
 
     if (this.statusLine) {
       const statusRow = pinned
-        ? Math.max(0, viewportRows - visibleInput.length - 1)
+        ? Math.max(0, viewportRows - visibleInput.length - 1 - GAP_ROWS)
         : Math.min(viewportRows - 1, row);
       lines[statusRow] = this.statusLine;
     }
 
     const inputStart = pinned
       ? Math.max(0, viewportRows - visibleInput.length)
-      : Math.min(viewportRows - visibleInput.length, row + statusRows);
+      : Math.min(viewportRows - visibleInput.length, row + statusRows + GAP_ROWS);
     for (let index = 0; index < visibleInput.length; index += 1) {
       lines[inputStart + index] = visibleInput[index] ?? plainLine("");
     }
@@ -409,7 +410,7 @@ export class TerminalLayout {
     const cursorLine = visibleInput[visibleInput.length - 1] ?? plainLine("");
     const cursorRow = viewportTop + Math.max(1, inputStart + visibleInput.length) - 1;
     const scrollBottom = pinned
-      ? Math.max(viewportTop, rows - visibleInput.length)
+      ? Math.max(viewportTop, rows - visibleInput.length - GAP_ROWS)
       : rows;
     const frame = clampFrameCursor(
       {

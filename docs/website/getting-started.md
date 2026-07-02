@@ -101,6 +101,7 @@ TinyClaw can expose the same agent runtime through:
 Enable Telegram or WhatsApp from the web app settings when you are ready.
 
 Telegram replies support normal Markdown for emphasis, code, headings, short lists, and simple links.
+If you want Telegram voice notes to work, also open **Settings** and choose an OpenAI **Audio transcription model**.
 WhatsApp supports direct-chat setup through the linked-device flow with QR or pairing code.
 
 ### Telegram group setup

@@ -40,7 +40,21 @@ Open **Integrations → Telegram** in the TinyClaw web app, then:
 
 When you save for the first time, TinyClaw can generate a pairing code for linking your Telegram account.
 
-## Step 3: Pair your Telegram account
+## Step 3: Enable audio transcription for voice chat
+
+Telegram voice notes and audio files are turned into text before they are sent to the agent.
+
+To enable that:
+
+1. Open **Settings** in the TinyClaw web app
+2. Add an **OpenAI** provider in **LLM providers** if you have not added one yet
+3. In **Audio transcription model**, choose an OpenAI model such as Whisper
+4. Wait for the `Saved` confirmation
+
+If no OpenAI provider is connected, the audio transcription setting stays unavailable.
+Without this setting, text chat still works, but Telegram audio messages will not be transcribed for the agent.
+
+## Step 4: Pair your Telegram account
 
 Pairing is required so random Telegram users cannot talk to your internal TinyClaw bot.
 
@@ -62,7 +76,7 @@ That means TinyClaw can:
 - allow private chat safely
 - apply the right org and profile access
 
-## Step 4: Start the Telegram bridge
+## Step 5: Start the Telegram bridge
 
 For local development, start it from the repo root:
 
@@ -108,7 +122,7 @@ In a group, the bot responds only when the message is:
 
 This keeps group chats usable without making the bot noisy.
 
-## Step 5: Configure Telegram privacy mode for groups
+## Step 6: Configure Telegram privacy mode for groups
 
 Telegram bots start with **Group Privacy** enabled. This is the most common reason a bot seems fine in private chat but not in groups.
 
@@ -149,7 +163,7 @@ Supported inputs include:
 - voice notes and audio messages
 - supported documents such as `pdf`, `docx`, `txt`, and `csv`
 
-Small supported documents are downloaded and forwarded into the TinyClaw chat flow. Unsupported media gets a friendly rejection message instead of silently failing.
+Small supported documents are downloaded and forwarded into the TinyClaw chat flow. Voice notes and audio messages are first transcribed with the configured OpenAI audio transcription model. Unsupported media gets a friendly rejection message instead of silently failing.
 
 ## Rich Markdown replies
 

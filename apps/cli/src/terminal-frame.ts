@@ -44,7 +44,16 @@ function canScrollUpOne(previous: FrameModel, next: FrameModel): boolean {
     return false;
   }
 
-  for (let index = start; index < end; index += 1) {
+  // When the last line of the scroll region is unchanged between frames,
+  // it's a pinned line (status line, debug line, etc.) — exclude it from
+  // the scroll comparison so content above it can use the scroll_up
+  // optimization.
+  const hasPinnedBottom = lineKey(next.lines[end]) === lineKey(previous.lines[end]);
+  const limit = hasPinnedBottom ? end - 1 : end;
+
+  if (limit <= start) return false;
+
+  for (let index = start; index < limit; index += 1) {
     if (lineKey(next.lines[index]) !== lineKey(previous.lines[index + 1])) {
       return false;
     }
@@ -84,9 +93,23 @@ export function diffFrames(previous: FrameModel | null, next: FrameModel): DiffO
 
     const start = next.scrollTop - next.topRow;
     const end = next.scrollBottom - next.topRow;
+    const hasPinnedBottom = lineKey(next.lines[end]) === lineKey(previous.lines[end]);
+    const limit = hasPinnedBottom ? end - 1 : end;
 
-    for (let index = start; index < end; index += 1) {
+    for (let index = start; index < limit; index += 1) {
       handledRows.add(index);
+    }
+
+    // When the scroll region has a pinned bottom line (e.g. status line), the
+    // scroll_up operation shifts that line up by 1 along with everything else.
+    // Re-write it at its intended position so it doesn't stay shifted up.
+    if (hasPinnedBottom) {
+      operations.push({
+        kind: "write_line",
+        row: next.topRow + end,
+        line: next.lines[end],
+      });
+      handledRows.add(end);
     }
   }
 

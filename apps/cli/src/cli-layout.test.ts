@@ -13,7 +13,8 @@ import {
   formatPendingSummary,
   MessageQueue,
 } from "./message-queue";
-import { plainLine, styledLine } from "./styled-text";
+import { plainLine, styledLine, styledLineText } from "./styled-text";
+import { VirtualMessageList } from "./virtual-message-list";
 
 describe("shouldPinToBottom", () => {
   test("stays inline while there is room for input", () => {
@@ -103,6 +104,40 @@ describe("formatPendingDisplayLines", () => {
 
     expect(lines[0]).toContain("⏳ pending:");
     expect(lines[0]).toContain("follow up");
+  });
+});
+
+describe("VirtualMessageList", () => {
+  test("adds a blank line between message blocks", () => {
+    const messages = new VirtualMessageList();
+
+    messages.beginMessage("output");
+    messages.appendLine("first");
+    messages.sealMessage();
+    messages.beginMessage("output");
+    messages.appendLine("second");
+    messages.sealMessage();
+
+    expect(messages.getLines(0, messages.totalLines(20), 20).map(styledLineText)).toEqual([
+      " first ",
+      "",
+      " second ",
+    ]);
+  });
+
+  test("pads wrapped transcript lines on both sides", () => {
+    const messages = new VirtualMessageList();
+
+    messages.beginMessage("assistant");
+    messages.appendLine("1234567890 1234567890 1234567890");
+    messages.sealMessage();
+
+    const lines = messages.getLines(0, messages.totalLines(12), 12).map(styledLineText);
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) {
+      expect(line.startsWith(" ")).toBe(true);
+      expect(line.endsWith(" ")).toBe(true);
+    }
   });
 });
 
@@ -218,7 +253,7 @@ describe("TerminalLayout frame pipeline", () => {
     layout.scrollPage(1);
 
     const output = writes.join("");
-    expect(output).toContain("line-01");
+    expect(output).toContain(" line-05 ");
   });
 
   test("grows viewport upward as transcript gets longer", () => {
@@ -339,13 +374,14 @@ describe("TerminalLayout frame pipeline", () => {
     layout.writelnScroll("line-3");
     layout.writelnScroll("line-4");
     layout.writelnScroll("line-5");
-    // neededRows now exceeds initial by 1 => top should move up by exactly 1
+    // With a blank separator between message blocks, 5 messages occupy
+    // 9 transcript rows; with the gap and input row the viewport grows to row 2.
     frame = (layout as Record<string, unknown>).previousFrame as { topRow: number } | null;
-    expect(frame?.topRow).toBe(7);
+    expect(frame?.topRow).toBe(2);
 
     layout.writelnScroll("line-6");
     frame = (layout as Record<string, unknown>).previousFrame as { topRow: number } | null;
-    expect(frame?.topRow).toBe(6);
+    expect(frame?.topRow).toBe(1);
   });
 
   test("uses wrapped row count to grow into free space", () => {
@@ -362,6 +398,28 @@ describe("TerminalLayout frame pipeline", () => {
 
     layout.setReservedRows(1, [plainLine("> ")]);
     // This single logical line wraps into multiple terminal rows at width=20.
+    layout.writelnScroll(
+      "1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890",
+    );
+
+    const frame = (layout as Record<string, unknown>).previousFrame as { topRow: number } | null;
+    expect(frame?.topRow).toBeLessThan(8);
+  });
+
+  test("auto-follows open virtual messages before they are sealed", () => {
+    captureStdout();
+    setTerminalSize(20, 12);
+    const layout = new TerminalLayout(null);
+
+    Object.assign(layout as Record<string, unknown>, {
+      enabled: true,
+      anchored: true,
+      anchorRow: 8,
+      viewportTopRow: 8,
+    });
+
+    layout.setReservedRows(1, [plainLine("> ")]);
+    layout.beginMessage("assistant");
     layout.writelnScroll(
       "1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890",
     );
