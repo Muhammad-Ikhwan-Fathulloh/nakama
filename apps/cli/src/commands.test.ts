@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { ModelsResponse, ProfileSummary } from "@tinyclaw/core";
 import {
   effectiveModelState,
+  formatSlashCommands,
   parseModelCommandArg,
+  resolveSuggestions,
   resolveModelSwitchTarget,
 } from "./commands";
 
@@ -124,6 +126,17 @@ describe("effectiveModelState", () => {
     ).toEqual({
       modelId: null,
       providerId: "provider-a",
+    });
+  });
+});
+
+describe("status command", () => {
+  test("is included in help and suggestions", () => {
+    expect(formatSlashCommands()).toContain("/status");
+    expect(resolveSuggestions({ input: "/sta" })).toContainEqual({
+      label: "/status",
+      description: "show server and model status",
+      insertValue: "/status",
     });
   });
 });

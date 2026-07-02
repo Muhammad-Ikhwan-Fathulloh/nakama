@@ -1,6 +1,7 @@
 import {
   formatClientError,
   type AgentChannel,
+  type HealthResponse,
   type InitSoulResponse,
   type InitUserContextResponse,
   type ModelsResponse,
@@ -66,7 +67,7 @@ export async function runChat(options: RunChatOptions): Promise<void> {
     try {
       await printCurrentModel(options.client);
     } catch (error) {
-      console.log(`${formatError(error)}`);
+      printError(error);
       console.log("Restart the server to pick up the latest API:\n  bun run dev:server");
     }
     console.log("");
@@ -131,6 +132,7 @@ async function runStickyChat(
   let profilesCache: ProfileSummary[] = [];
   const queue = new MessageQueue();
   const thinkingIndicator = new ThinkingIndicator();
+  let prompt: PersistentPrompt | null = null;
   thinkingIndicator.setRenderer(renderer);
 
   async function refreshModelsCache() {
@@ -158,6 +160,12 @@ async function runStickyChat(
 
   function writeOutput(text: string): void {
     renderer.appendOutputLine(text);
+  }
+
+  function writeError(error: unknown): void {
+    for (const line of formatErrorLines(error)) {
+      writeOutput(line);
+    }
   }
 
   function syncPendingMessages(): void {
@@ -242,7 +250,7 @@ async function runStickyChat(
     // Post-stream output — the stream buffer is now flushed into the VirtualMessageList,
     // so any appended output appears after the assistant's response, not before it.
     if (caught !== undefined) {
-      renderer.appendOutputLine(formatError(caught));
+      writeError(caught);
     } else if (aborted) {
       renderer.appendOutputLine(styledLine("[stopped]", { dim: true }));
     }
@@ -265,7 +273,7 @@ async function runStickyChat(
         fromPath,
       });
     } catch (error) {
-      writeOutput(formatError(error));
+      writeError(error);
       return;
     }
 
@@ -305,7 +313,7 @@ async function runStickyChat(
         const result = await session.compact({ force: true });
         writeOutput(`Compacted (${result.action}). Messages: ${result.messagesAfter}`);
       } catch (error) {
-        writeOutput(formatError(error));
+        writeError(error);
       }
 
       return "handled";
@@ -314,6 +322,16 @@ async function runStickyChat(
     if (line === "/help") {
       for (const helpLine of HELP_TEXT.split("\n")) {
         writeOutput(helpLine);
+      }
+
+      return "handled";
+    }
+
+    if (line === "/status") {
+      try {
+        await printStatus(options.client, writeOutput, currentProfile, modelsCache);
+      } catch (error) {
+        writeError(error);
       }
 
       return "handled";
@@ -341,14 +359,26 @@ async function runStickyChat(
           sendInput: { message: "", images: [image] },
         });
       } catch (error) {
-        writeOutput(formatError(error));
+        writeError(error);
       }
 
       return "handled";
     }
 
     if (line === "/models") {
-      await printModels(options.client, writeOutput, currentProfile, modelsCache);
+      if (isStreaming) {
+        writeOutput("Wait for the current response to finish.");
+        return "handled";
+      }
+
+      await refreshModelsCache();
+
+      if (!modelsCache?.models.length) {
+        writeOutput("No models available.");
+        return "handled";
+      }
+
+      prompt?.prefill("/model ");
       return "handled";
     }
 
@@ -391,7 +421,7 @@ async function runStickyChat(
         const settings = await options.client.getThinkingSettings();
         writeOutput(`Thinking: ${settings.enabled ? "on" : "off"} (${settings.effort} effort)`);
       } catch (error) {
-        writeOutput(formatError(error));
+        writeError(error);
       }
 
       return "handled";
@@ -429,7 +459,7 @@ async function runStickyChat(
         `Thinking ${saved.enabled ? "enabled" : "disabled"} (${saved.effort} effort). Chat history reset.`,
       );
     } catch (error) {
-      writeOutput(formatError(error));
+      writeError(error);
     }
 
     syncPendingMessages();
@@ -495,7 +525,7 @@ async function runStickyChat(
       await refreshModelsCache();
       writeOutput(`Model switched to ${target.modelId}. Chat history reset.`);
     } catch (error) {
-      writeOutput(formatError(error));
+      writeError(error);
     }
 
     syncPendingMessages();
@@ -543,7 +573,7 @@ async function runStickyChat(
       lastUserMessage = null;
       writeOutput(`Profile switched to ${currentProfile.name}. Chat history reset.`);
     } catch (error) {
-      writeOutput(formatError(error));
+      writeError(error);
     }
 
     syncPendingMessages();
@@ -567,7 +597,7 @@ async function runStickyChat(
       const automation = await session.createAutomation(promptText);
       writeOutput(JSON.stringify(automation, null, 2));
     } catch (error) {
-      writeOutput(formatError(error));
+      writeError(error);
     }
 
     return "handled";
@@ -594,7 +624,7 @@ async function runStickyChat(
         }
       }
     } catch (error) {
-      writeOutput(formatError(error));
+      writeError(error);
     }
 
     return "handled";
@@ -621,7 +651,7 @@ async function runStickyChat(
         }
       }
     } catch (error) {
-      writeOutput(formatError(error));
+      writeError(error);
     }
 
     return "handled";
@@ -629,7 +659,7 @@ async function runStickyChat(
 
   let exiting = false;
 
-  const prompt = new PersistentPrompt({
+  prompt = new PersistentPrompt({
     renderer,
     terminalInput,
     getSuggestions: (input) => {
@@ -678,6 +708,11 @@ async function runStickyChat(
       renderer.scrollToLatest();
     },
     onCancel: () => {
+      if (isStreaming && abortController) {
+        abortController.abort();
+        return;
+      }
+
       exiting = true;
     },
     onSubmit: async (result) => {
@@ -766,6 +801,7 @@ async function runBlockingChat(context: ChatContext): Promise<void> {
 
   const thinkingIndicator = new ThinkingIndicator();
   let lastChunk: string | null = null;
+  let abortController: AbortController | null = null;
 
   function createStreamHandlers(): StreamHandlers {
     return {
@@ -789,13 +825,22 @@ async function runBlockingChat(context: ChatContext): Promise<void> {
 
   async function sendMessageStream(input: SendMessageInput): Promise<{ aborted: boolean }> {
     lastChunk = null;
+    abortController = new AbortController();
     thinkingIndicator.start();
+    const stopEscListener = startEscAbortListener(() => {
+      abortController?.abort();
+    });
 
     try {
-      return await sendStreamCancellable(session, input, createStreamHandlers());
+      return await sendStreamCancellable(session, input, createStreamHandlers(), {
+        signal: abortController.signal,
+      });
     } catch (error) {
       thinkingIndicator.stop();
       throw error;
+    } finally {
+      stopEscListener();
+      abortController = null;
     }
   }
 
@@ -863,6 +908,24 @@ async function runBlockingChat(context: ChatContext): Promise<void> {
         continue;
       }
 
+      if (line === "/status") {
+        const currentProfile =
+          profilesCache.find((entry) => entry.id === currentProfileId) ?? null;
+
+        try {
+          await printStatus(
+            options.client,
+            (text) => console.log(text),
+            currentProfile,
+            modelsCache,
+          );
+        } catch (error) {
+          printError(error);
+        }
+
+        continue;
+      }
+
       processing = true;
 
       let sendInput: SendMessageInput;
@@ -874,7 +937,7 @@ async function runBlockingChat(context: ChatContext): Promise<void> {
           fromPath,
         });
       } catch (error) {
-        console.log(`${formatError(error)}\n`);
+        printError(error);
         processing = false;
         continue;
       }
@@ -883,7 +946,7 @@ async function runBlockingChat(context: ChatContext): Promise<void> {
         const { aborted } = await sendMessageStream(sendInput);
         finishStreamOutput(aborted);
       } catch (error) {
-        console.log(`${formatError(error)}\n`);
+        printError(error);
       } finally {
         processing = false;
       }
@@ -918,6 +981,51 @@ async function printCurrentModel(
 
   write(`Provider: ${models.provider}`);
   write(`Model: ${active.modelId}`);
+}
+
+export function formatStatusLines(
+  health: HealthResponse,
+  models: ModelsResponse | null,
+  profile: ProfileSummary | null,
+): string[] {
+  const lines = [
+    `Server: ${health.ok ? "ok" : "degraded"}`,
+    `Provider configured: ${health.providerConfigured ? "yes" : "no"}`,
+  ];
+
+  if (!health.providerConfigured) {
+    lines.push("Chat runs in offline mode without an API key.");
+    return lines;
+  }
+
+  const active = profile
+    ? effectiveModelState(profile, models)
+    : { modelId: null, providerId: models?.currentProviderId ?? null };
+
+  if (profile) {
+    lines.push(`Profile: ${profile.name}`);
+  }
+
+  lines.push(`Provider: ${models?.provider ?? "unknown"}`);
+  lines.push(`Model: ${active.modelId ?? "none"}`);
+
+  return lines;
+}
+
+async function printStatus(
+  client: TinyClawClient,
+  write: (text: string) => void,
+  profile: ProfileSummary | null,
+  cachedModels: ModelsResponse | null,
+): Promise<void> {
+  const health = await client.health();
+  const models = health.providerConfigured
+    ? cachedModels ?? (await client.getModels())
+    : null;
+
+  for (const line of formatStatusLines(health, models, profile)) {
+    write(line);
+  }
 }
 
 async function printModels(
@@ -958,6 +1066,48 @@ async function printModels(
 
 function formatError(error: unknown): string {
   return formatClientError(error);
+}
+
+export function formatErrorLines(error: unknown): string[] {
+  return ["", ...formatError(error).split(/\r?\n/)];
+}
+
+export function isEscInterruptKey(key: string): boolean {
+  return key === "\u001b";
+}
+
+function startEscAbortListener(onAbort: () => void): () => void {
+  if (!process.stdin.isTTY) {
+    return () => {};
+  }
+
+  const stdin = process.stdin;
+  const wasRaw = stdin.isRaw;
+
+  function onData(chunk: Buffer | string): void {
+    if (isEscInterruptKey(String(chunk))) {
+      onAbort();
+    }
+  }
+
+  stdin.setEncoding("utf8");
+  stdin.setRawMode(true);
+  stdin.resume();
+  stdin.on("data", onData);
+
+  return () => {
+    stdin.off("data", onData);
+
+    if (!wasRaw && process.stdin.isTTY) {
+      stdin.setRawMode(false);
+    }
+  };
+}
+
+function printError(error: unknown): void {
+  for (const line of formatErrorLines(error)) {
+    console.log(line);
+  }
 }
 
 function formatProfilesLines(

@@ -84,6 +84,14 @@ export class PersistentPrompt {
     process.stdout.write("\x1b[?25h");
   }
 
+  prefill(value: string): void {
+    this.value = value;
+    this.attachedImages = [];
+    this.resetSelection();
+    this.cursorVisible = true;
+    this.render();
+  }
+
   private startBlink(): void {
     if (this.blinkTimer) {
       return;

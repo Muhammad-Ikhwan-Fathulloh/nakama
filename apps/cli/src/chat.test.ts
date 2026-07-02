@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { needsTrailingStreamNewline } from "./chat";
+import type { HealthResponse, ModelsResponse, ProfileSummary } from "@tinyclaw/core";
+import {
+  formatErrorLines,
+  formatStatusLines,
+  isEscInterruptKey,
+  needsTrailingStreamNewline,
+} from "./chat";
 
 describe("needsTrailingStreamNewline", () => {
   test("adds a newline when no chunk was rendered", () => {
@@ -13,5 +19,74 @@ describe("needsTrailingStreamNewline", () => {
   test("skips the newline when the stream already ended with one", () => {
     expect(needsTrailingStreamNewline("Hello.\n")).toBe(false);
     expect(needsTrailingStreamNewline("Hello.\r\n")).toBe(false);
+  });
+});
+
+describe("formatStatusLines", () => {
+  const health: HealthResponse = {
+    ok: true,
+    apiVersion: "v1",
+    providerConfigured: true,
+    userConfigured: true,
+  };
+  const models: ModelsResponse = {
+    currentProviderId: "provider-a",
+    providers: [],
+    models: [],
+    provider: "anthropic",
+    displayName: null,
+  };
+  const profile: ProfileSummary = {
+    id: "default",
+    name: "Default",
+    model: "provider-a::claude-sonnet",
+    isSuper: false,
+    toolCount: 0,
+    mcpServerCount: 0,
+    soulActive: false,
+    hasAvatar: false,
+    createdAt: "",
+    updatedAt: "",
+  };
+
+  test("matches the telegram status summary fields", () => {
+    expect(formatStatusLines(health, models, profile)).toEqual([
+      "Server: ok",
+      "Provider configured: yes",
+      "Profile: Default",
+      "Provider: anthropic",
+      "Model: claude-sonnet",
+    ]);
+  });
+
+  test("shows offline mode when no provider is configured", () => {
+    expect(
+      formatStatusLines({ ...health, providerConfigured: false }, null, profile),
+    ).toEqual([
+      "Server: ok",
+      "Provider configured: no",
+      "Chat runs in offline mode without an API key.",
+    ]);
+  });
+});
+
+describe("formatErrorLines", () => {
+  test("adds a blank line above rendered errors", () => {
+    expect(formatErrorLines(new Error("Boom"))).toEqual(["", "Boom"]);
+  });
+
+  test("splits multiline errors into separate render lines", () => {
+    expect(formatErrorLines(new Error("DeepSeek request failed\ninternal_error"))).toEqual([
+      "",
+      "DeepSeek request failed",
+      "internal_error",
+    ]);
+  });
+});
+
+describe("isEscInterruptKey", () => {
+  test("matches only a standalone escape key", () => {
+    expect(isEscInterruptKey("\u001b")).toBe(true);
+    expect(isEscInterruptKey("\u001b[A")).toBe(false);
   });
 });
