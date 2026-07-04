@@ -15,6 +15,8 @@ import {
   type EmailSettingsResponse,
   type SendEmailTestRequest,
   type SendEmailTestResponse,
+  type VerifyCodingHarnessRequest,
+  type VerifyCodingHarnessResponse,
   type ThinkingSettingsResponse,
   type TimezoneSettingsResponse,
   type UpdateProviderRequest,
@@ -81,6 +83,14 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
     .object({})
     .passthrough()
     .openapi("UpdateCodingHarnessSettingsRequest");
+  const verifyCodingHarnessRequestSchema = z
+    .object({})
+    .passthrough()
+    .openapi("VerifyCodingHarnessRequest");
+  const verifyCodingHarnessResponseSchema = z
+    .object({})
+    .passthrough()
+    .openapi("VerifyCodingHarnessResponse");
   const whatsappSettingsSchema = z.object({}).passthrough().openapi("WhatsAppSettingsResponse");
   const discoverModelsRequestSchema = z
     .object({
@@ -349,6 +359,15 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
     responses: { 200: { description: "Coding harness settings", content: { "application/json": { schema: codingHarnessSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } }, 403: { description: "Forbidden", content: { "application/json": { schema: errorSchema } } } },
   }));
   app.openAPIRegistry.registerPath(createRoute({
+    method: "post",
+    path: "/v1/settings/coding-harnesses/verify",
+    tags: ["Models"],
+    summary: "Verify a coding harness",
+    operationId: "verifyCodingHarness",
+    request: { body: { required: false, content: { "application/json": { schema: verifyCodingHarnessRequestSchema } } } },
+    responses: { 200: { description: "Coding harness verification", content: { "application/json": { schema: verifyCodingHarnessResponseSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } }, 403: { description: "Forbidden", content: { "application/json": { schema: errorSchema } } } },
+  }));
+  app.openAPIRegistry.registerPath(createRoute({
     method: "get",
     path: "/v1/settings/whatsapp",
     tags: ["Models"],
@@ -552,6 +571,23 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
 
     try {
       return json<CodingHarnessSettingsResponse>(await agent.setCodingHarnessSettings(body));
+    } catch (error) {
+      if (error instanceof TinyClawApiError) {
+        return errorResponse(error.message, error.status);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.post("/v1/settings/coding-harnesses/verify", async (c) => {
+    requireOrgAdminFromContext(c);
+    const body = await readJson<VerifyCodingHarnessRequest>(c.req.raw).catch(
+      () => ({} as VerifyCodingHarnessRequest),
+    );
+
+    try {
+      return json<VerifyCodingHarnessResponse>(await agent.verifyCodingHarness(body.harnessId));
     } catch (error) {
       if (error instanceof TinyClawApiError) {
         return errorResponse(error.message, error.status);

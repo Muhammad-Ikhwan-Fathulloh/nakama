@@ -36,7 +36,7 @@ describe("coding harness settings routes", () => {
   });
 
   test("org admin can read and update coding harness settings", async () => {
-    await installFakeBinary(tempBinDir, "codex");
+    await installFakeBinary(tempBinDir, "codex", "ready");
 
     const databaseAdapter = createInMemoryDatabaseAdapter();
     const authService = new AuthService();
@@ -63,9 +63,11 @@ describe("coding harness settings routes", () => {
     expect(getEmpty.status).toBe(200);
     const emptyBody = (await getEmpty.json()) as {
       configured: boolean;
+      activeHarnessId: string | null;
       harnesses: Array<{ kind: string; installed: boolean }>;
     };
-    expect(emptyBody.configured).toBe(false);
+    expect(emptyBody.configured).toBe(true);
+    expect(emptyBody.activeHarnessId).toBe("coding-harness-codex");
     expect(emptyBody.harnesses.some((harness) => harness.kind === "codex")).toBe(true);
 
     const putResponse = await app.fetch(
@@ -92,14 +94,123 @@ describe("coding harness settings routes", () => {
     expect(saved.harnesses.find((harness) => harness.id === "coding-harness-codex")?.selected).toBe(
       true,
     );
+
+    const verifyResponse = await app.fetch(
+      new Request("http://localhost:4310/v1/settings/coding-harnesses/verify", {
+        method: "POST",
+        headers: session.headers({
+          "X-CSRF-Token": session.csrfToken,
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          harnessId: "coding-harness-codex",
+        }),
+      }),
+    );
+    expect(verifyResponse.status).toBe(200);
+    const verified = (await verifyResponse.json()) as {
+      ok: boolean;
+      harnessId: string | null;
+      version: string | null;
+      authenticated: boolean | null;
+      ready: boolean;
+    };
+    expect(verified.ok).toBe(true);
+    expect(verified.harnessId).toBe("coding-harness-codex");
+    expect(verified.authenticated).toBe(true);
+    expect(verified.ready).toBe(true);
+  });
+
+  test("verify reports login required when codex is installed but not authenticated", async () => {
+    await installFakeBinary(tempBinDir, "codex", "login-required");
+
+    const databaseAdapter = createInMemoryDatabaseAdapter();
+    const authService = new AuthService();
+    const app = createHonoApp({
+      agent: new AgentService(null, null, databaseAdapter),
+      automationService: {} as any,
+      taskService: {} as any,
+      systemStatus: { getStatus: async () => ({ ok: true }) } as any,
+      workerManager: {} as any,
+      mcpService: {} as any,
+      authService,
+      orgService: new OrgService(databaseAdapter, authService),
+      databaseAdapter,
+      webDistDir: null,
+    });
+
+    const session = await setupFreshInstallSession(app, databaseAdapter);
+
+    const getResponse = await app.fetch(
+      new Request("http://localhost:4310/v1/settings/coding-harnesses", {
+        headers: session.headers(),
+      }),
+    );
+    expect(getResponse.status).toBe(200);
+    const settings = (await getResponse.json()) as {
+      configured: boolean;
+      activeHarnessId: string | null;
+    };
+    expect(settings.configured).toBe(false);
+    expect(settings.activeHarnessId).toBeNull();
+
+    const verifyResponse = await app.fetch(
+      new Request("http://localhost:4310/v1/settings/coding-harnesses/verify", {
+        method: "POST",
+        headers: session.headers({
+          "X-CSRF-Token": session.csrfToken,
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({
+          harnessId: "coding-harness-codex",
+        }),
+      }),
+    );
+    expect(verifyResponse.status).toBe(200);
+    const verified = (await verifyResponse.json()) as {
+      ok: boolean;
+      authenticated: boolean | null;
+      ready: boolean;
+      nextStep: string | null;
+      error: string | null;
+    };
+    expect(verified.ok).toBe(false);
+    expect(verified.authenticated).toBe(false);
+    expect(verified.ready).toBe(false);
+    expect(verified.nextStep).toBe("login");
+    expect(verified.error).toContain("codex login");
   });
 });
 
-async function installFakeBinary(binDir: string, name: string): Promise<void> {
+async function installFakeBinary(
+  binDir: string,
+  name: string,
+  mode: "ready" | "login-required",
+): Promise<void> {
   const scriptPath = join(binDir, name);
+  const body =
+    mode === "ready"
+      ? [
+          "#!/bin/sh",
+          'if [ "$1" = "--version" ]; then',
+          '  echo "codex 0.1.0"',
+          "  exit 0",
+          "fi",
+          "echo OK",
+          "exit 0",
+        ]
+      : [
+          "#!/bin/sh",
+          'if [ "$1" = "--version" ]; then',
+          '  echo "codex 0.1.0"',
+          "  exit 0",
+          "fi",
+          'echo "Please run codex login" 1>&2',
+          "exit 1",
+        ];
   await writeFile(
     scriptPath,
-    ['#!/bin/sh', 'if [ "$1" = "--version" ]; then', '  exit 0', "fi", "exit 0"].join("\n"),
+    body.join("\n"),
   );
   await chmod(scriptPath, 0o755);
 }

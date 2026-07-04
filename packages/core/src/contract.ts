@@ -833,12 +833,32 @@ export interface CodingHarnessStatus {
   installed: boolean;
   selected: boolean;
   installHint: string;
+  installCommand: string;
+  version: string | null;
 }
 
 export interface CodingHarnessSettingsResponse {
   configured: boolean;
   selectedHarnessId: string | null;
+  activeHarnessId: string | null;
   harnesses: CodingHarnessStatus[];
+}
+
+export interface VerifyCodingHarnessRequest {
+  harnessId?: string;
+}
+
+export interface VerifyCodingHarnessResponse {
+  ok: boolean;
+  harnessId: string | null;
+  name: string | null;
+  version: string | null;
+  installed: boolean;
+  authenticated: boolean | null;
+  ready: boolean;
+  nextStep: "install" | "login" | "retry" | null;
+  statusMessage: string | null;
+  error: string | null;
 }
 
 export interface UpdateCodingHarnessSettingsRequest {

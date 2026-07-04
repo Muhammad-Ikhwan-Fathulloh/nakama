@@ -56,6 +56,7 @@ import type {
   SendEmailTestRequest,
   SendEmailTestResponse,
   UpdateCodingHarnessSettingsRequest,
+  VerifyCodingHarnessResponse,
   ToolDefinition,
   UpdateProfileRequest,
   UpdateSoulFileRequest,
@@ -171,9 +172,12 @@ import { createAskUserQuestionTools } from "../tools/ask-user-question-tool";
 import { createTodoTools } from "../tools/todo-tools";
 import { AgentQuestionnaireState } from "./agent-questionnaire-state";
 import {
+  getCodingHarnessInstallCommand,
+  getCodingHarnessInstallHint,
   listCodingAgentHarnessStatuses,
   loadCodingAgentWorkspaceSettings,
   saveCodingAgentWorkspaceSettings,
+  verifyCodingAgentHarness,
 } from "./coding-agent-harness-service";
 import { AgentTodoState } from "./agent-todo-state";
 import type { AutomationRunner } from "./automation-runner";
@@ -714,12 +718,18 @@ export class AgentService {
   async getCodingHarnessSettings(): Promise<CodingHarnessSettingsResponse> {
     const settings = await loadCodingAgentWorkspaceSettings(this.db);
     const statuses = await listCodingAgentHarnessStatuses(this.db);
+    const candidateHarness =
+      statuses.find(
+        (harness) => harness.id === settings.selectedHarnessId && harness.enabled && harness.installed,
+      ) ?? statuses.find((harness) => harness.enabled && harness.installed) ?? null;
+    const readiness = candidateHarness
+      ? await verifyCodingAgentHarness(this.db, candidateHarness.id)
+      : null;
 
     return {
-      configured: statuses.some(
-        (harness) => harness.id === settings.selectedHarnessId && harness.enabled && harness.installed,
-      ),
+      configured: readiness?.ready ?? false,
       selectedHarnessId: settings.selectedHarnessId,
+      activeHarnessId: readiness?.ready ? candidateHarness?.id ?? null : null,
       harnesses: statuses.map((harness) => ({
         id: harness.id,
         kind: harness.kind,
@@ -727,8 +737,10 @@ export class AgentService {
         command: harness.command,
         enabled: harness.enabled,
         installed: harness.installed,
+        version: harness.version,
         selected: harness.id === settings.selectedHarnessId,
         installHint: getCodingHarnessInstallHint(harness.kind),
+        installCommand: getCodingHarnessInstallCommand(harness.kind),
       })),
     };
   }
@@ -738,6 +750,10 @@ export class AgentService {
   ): Promise<CodingHarnessSettingsResponse> {
     await saveCodingAgentWorkspaceSettings(this.db, input);
     return this.getCodingHarnessSettings();
+  }
+
+  async verifyCodingHarness(harnessId?: string): Promise<VerifyCodingHarnessResponse> {
+    return verifyCodingAgentHarness(this.db, harnessId);
   }
 
   async getWhatsAppSettings(): Promise<WhatsAppSettingsResponse> {
@@ -2366,16 +2382,4 @@ function parseAgentChannel(value: string): AgentChannel | null {
   }
 
   return null;
-}
-
-function getCodingHarnessInstallHint(kind: "codex" | "claude_code" | "opencode"): string {
-  if (kind === "codex") {
-    return "Install the Codex CLI on this machine, then refresh this dialog.";
-  }
-
-  if (kind === "claude_code") {
-    return "Install Claude Code on this machine, then refresh this dialog.";
-  }
-
-  return "Install OpenCode on this machine, then refresh this dialog.";
 }

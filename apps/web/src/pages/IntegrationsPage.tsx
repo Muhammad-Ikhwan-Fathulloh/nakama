@@ -1,11 +1,13 @@
 import type { LucideIcon } from "lucide-react";
 import {
   BellRingIcon,
+  BotIcon,
   KeyRoundIcon,
   MessageCircleMoreIcon,
   SendIcon,
 } from "lucide-react";
 import { Navigate, useSearchParams } from "react-router-dom";
+import { CodingHarnessSettingsPanel } from "@/components/CodingHarnessSettingsDialog";
 import { TelegramSettingsCard } from "@/components/TelegramSettingsCard";
 import { NotificationDestinationsCard } from "@/components/NotificationDestinationsCard";
 import { WhatsAppSettingsCard } from "@/components/WhatsAppSettingsCard";
@@ -34,6 +36,12 @@ const INTEGRATION_SECTIONS = [
     icon: BellRingIcon,
   },
   {
+    id: "coding-agents",
+    label: "Coding agents",
+    description: "Code delegation CLI",
+    icon: BotIcon,
+  },
+  {
     id: "token",
     label: "Local token",
     description: "CLI and bridge access",
@@ -44,7 +52,12 @@ const INTEGRATION_SECTIONS = [
 type IntegrationSectionId = (typeof INTEGRATION_SECTIONS)[number]["id"];
 
 function resolveSection(value: string | null): IntegrationSectionId {
-  if (value === "token" || value === "notifications" || value === "whatsapp") {
+  if (
+    value === "token" ||
+    value === "notifications" ||
+    value === "whatsapp" ||
+    value === "coding-agents"
+  ) {
     return value;
   }
 
@@ -88,8 +101,8 @@ export function IntegrationsPage() {
       <header className="space-y-1">
         <h1 className="type-page-title">Integrations</h1>
         <p className="type-body max-w-2xl">
-          Manage bridge access, Telegram setup, notification webhooks, and WhatsApp linking from
-          one place.
+          Manage bridge access, coding delegation, Telegram setup, notification webhooks, and
+          WhatsApp linking from one place.
         </p>
       </header>
 
@@ -120,6 +133,16 @@ export function IntegrationsPage() {
                 description="This token is shared by local tools and message bridges running on this machine."
               />
               <LocalAuthTokenCard />
+            </div>
+          ) : null}
+
+          {section === "coding-agents" ? (
+            <div className="space-y-4">
+              <SectionIntro
+                title="Coding agents"
+                description="Choose which CLI agent TinyClaw can use for delegated code work on this server."
+              />
+              <CodingHarnessSettingsPanel embedded />
             </div>
           ) : null}
 

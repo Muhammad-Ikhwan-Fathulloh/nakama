@@ -2,6 +2,7 @@ import type { ToolSummary } from "@tinyclaw/core/contract";
 import { DELEGATE_CODING_TASK_TOOL_ID } from "@tinyclaw/core/tools/protected";
 import { PlusIcon } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useCodingHarnessSettings } from "@/hooks/use-coding-harness-settings";
 import { Button } from "@/components/ui/button";
 import {
@@ -71,6 +72,21 @@ export function ToolAssignDialog({
             </DialogDescription>
           </DialogHeader>
 
+          {codingHarnessSettings?.configured === false ? (
+            <div className="border-b border-border/60 px-6 py-3 text-xs text-amber-600 dark:text-amber-300">
+              Code delegation needs a coding agent first.
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                className="ml-1 h-auto px-0 py-0 text-amber-700 dark:text-amber-200"
+                render={<Link to="/integrations?section=coding-agents" />}
+              >
+                Open Integrations
+              </Button>
+            </div>
+          ) : null}
+
           <Command className="rounded-none bg-transparent">
             <div className="border-b border-border/60 px-2 py-2 [&_[data-slot=command-input-wrapper]]:p-0">
               <CommandInput placeholder="Search tools…" />
@@ -97,8 +113,8 @@ export function ToolAssignDialog({
                         <p className="truncate text-xs text-muted-foreground">{tool.description}</p>
                       ) : null}
                       {isToolDisabled(tool) ? (
-                        <p className="truncate text-xs text-amber-600 dark:text-amber-300">
-                          Configure a coding harness first.
+                        <p className="text-xs text-amber-600 dark:text-amber-300">
+                          Set up a coding agent first.
                         </p>
                       ) : null}
                     </div>

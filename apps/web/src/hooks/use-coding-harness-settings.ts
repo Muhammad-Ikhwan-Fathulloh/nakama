@@ -4,7 +4,10 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import type { UpdateCodingHarnessSettingsRequest } from "@tinyclaw/core/contract";
+import type {
+  UpdateCodingHarnessSettingsRequest,
+  VerifyCodingHarnessRequest,
+} from "@tinyclaw/core/contract";
 import { client } from "@/lib/client";
 import { queryKeys } from "@/lib/query-keys";
 
@@ -28,6 +31,19 @@ export function useSaveCodingHarnessSettings() {
       client.setCodingHarnessSettings(request),
     onSuccess: (saved) => {
       queryClient.setQueryData(queryKeys.codingHarnesses.settings, saved);
+    },
+  });
+}
+
+export function useVerifyCodingHarness() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (request: VerifyCodingHarnessRequest) => client.verifyCodingHarness(request),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.codingHarnesses.settings,
+      });
     },
   });
 }

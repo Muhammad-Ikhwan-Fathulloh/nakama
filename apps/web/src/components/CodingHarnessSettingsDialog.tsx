@@ -1,70 +1,111 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { CheckCircle2Icon, CopyIcon, KeyRoundIcon, LaptopMinimalCheckIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { CodingHarnessStatus } from "@tinyclaw/core/contract";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { FormField } from "@/components/ui/form-field";
-import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { Switch } from "@/components/ui/switch";
 import {
   codingHarnessSettingsQueryOptions,
   useCodingHarnessSettings,
   useSaveCodingHarnessSettings,
+  useVerifyCodingHarness,
 } from "@/hooks/use-coding-harness-settings";
 import { formatError } from "@/lib/client";
+import { cn } from "@/lib/utils";
 
-type DraftHarness = Pick<CodingHarnessStatus, "id" | "command" | "enabled">;
-
-export function CodingHarnessSettingsDialog({
-  open,
-  onOpenChange,
+export function CodingHarnessSettingsPanel({
+  embedded = false,
+  enabled = true,
 }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  embedded?: boolean;
+  enabled?: boolean;
 }) {
   const queryClient = useQueryClient();
-  const { data: settings, isLoading, error } = useCodingHarnessSettings(open);
+  const { data: settings, isLoading, error } = useCodingHarnessSettings(enabled);
   const saveMutation = useSaveCodingHarnessSettings();
+  const verifyMutation = useVerifyCodingHarness();
   const [selectedHarnessId, setSelectedHarnessId] = useState<string | null>(null);
-  const [draftHarnesses, setDraftHarnesses] = useState<DraftHarness[]>([]);
   const [hint, setHint] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open || !settings) {
+    if (!settings) {
       return;
     }
 
-    setSelectedHarnessId(settings.selectedHarnessId);
-    setDraftHarnesses(
-      settings.harnesses.map((harness) => ({
-        id: harness.id,
-        command: harness.command,
-        enabled: harness.enabled,
-      })),
-    );
+    setSelectedHarnessId(settings.selectedHarnessId ?? settings.activeHarnessId);
     setHint(null);
     setFormError(null);
-  }, [open, settings]);
+  }, [settings]);
 
-  const draftById = useMemo(
-    () => new Map(draftHarnesses.map((harness) => [harness.id, harness])),
-    [draftHarnesses],
-  );
+  const selectedHarness =
+    settings?.harnesses.find((harness) => harness.id === selectedHarnessId) ?? null;
+  const verification =
+    verifyMutation.data?.harnessId === selectedHarnessId ? verifyMutation.data : null;
 
-  function updateHarness(id: string, next: Partial<DraftHarness>) {
-    setDraftHarnesses((current) =>
-      current.map((harness) => (harness.id === id ? { ...harness, ...next } : harness)),
-    );
-  }
+  useEffect(() => {
+    if (!enabled || !selectedHarness || !selectedHarness.installed) {
+      return;
+    }
+
+    verifyMutation.mutate({ harnessId: selectedHarness.id });
+  }, [enabled, selectedHarnessId]);
+
+  const summary = useMemo(() => {
+    if (!selectedHarness) {
+      return {
+        tone: "warn",
+        label: "Pick an agent",
+        body: "Choose which coding agent TinyClaw should use on this machine.",
+      };
+    }
+
+    if (!selectedHarness.installed) {
+      return {
+        tone: "warn",
+        label: `Install ${selectedHarness.name}`,
+        body: `${selectedHarness.name} is not installed on this machine yet.`,
+      };
+    }
+
+    if (verifyMutation.isPending && verification === null) {
+      return {
+        tone: "neutral",
+        label: "Checking readiness",
+        body: `Checking whether ${selectedHarness.name} is ready to run.`,
+      };
+    }
+
+    if (verification?.ready) {
+      return {
+        tone: "ok",
+        label: `${selectedHarness.name} is ready`,
+        body: verification.statusMessage ?? "TinyClaw can use this coding agent now.",
+      };
+    }
+
+    if (verification?.nextStep === "login") {
+      return {
+        tone: "warn",
+        label: `Login required for ${selectedHarness.name}`,
+        body: verification.error ?? `${selectedHarness.name} still needs authentication.`,
+      };
+    }
+
+    return {
+      tone: "warn",
+      label: "Run readiness check",
+      body: "TinyClaw still needs to confirm this coding agent can actually run.",
+    };
+  }, [selectedHarness, verification, verifyMutation.isPending]);
 
   function handleRefresh() {
     setHint(null);
@@ -81,14 +122,14 @@ export function CodingHarnessSettingsDialog({
     saveMutation.mutate(
       {
         selectedHarnessId,
-        harnesses: draftHarnesses,
       },
       {
         onSuccess: (saved) => {
+          const selected = saved.harnesses.find((harness) => harness.id === selectedHarnessId);
           setHint(
-            saved.configured
-              ? "Coding harness settings saved."
-              : "Saved, but no selected harness is installed yet.",
+            selected
+              ? `${selected.name} selected. TinyClaw will use it for coding delegation after the readiness check passes.`
+              : "Coding agent selection saved.",
           );
         },
         onError: (saveError) => {
@@ -98,144 +139,287 @@ export function CodingHarnessSettingsDialog({
     );
   }
 
+  function handleVerify() {
+    if (!selectedHarnessId) {
+      setFormError("Pick a coding agent first.");
+      return;
+    }
+
+    setHint(null);
+    setFormError(null);
+
+    verifyMutation.mutate(
+      { harnessId: selectedHarnessId },
+      {
+        onSuccess: (result) => {
+          if (result.ready) {
+            setHint(result.statusMessage ?? `${result.name ?? "Selected agent"} is ready.`);
+            return;
+          }
+
+          setFormError(result.error ?? "Could not verify the selected coding agent.");
+        },
+        onError: (verifyError) => {
+          setFormError(formatError(verifyError));
+        },
+      },
+    );
+  }
+
+  async function copyInstallCommand(command: string) {
+    await navigator.clipboard.writeText(command);
+    setHint("Install command copied.");
+  }
+
+  if (isLoading) {
+    return (
+      <Card className="shadow-none">
+        <CardContent className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+          <Spinner />
+          Loading coding agent setup…
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card className="shadow-none">
+        <CardContent className="p-4 text-sm text-destructive" role="alert">
+          {formatError(error)}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!settings) {
+    return null;
+  }
+
+  return (
+    <Card className={cn("shadow-none", embedded ? "border-border" : "border-0 shadow-none")}>
+      <CardContent className="space-y-4 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-medium text-foreground">Coding agents</p>
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-xs",
+                  summary.tone === "ok"
+                    ? "bg-emerald-500/10 text-emerald-300"
+                    : summary.tone === "neutral"
+                      ? "bg-muted text-muted-foreground"
+                      : "bg-amber-500/10 text-amber-300",
+                )}
+              >
+                {summary.label}
+              </span>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              TinyClaw can hand off coding tasks to a CLI agent on this server.
+            </p>
+          </div>
+          {!embedded ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              render={<Link to="/integrations?section=coding-agents" />}
+            >
+              Open in Integrations
+            </Button>
+          ) : null}
+        </div>
+
+        <div className="rounded-lg border border-border bg-muted/20 p-4">
+          <p className="text-sm font-medium text-foreground">{summary.label}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{summary.body}</p>
+        </div>
+
+        {formError ? (
+          <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {formError}
+          </p>
+        ) : null}
+        {hint ? (
+          <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+            {hint}
+          </p>
+        ) : null}
+
+        <div className="space-y-2">
+          {settings.harnesses.map((harness) => {
+            const selected = selectedHarnessId === harness.id;
+            const readiness = verification?.harnessId === harness.id ? verification : null;
+
+            return (
+              <button
+                key={harness.id}
+                type="button"
+                className={cn(
+                  "w-full rounded-lg border p-4 text-left transition-colors",
+                  selected
+                    ? "border-foreground/20 bg-muted/40"
+                    : "border-border bg-card hover:border-foreground/10 hover:bg-muted/20",
+                )}
+                onClick={() => setSelectedHarnessId(harness.id)}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-foreground">{harness.name}</span>
+                      {harness.version ? (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                          {harness.version}
+                        </span>
+                      ) : null}
+                      {selected ? (
+                        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                          Selected
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <StatusChip
+                        icon={<LaptopMinimalCheckIcon className="size-3.5" />}
+                        tone={harness.installed ? "ok" : "warn"}
+                        label={harness.installed ? "Installed" : "Not installed"}
+                      />
+                      <StatusChip
+                        icon={<KeyRoundIcon className="size-3.5" />}
+                        tone={
+                          !harness.installed
+                            ? "muted"
+                            : readiness?.authenticated === true
+                              ? "ok"
+                              : readiness?.authenticated === false
+                                ? "warn"
+                                : "muted"
+                        }
+                        label={
+                          !harness.installed
+                            ? "Waiting for install"
+                            : readiness?.authenticated === true
+                              ? "Logged in"
+                              : readiness?.authenticated === false
+                                ? "Needs login"
+                                : "Login not checked"
+                        }
+                      />
+                      <StatusChip
+                        icon={<CheckCircle2Icon className="size-3.5" />}
+                        tone={readiness?.ready ? "ok" : "muted"}
+                        label={readiness?.ready ? "Ready" : "Not ready yet"}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {!harness.installed
+                        ? harness.installHint
+                        : readiness?.statusMessage ?? "Run the readiness check to confirm login."}
+                    </p>
+                  </div>
+                </div>
+
+                {!harness.installed ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <code className="rounded-md border border-border bg-background px-2 py-1 text-xs">
+                      {harness.installCommand}
+                    </code>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void copyInstallCommand(harness.installCommand);
+                      }}
+                    >
+                      <CopyIcon className="size-3.5" />
+                      Copy install
+                    </Button>
+                  </div>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-muted-foreground">
+            TinyClaw should only enable code delegation after the selected agent is ready.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" onClick={handleRefresh}>
+              Check again
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleVerify}
+              disabled={verifyMutation.isPending || !selectedHarnessId}
+            >
+              {verifyMutation.isPending ? <Spinner className="size-4" /> : "Run readiness check"}
+            </Button>
+            <Button
+              type="button"
+              onClick={handleSave}
+              disabled={saveMutation.isPending || !selectedHarnessId}
+            >
+              {saveMutation.isPending ? <Spinner className="size-4" /> : "Save selected agent"}
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatusChip({
+  icon,
+  tone,
+  label,
+}: {
+  icon: ReactNode;
+  tone: "ok" | "warn" | "muted";
+  label: string;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5",
+        tone === "ok"
+          ? "bg-emerald-500/10 text-emerald-300"
+          : tone === "warn"
+            ? "bg-amber-500/10 text-amber-300"
+            : "bg-muted text-muted-foreground",
+      )}
+    >
+      {icon}
+      {label}
+    </span>
+  );
+}
+
+export function CodingHarnessSettingsDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-3xl">
         <DialogHeader className="border-b border-border px-4 py-3">
-          <div className="flex items-center gap-2 pr-6">
-            <div className="min-w-0 flex-1">
-              <DialogTitle>Coding agent harnesses</DialogTitle>
-              <DialogDescription className="text-xs">
-                Choose which installed coding agent TinyClaw should use for delegated code work.
-              </DialogDescription>
-            </div>
-            {settings?.configured ? (
-              <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-300">
-                Ready
-              </span>
-            ) : null}
-          </div>
+          <DialogTitle>Coding agents</DialogTitle>
+          <DialogDescription className="text-xs">
+            Pick an agent, make sure it is installed and logged in, then TinyClaw can enable code delegation.
+          </DialogDescription>
         </DialogHeader>
-
-        {isLoading ? (
-          <div className="flex items-center gap-2 px-4 py-4 text-sm text-muted-foreground">
-            <Spinner />
-            Loading coding harness settings…
-          </div>
-        ) : error ? (
-          <div className="px-4 py-4 text-sm text-destructive" role="alert">
-            {formatError(error)}
-          </div>
-        ) : settings ? (
-          <>
-            <div className="space-y-4 px-4 py-4">
-              {formError ? (
-                <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {formError}
-                </p>
-              ) : null}
-              {hint ? (
-                <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-                  {hint}
-                </p>
-              ) : null}
-
-              <div className="space-y-3">
-                {settings.harnesses.map((harness) => {
-                  const draft = draftById.get(harness.id);
-                  const enabled = draft?.enabled ?? harness.enabled;
-                  const command = draft?.command ?? harness.command;
-
-                  return (
-                    <section
-                      key={harness.id}
-                      className="rounded-md border border-border bg-card p-4"
-                    >
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-sm font-medium text-foreground">{harness.name}</h3>
-                            <span
-                              className={
-                                harness.installed
-                                  ? "rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-300"
-                                  : "rounded-full bg-amber-500/10 px-2 py-0.5 text-xs text-amber-300"
-                              }
-                            >
-                              {harness.installed ? "Installed" : "Not installed"}
-                            </span>
-                            {selectedHarnessId === harness.id ? (
-                              <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                                Selected
-                              </span>
-                            ) : null}
-                          </div>
-                          <p className="mt-1 text-xs text-muted-foreground">{harness.installHint}</p>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={selectedHarnessId === harness.id ? "default" : "outline"}
-                            onClick={() => setSelectedHarnessId(harness.id)}
-                          >
-                            Use by default
-                          </Button>
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            Enabled
-                            <Switch
-                              checked={enabled}
-                              onCheckedChange={(checked) =>
-                                updateHarness(harness.id, { enabled: checked })
-                              }
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-3">
-                        <FormField
-                          id={`coding-harness-command-${harness.id}`}
-                          label="Command"
-                          density="compact"
-                        >
-                          <Input
-                            value={command}
-                            onChange={(event) =>
-                              updateHarness(harness.id, { command: event.target.value })
-                            }
-                            placeholder={harness.command}
-                          />
-                        </FormField>
-                      </div>
-                    </section>
-                  );
-                })}
-              </div>
-            </div>
-
-            <DialogFooter className="gap-2 border-t border-border bg-background sm:justify-between">
-              <div className="p-4">
-                <Button type="button" variant="outline" onClick={handleRefresh}>
-                  Refresh status
-                </Button>
-              </div>
-              <div className="flex items-center gap-2 p-4">
-                <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                  Close
-                </Button>
-                <Button
-                  type="button"
-                  onClick={handleSave}
-                  disabled={saveMutation.isPending}
-                >
-                  {saveMutation.isPending ? <Spinner className="size-4" /> : "Save"}
-                </Button>
-              </div>
-            </DialogFooter>
-          </>
-        ) : null}
+        <div className="p-4">
+          <CodingHarnessSettingsPanel enabled={open} />
+        </div>
       </DialogContent>
     </Dialog>
   );

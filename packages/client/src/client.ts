@@ -73,6 +73,8 @@ import type {
   EmailSettingsResponse,
   SendEmailTestRequest,
   SendEmailTestResponse,
+  VerifyCodingHarnessRequest,
+  VerifyCodingHarnessResponse,
   ThinkingSettings,
   ThinkingSettingsResponse,
   TimezoneSettingsResponse,
@@ -1101,6 +1103,15 @@ export class TinyClawClient {
   ): Promise<CodingHarnessSettingsResponse> {
     return this.request<CodingHarnessSettingsResponse>("/v1/settings/coding-harnesses", {
       method: "PUT",
+      body: JSON.stringify(request),
+    });
+  }
+
+  async verifyCodingHarness(
+    request: VerifyCodingHarnessRequest,
+  ): Promise<VerifyCodingHarnessResponse> {
+    return this.request<VerifyCodingHarnessResponse>("/v1/settings/coding-harnesses/verify", {
+      method: "POST",
       body: JSON.stringify(request),
     });
   }

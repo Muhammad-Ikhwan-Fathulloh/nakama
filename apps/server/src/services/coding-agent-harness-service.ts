@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type {
   DatabaseAdapter,
   StoredCodingAgentHarnessKind,
@@ -7,7 +10,14 @@ import { WORKSPACE_SETTINGS_ID } from "@tinyclaw/db";
 
 export interface CodingAgentHarnessStatus extends StoredCodingAgentHarnessRecord {
   installed: boolean;
+  version: string | null;
 }
+
+const INSTALL_COMMANDS: Record<StoredCodingAgentHarnessKind, string> = {
+  codex: "npm install -g @openai/codex",
+  claude_code: "npm install -g @anthropic-ai/claude-code",
+  opencode: "npm install -g opencode-ai",
+};
 
 export interface CodingAgentWorkspaceSettings {
   harnesses: StoredCodingAgentHarnessRecord[];
@@ -59,7 +69,7 @@ export async function listCodingAgentHarnessStatuses(
   return Promise.all(
     settings.harnesses.map(async (harness) => ({
       ...harness,
-      installed: await isCommandAvailable(harness.command),
+      ...(await getHarnessRuntimeStatus(harness.command)),
     })),
   );
 }
@@ -120,12 +130,7 @@ export async function resolveCodingAgentHarness(
   preferredKind?: StoredCodingAgentHarnessKind | null,
 ): Promise<CodingAgentHarnessStatus> {
   const settings = await loadCodingAgentWorkspaceSettings(db);
-  const statuses = await Promise.all(
-    settings.harnesses.map(async (harness) => ({
-      ...harness,
-      installed: await isCommandAvailable(harness.command),
-    })),
-  );
+  const statuses = await listCodingAgentHarnessStatuses(db);
 
   const enabled = statuses.filter((harness) => harness.enabled);
 
@@ -162,6 +167,73 @@ export async function resolveCodingAgentHarness(
   );
 }
 
+export async function verifyCodingAgentHarness(
+  db: DatabaseAdapter,
+  harnessId?: string | null,
+): Promise<{
+  ok: boolean;
+  harnessId: string | null;
+  name: string | null;
+  version: string | null;
+  installed: boolean;
+  authenticated: boolean | null;
+  ready: boolean;
+  nextStep: "install" | "login" | "retry" | null;
+  statusMessage: string | null;
+  error: string | null;
+}> {
+  const statuses = await listCodingAgentHarnessStatuses(db);
+  const harness =
+    statuses.find((entry) => entry.id === harnessId) ??
+    statuses.find((entry) => entry.installed) ??
+    null;
+
+  if (!harness) {
+    return {
+      ok: false,
+      harnessId: harnessId ?? null,
+      name: null,
+      version: null,
+      installed: false,
+      authenticated: null,
+      ready: false,
+      nextStep: "install",
+      statusMessage: "Install a supported coding agent first.",
+      error: "No supported coding agent is installed yet.",
+    };
+  }
+
+  if (!harness.installed) {
+    return {
+      ok: false,
+      harnessId: harness.id,
+      name: harness.name,
+      version: harness.version,
+      installed: false,
+      authenticated: null,
+      ready: false,
+      nextStep: "install",
+      statusMessage: `${harness.name} is not installed on this machine yet.`,
+      error: `${harness.name} is not installed or could not be started with \`${harness.command} --version\`.`,
+    };
+  }
+
+  const probe = await probeHarnessReadiness(harness);
+
+  return {
+    ok: probe.ready,
+    harnessId: harness.id,
+    name: harness.name,
+    version: harness.version,
+    installed: true,
+    authenticated: probe.authenticated,
+    ready: probe.ready,
+    nextStep: probe.nextStep,
+    statusMessage: probe.statusMessage,
+    error: probe.error,
+  };
+}
+
 function mergeHarnesses(
   storedHarnesses: StoredCodingAgentHarnessRecord[],
 ): StoredCodingAgentHarnessRecord[] {
@@ -185,16 +257,233 @@ function mergeHarnesses(
   });
 }
 
-async function isCommandAvailable(command: string): Promise<boolean> {
+async function getHarnessRuntimeStatus(
+  command: string,
+): Promise<Pick<CodingAgentHarnessStatus, "installed" | "version">> {
   const { spawn } = await import("node:child_process");
 
   return new Promise((resolve) => {
     const child = spawn(command, ["--version"], {
       env: process.env,
-      stdio: ["ignore", "ignore", "ignore"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    let stdout = "";
+    let stderr = "";
 
-    child.once("error", () => resolve(false));
-    child.once("close", (code) => resolve(code === 0));
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.once("error", () => resolve({ installed: false, version: null }));
+    child.once("close", (code) =>
+      resolve({
+        installed: code === 0,
+        version: code === 0 ? extractVersion(stdout, stderr) : null,
+      }),
+    );
   });
+}
+
+function extractVersion(stdout: string, stderr: string): string | null {
+  const output = `${stdout}\n${stderr}`.trim();
+  if (!output) {
+    return null;
+  }
+
+  return output.split(/\r?\n/, 1)[0]?.trim() || null;
+}
+
+export function getCodingHarnessInstallCommand(kind: StoredCodingAgentHarnessKind): string {
+  return INSTALL_COMMANDS[kind];
+}
+
+export function getCodingHarnessInstallHint(kind: StoredCodingAgentHarnessKind): string {
+  if (kind === "codex") {
+    return "Install the Codex CLI on this machine, then check again.";
+  }
+
+  if (kind === "claude_code") {
+    return "Install Claude Code on this machine, then check again.";
+  }
+
+  return "Install OpenCode on this machine, then check again.";
+}
+
+async function probeHarnessReadiness(
+  harness: CodingAgentHarnessStatus,
+): Promise<{
+  authenticated: boolean | null;
+  ready: boolean;
+  nextStep: "login" | "retry" | null;
+  statusMessage: string | null;
+  error: string | null;
+}> {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "tinyclaw-coding-agent-probe-"));
+
+  try {
+    const result = await runProbeCommand(harness, tempDir);
+    const combinedOutput = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+
+    if (result.timedOut) {
+      return {
+        authenticated: null,
+        ready: false,
+        nextStep: "retry",
+        statusMessage: "Readiness check timed out.",
+        error: "The readiness check timed out before the coding agent responded.",
+      };
+    }
+
+    if (result.exitCode === 0) {
+      return {
+        authenticated: true,
+        ready: true,
+        nextStep: null,
+        statusMessage: `${harness.name} is installed and ready.`,
+        error: null,
+      };
+    }
+
+    if (looksLikeAuthenticationFailure(combinedOutput)) {
+      return {
+        authenticated: false,
+        ready: false,
+        nextStep: "login",
+        statusMessage: `${harness.name} is installed but still needs login.`,
+        error: authenticationHelpForHarness(harness.kind),
+      };
+    }
+
+    return {
+      authenticated: null,
+      ready: false,
+      nextStep: "retry",
+      statusMessage: `${harness.name} is installed but the readiness check failed.`,
+      error: combinedOutput || `TinyClaw could not verify ${harness.name} yet.`,
+    };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function runProbeCommand(
+  harness: CodingAgentHarnessStatus,
+  cwd: string,
+): Promise<{
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}> {
+  const { spawn } = await import("node:child_process");
+  const timeoutMs = 15_000;
+  const prompt = "Reply with OK and nothing else.";
+  const args = buildProbeArgs(harness, prompt, cwd);
+
+  return new Promise((resolve) => {
+    const child = spawn(harness.command, args, {
+      cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, timeoutMs);
+
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.once("error", (error) => {
+      clearTimeout(timeoutId);
+      resolve({
+        exitCode: null,
+        stdout,
+        stderr: `${stderr}\n${String(error)}`.trim(),
+        timedOut,
+      });
+    });
+    child.once("close", (exitCode) => {
+      clearTimeout(timeoutId);
+      resolve({
+        exitCode,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        timedOut,
+      });
+    });
+  });
+}
+
+function buildProbeArgs(
+  harness: CodingAgentHarnessStatus,
+  prompt: string,
+  cwd: string,
+): string[] {
+  const baseArgs = [...harness.args];
+
+  if (harness.kind === "codex") {
+    return [
+      ...baseArgs,
+      "exec",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "workspace-write",
+      "--ask-for-approval",
+      "never",
+      "--color",
+      "never",
+      prompt,
+    ];
+  }
+
+  if (harness.kind === "claude_code") {
+    return [
+      ...baseArgs,
+      "--print",
+      "--permission-mode",
+      "bypassPermissions",
+      "--output-format",
+      "text",
+      prompt,
+    ];
+  }
+
+  return [
+    ...baseArgs,
+    "run",
+    "--dir",
+    cwd,
+    "--format",
+    "default",
+    "--dangerously-skip-permissions",
+    prompt,
+  ];
+}
+
+function looksLikeAuthenticationFailure(output: string): boolean {
+  return /log\s?in|login|sign\s?in|authenticate|authentication|not authenticated|api key|token|credential/i.test(
+    output,
+  );
+}
+
+function authenticationHelpForHarness(kind: StoredCodingAgentHarnessKind): string {
+  if (kind === "codex") {
+    return "Codex is installed, but it still needs authentication. Run `codex login` on this machine, then check again.";
+  }
+
+  if (kind === "claude_code") {
+    return "Claude Code is installed, but it still needs authentication. Finish Claude Code login on this machine, then check again.";
+  }
+
+  return "OpenCode is installed, but it still needs authentication. Finish OpenCode login on this machine, then check again.";
 }
