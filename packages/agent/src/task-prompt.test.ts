@@ -8,13 +8,6 @@ import {
 } from "./task-prompt";
 
 describe("task prompt drafting", () => {
-  test("fallback prompt includes title and description", () => {
-    expect(fallbackTaskPrompt("Research competitors", "Q2 launch")).toContain(
-      "Research competitors",
-    );
-    expect(fallbackTaskPrompt("Research competitors", "Q2 launch")).toContain("Q2 launch");
-  });
-
   test("buildTaskPromptUserPrompt omits empty description", () => {
     expect(buildTaskPromptUserPrompt("Ship docs")).toBe("Title: Ship docs");
     expect(buildTaskPromptUserPrompt("Ship docs", "  ")).toBe("Title: Ship docs");

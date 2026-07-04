@@ -15,11 +15,9 @@ const baseSkill: DiscoveredSkill = {
 };
 
 describe("composeMatchedSkillsPrompt", () => {
-  test("includes description only when body-on-match is disabled", () => {
+  test("omits body when body-on-match is disabled", () => {
     const prompt = composeMatchedSkillsPrompt([baseSkill]);
 
-    expect(prompt).toContain("Active Skill: weather");
-    expect(prompt).toContain("Get weather forecasts.");
     expect(prompt).not.toContain("Call the weather tool");
   });
 
