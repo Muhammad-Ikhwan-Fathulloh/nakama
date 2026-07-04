@@ -129,6 +129,10 @@ describe("ensureBundledSkillFiles", () => {
     expect(created).toContain("create-automation");
     expect(created).toContain("manage-skills");
     expect(created).toContain("create-profile");
+    expect(created).toContain("coding-delegation");
+    expect(created).toContain("coding-backend-codex");
+    expect(created).toContain("coding-backend-claude-code");
+    expect(created).toContain("coding-backend-opencode");
 
     const content = await readFile(
       join(configDir, "agent", "skills", "create-automation", "SKILL.md"),
@@ -150,6 +154,13 @@ describe("ensureBundledSkillFiles", () => {
     );
 
     expect(createProfileContent).toContain("name: create-profile");
+
+    const codingDelegationContent = await readFile(
+      join(configDir, "agent", "skills", "coding-delegation", "SKILL.md"),
+      "utf8",
+    );
+
+    expect(codingDelegationContent).toContain("name: coding-delegation");
   });
 
   test("does not overwrite existing skill files", async () => {

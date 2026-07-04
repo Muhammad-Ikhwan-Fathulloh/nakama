@@ -119,12 +119,14 @@ describe("seedOrgSuperBotProfile", () => {
     const db = createInMemoryDatabaseAdapter();
     await upsertSkill(db, "create-automation");
     await upsertSkill(db, "create-profile");
+    await upsertSkill(db, "coding-delegation");
 
     const profile = await seedOrgSuperBotProfile(db, "org_a");
     const skillNames = (await db.listSkillsForProfile(profile.id)).map((skill) => skill.name);
 
     expect(skillNames).toContain("create-automation");
     expect(skillNames).toContain("create-profile");
+    expect(skillNames).toContain("coding-delegation");
   });
 
   test("is idempotent for the same org", async () => {

@@ -2,7 +2,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { getProfileSoulDir, guardFilePath, type ToolContext } from "@tinyclaw/core";
+import {
+  getProfileSoulDir,
+  guardFilePath,
+  readBundledSkillBody,
+  type ToolContext,
+} from "@tinyclaw/core";
 import type { DatabaseAdapter, StoredCodingAgentHarnessKind } from "@tinyclaw/db";
 import { resolveCodingAgentHarness, type CodingAgentHarnessStatus } from "./coding-agent-harness-service";
 
@@ -62,7 +67,7 @@ export async function runCodingAgentTask(
   const timeoutMs = readTimeout(readOptionalNumber(input, "timeoutMs"));
   const backend = readBackend(input);
   const harness = await resolveCodingAgentHarness(db, backend);
-  const prompt = buildDelegationPrompt(task);
+  const prompt = await buildDelegationPrompt(task, harness.kind);
 
   return runHarness(harness, prompt, cwd, timeoutMs);
 }
@@ -211,17 +216,39 @@ function runProcess(
   });
 }
 
-function buildDelegationPrompt(task: string): string {
+async function buildDelegationPrompt(
+  task: string,
+  backend: StoredCodingAgentHarnessKind,
+): Promise<string> {
+  const sharedSkill = await readBundledSkillBody("coding-delegation");
+  const backendSkill = await readBundledSkillBody(getBackendSkillName(backend));
+
   return [
     "You are a delegated coding agent working inside the current project workspace.",
-    "Inspect the codebase before making assumptions.",
-    "Make the requested code changes directly in the workspace when needed.",
-    "Run the most relevant validation you can without getting stuck.",
-    "Return a concise summary of what changed, what you verified, and any remaining risks.",
+    "",
+    "# Delegation Guidance",
+    sharedSkill,
+    "",
+    "# Backend Guidance",
+    backendSkill,
     "",
     "Task:",
     task.trim(),
   ].join("\n");
+}
+
+function getBackendSkillName(
+  backend: StoredCodingAgentHarnessKind,
+): "coding-backend-codex" | "coding-backend-claude-code" | "coding-backend-opencode" {
+  if (backend === "codex") {
+    return "coding-backend-codex";
+  }
+
+  if (backend === "claude_code") {
+    return "coding-backend-claude-code";
+  }
+
+  return "coding-backend-opencode";
 }
 
 function appendOutput(current: string, chunk: string): string {

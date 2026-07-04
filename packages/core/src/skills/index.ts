@@ -10,5 +10,8 @@ export * from "./bundled/install";
 export {
   BUNDLED_SKILL_NAMES,
   DEFAULT_BUNDLED_SKILL_NAMES,
+  RUNTIME_ONLY_BUNDLED_SKILL_NAMES,
   SUPER_BOT_BUNDLED_SKILL_NAMES,
+  readBundledSkillBody,
+  readBundledSkillMarkdown,
 } from "./bundled/index";
