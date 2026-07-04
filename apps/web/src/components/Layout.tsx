@@ -180,7 +180,7 @@ export function Layout() {
         </aside>
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          {page !== "chat" && page !== "status" ? (
+          {page !== "chat" ? (
             <header className="app-shell-header gap-4 bg-card px-6">
               <h1 className="type-brand min-w-0 truncate">{activeNav?.label}</h1>
             </header>

@@ -42,20 +42,6 @@ export function StatusPage() {
 
   return (
     <div className="min-w-0 space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-md">
-            <CircleGaugeIcon className={iconClass} aria-hidden />
-          </div>
-          <div className="min-w-0 space-y-0.5">
-            <h1 className="type-page-title">Status</h1>
-            <p className="type-body max-w-2xl">
-              Live health for the server, workers, and message bridges.
-            </p>
-          </div>
-        </div>
-      </header>
-
       {errorMessage ? (
         <div
           className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3"

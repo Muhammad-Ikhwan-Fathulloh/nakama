@@ -16,16 +16,16 @@ import { cn } from "@/lib/utils";
 
 const INTEGRATION_SECTIONS = [
   {
-    id: "token",
-    label: "Local token",
-    description: "CLI and bridge access",
-    icon: KeyRoundIcon,
-  },
-  {
     id: "telegram",
     label: "Telegram",
     description: "Bot and pairing",
     icon: SendIcon,
+  },
+  {
+    id: "whatsapp",
+    label: "WhatsApp",
+    description: "Bridge and device link",
+    icon: MessageCircleMoreIcon,
   },
   {
     id: "notifications",
@@ -34,21 +34,21 @@ const INTEGRATION_SECTIONS = [
     icon: BellRingIcon,
   },
   {
-    id: "whatsapp",
-    label: "WhatsApp",
-    description: "Bridge and device link",
-    icon: MessageCircleMoreIcon,
+    id: "token",
+    label: "Local token",
+    description: "CLI and bridge access",
+    icon: KeyRoundIcon,
   },
 ] as const;
 
 type IntegrationSectionId = (typeof INTEGRATION_SECTIONS)[number]["id"];
 
 function resolveSection(value: string | null): IntegrationSectionId {
-  if (value === "telegram" || value === "notifications" || value === "whatsapp") {
+  if (value === "token" || value === "notifications" || value === "whatsapp") {
     return value;
   }
 
-  return "token";
+  return "telegram";
 }
 
 export function IntegrationsPage() {
@@ -84,7 +84,7 @@ export function IntegrationsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="space-y-6">
       <header className="space-y-1">
         <h1 className="type-page-title">Integrations</h1>
         <p className="type-body max-w-2xl">

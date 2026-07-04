@@ -13,13 +13,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { useProfilesQuery } from "@/hooks/use-app-queries";
 import { usePurgeSessionMutation, useHistorySessionsQuery } from "@/hooks/use-resource-mutations";
@@ -162,7 +155,7 @@ export function HistoryPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-4">
+    <div className="space-y-4">
       {error ? (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
@@ -170,110 +163,136 @@ export function HistoryPage() {
       ) : null}
 
       <section className={cn(sectionClass, "overflow-hidden")}>
-        <div className="flex flex-wrap items-center gap-3 border-b border-border p-4">
-          <Select
-            value={profileId}
-            disabled={busy || profiles.length === 0}
-            onValueChange={(value) => setProfileId(value != null ? String(value) : "")}
-          >
-            <SelectTrigger className="w-full min-w-44 sm:w-52" aria-label="Profile">
-              <SelectValue placeholder="Profile">
-                {profiles.find((profile) => profile.id === profileId)?.name}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {profiles.map((profile) => (
-                <SelectItem key={profile.id} value={profile.id}>
-                  <span className="flex items-center gap-2">
-                    <ProfileAvatar profile={profile} size="xs" />
-                    <span>{profile.name}</span>
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <div className="grid min-h-[100vh] lg:grid-cols-[240px_minmax(0,1fr)]">
+          <aside className="h-full border-b border-border p-4 lg:border-r lg:border-b-0">
+            <div className="space-y-3">
+              <div>
+                <h2 className="type-section-title">Profiles</h2>
+                <p className="mt-1 text-xs text-muted-foreground">Choose which chat history to view.</p>
+              </div>
 
-          <div className="relative min-w-0 flex-1">
-            <SearchIcon
-              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-              aria-hidden
-            />
-            <Input
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search…"
-              disabled={!profileId || initialLoading}
-              className={cn("pl-9", isSearching && "pr-9")}
-              aria-label="Search conversations"
-            />
-            {isSearching ? (
-              <button
-                type="button"
-                aria-label="Clear search"
-                className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                onClick={() => setSearchQuery("")}
-              >
-                <XIcon className="size-4" />
-              </button>
-            ) : null}
-          </div>
+              {profiles.length === 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigateToPage("profiles")}
+                >
+                  Go to Profiles
+                </Button>
+              ) : (
+                <div className="space-y-1">
+                  {profiles.map((profile) => {
+                    const active = profile.id === profileId;
 
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground tabular-nums">{countLabel}</span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={refreshing || busy || !profileId}
-              aria-label="Refresh"
-              onClick={() => void refetchSessions()}
-            >
-              {refreshing ? <Spinner className="size-4" /> : <RefreshCwIcon className="size-4" />}
-            </Button>
+                    return (
+                      <button
+                        key={profile.id}
+                        type="button"
+                        disabled={busy}
+                        className={cn(
+                          "flex w-full items-center gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors disabled:opacity-50",
+                          active
+                            ? "border-foreground/15 bg-muted text-foreground"
+                            : "border-transparent text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
+                        )}
+                        onClick={() => setProfileId(profile.id)}
+                      >
+                        <ProfileAvatar profile={profile} size="xs" />
+                        <span className="truncate">{profile.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </aside>
+
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3 border-b border-border p-4">
+              <div className="relative min-w-0 flex-1">
+                <SearchIcon
+                  className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden
+                />
+                <Input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search…"
+                  disabled={!profileId || initialLoading}
+                  className={cn("pl-9", isSearching && "pr-9")}
+                  aria-label="Search conversations"
+                />
+                {isSearching ? (
+                  <button
+                    type="button"
+                    aria-label="Clear search"
+                    className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    onClick={() => setSearchQuery("")}
+                  >
+                    <XIcon className="size-4" />
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground tabular-nums">{countLabel}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={refreshing || busy || !profileId}
+                  aria-label="Refresh"
+                  onClick={() => void refetchSessions()}
+                >
+                  {refreshing ? <Spinner className="size-4" /> : <RefreshCwIcon className="size-4" />}
+                </Button>
+              </div>
+            </div>
+
+            {profiles.length === 0 ? (
+              <EmptyMessage
+                message="Create a profile first."
+                actionLabel="Go to Profiles"
+                onAction={() => navigateToPage("profiles")}
+              />
+            ) : initialLoading ? (
+              <ListSkeleton />
+            ) : filteredSessions.length === 0 ? (
+              <EmptyMessage
+                message={
+                  sessions.length > 0
+                    ? "No conversations match your search."
+                    : "No saved chats for this profile."
+                }
+                actionLabel={sessions.length > 0 ? "Clear search" : "Go to Chat"}
+                onAction={() =>
+                  sessions.length > 0 ? setSearchQuery("") : navigateToPage("chat")
+                }
+              />
+            ) : (
+              <div className="divide-y divide-border">
+                {groupedSessions.map((group) => (
+                  <section key={group.label}>
+                    <p className="px-4 py-2 text-xs text-muted-foreground">{group.label}</p>
+                    <ul>
+                      {group.sessions.map((session) => (
+                        <li key={session.id}>
+                          <SessionRow
+                            session={session}
+                            disabled={busy}
+                            onOpen={() => handleOpen(session)}
+                            onDelete={() => setDeleteTarget(session)}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ))}
+              </div>
+            )}
           </div>
         </div>
-
-        {profiles.length === 0 ? (
-          <EmptyMessage
-            message="Create a profile first."
-            actionLabel="Go to Profiles"
-            onAction={() => navigateToPage("profiles")}
-          />
-        ) : initialLoading ? (
-          <ListSkeleton />
-        ) : filteredSessions.length === 0 ? (
-          <EmptyMessage
-            message={
-              sessions.length > 0
-                ? "No conversations match your search."
-                : "No saved chats for this profile."
-            }
-            actionLabel={sessions.length > 0 ? "Clear search" : "Go to Chat"}
-            onAction={() =>
-              sessions.length > 0 ? setSearchQuery("") : navigateToPage("chat")
-            }
-          />
-        ) : (
-          <div className="divide-y divide-border">
-            {groupedSessions.map((group) => (
-              <section key={group.label}>
-                <p className="px-4 py-2 text-xs text-muted-foreground">{group.label}</p>
-                <ul>
-                  {group.sessions.map((session) => (
-                    <li key={session.id}>
-                      <SessionRow
-                        session={session}
-                        disabled={busy}
-                        onOpen={() => handleOpen(session)}
-                        onDelete={() => setDeleteTarget(session)}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ))}
-          </div>
-        )}
       </section>
 
       <Dialog
