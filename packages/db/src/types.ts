@@ -163,6 +163,20 @@ export interface StoredWorkspaceSettingsRecord {
   orgId?: string | null;
 }
 
+export interface StoredNotificationDestinationRecord {
+  id: string;
+  name: string;
+  channel: "telegram";
+  config: {
+    chatId: number;
+    topicId?: number | null;
+  };
+  secretHash: string;
+  orgId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LlmUsageStatsDelta {
   requestCount: number;
   inputTokens: number;
@@ -412,6 +426,13 @@ export interface DatabaseAdapter {
 
   getWorkspaceSettings(): Promise<StoredWorkspaceSettingsRecord | null>;
   upsertWorkspaceSettings(record: StoredWorkspaceSettingsRecord): Promise<void>;
+
+  listNotificationDestinationsForOrg(
+    orgId: string,
+  ): Promise<StoredNotificationDestinationRecord[]>;
+  getNotificationDestination(id: string): Promise<StoredNotificationDestinationRecord | null>;
+  upsertNotificationDestination(record: StoredNotificationDestinationRecord): Promise<void>;
+  deleteNotificationDestination(id: string): Promise<boolean>;
 
   listMcpServers(): Promise<StoredMcpServerRecord[]>;
   getMcpServer(id: string): Promise<StoredMcpServerRecord | null>;

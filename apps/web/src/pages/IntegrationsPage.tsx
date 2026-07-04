@@ -1,5 +1,6 @@
 import { Navigate } from "react-router-dom";
 import { TelegramSettingsCard } from "@/components/TelegramSettingsCard";
+import { NotificationDestinationsCard } from "@/components/NotificationDestinationsCard";
 import { WhatsAppSettingsCard } from "@/components/WhatsAppSettingsCard";
 import { LocalAuthTokenCard } from "@/components/LocalAuthTokenCard";
 import { Spinner } from "@/components/ui/spinner";
@@ -24,6 +25,7 @@ export function IntegrationsPage() {
     <div className="mx-auto max-w-3xl space-y-8">
       <LocalAuthTokenCard />
       <TelegramSettingsCard />
+      <NotificationDestinationsCard />
       <WhatsAppSettingsCard />
     </div>
   );

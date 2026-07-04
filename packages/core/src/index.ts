@@ -17,6 +17,7 @@ export * from "./attachments/content";
 export * from "./document-content";
 export * from "./image-content";
 export * from "./normalize-task-prompt";
+export * from "./notification-destinations";
 export * from "./ids";
 export * from "./knowledge-base";
 export * from "./local-auth";

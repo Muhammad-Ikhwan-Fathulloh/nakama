@@ -14,6 +14,7 @@ export const PUBLIC_ROUTES = new Set([
 export function isPublicRouteRequest(method: string, pathname: string): boolean {
   return (
     PUBLIC_ROUTES.has(pathname) ||
+    /^\/v1\/notify\/[^/]+$/.test(pathname) ||
     (method === "GET" && /^\/v1\/profiles\/[^/]+\/avatar$/.test(pathname))
   );
 }

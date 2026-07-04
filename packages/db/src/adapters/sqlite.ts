@@ -27,6 +27,7 @@ import type {
   StoredTaskRunRecord,
   StoredToolRecord,
   StoredUserRecord,
+  StoredNotificationDestinationRecord,
   StoredWorkspaceSettingsRecord,
 } from "../types";
 
@@ -175,6 +176,17 @@ interface WorkspaceSettingsRow {
   id: string;
   vision_model: string | null;
   transcription_model: string | null;
+  updated_at: string;
+}
+
+interface NotificationDestinationRow {
+  id: string;
+  name: string;
+  channel: "telegram";
+  config: string;
+  secret_hash: string;
+  org_id: string;
+  created_at: string;
   updated_at: string;
 }
 
@@ -663,6 +675,41 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
       vision_model = excluded.vision_model,
       transcription_model = excluded.transcription_model,
       updated_at = excluded.updated_at
+  `);
+  const listNotificationDestinationsForOrgStmt = db.prepare(`
+    SELECT id, name, channel, config, secret_hash, org_id, created_at, updated_at
+    FROM notification_destinations
+    WHERE org_id = ?
+    ORDER BY created_at DESC
+  `);
+  const getNotificationDestinationStmt = db.prepare(`
+    SELECT id, name, channel, config, secret_hash, org_id, created_at, updated_at
+    FROM notification_destinations
+    WHERE id = ?
+  `);
+  const upsertNotificationDestinationStmt = db.prepare(`
+    INSERT INTO notification_destinations (
+      id,
+      name,
+      channel,
+      config,
+      secret_hash,
+      org_id,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      channel = excluded.channel,
+      config = excluded.config,
+      secret_hash = excluded.secret_hash,
+      org_id = excluded.org_id,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at
+  `);
+  const deleteNotificationDestinationStmt = db.prepare(`
+    DELETE FROM notification_destinations WHERE id = ?
   `);
 
   const getUserByEmailStmt = db.prepare("SELECT * FROM users WHERE email = ?");
@@ -1470,6 +1517,35 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
       );
     },
 
+    async listNotificationDestinationsForOrg(orgId) {
+      return listNotificationDestinationsForOrgStmt
+        .all(orgId)
+        .map((row) => toNotificationDestinationRecord(row as NotificationDestinationRow));
+    },
+
+    async getNotificationDestination(id) {
+      const row = getNotificationDestinationStmt.get(id) as NotificationDestinationRow | null;
+      return row ? toNotificationDestinationRecord(row) : null;
+    },
+
+    async upsertNotificationDestination(record) {
+      upsertNotificationDestinationStmt.run(
+        record.id,
+        record.name,
+        record.channel,
+        JSON.stringify(record.config),
+        record.secretHash,
+        record.orgId,
+        record.createdAt,
+        record.updatedAt,
+      );
+    },
+
+    async deleteNotificationDestination(id) {
+      const result = deleteNotificationDestinationStmt.run(id);
+      return result.changes > 0;
+    },
+
     async listMcpServers() {
       return listMcpServersStmt.all().map((row) => toMcpServerRecord(row as McpServerRow));
     },
@@ -1895,6 +1971,21 @@ function toWorkspaceSettingsRecord(row: WorkspaceSettingsRow): StoredWorkspaceSe
     id: row.id,
     visionModel: row.vision_model?.trim() || null,
     transcriptionModel: row.transcription_model?.trim() || null,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toNotificationDestinationRecord(
+  row: NotificationDestinationRow,
+): StoredNotificationDestinationRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    channel: row.channel,
+    config: JSON.parse(row.config) as StoredNotificationDestinationRecord["config"],
+    secretHash: row.secret_hash,
+    orgId: row.org_id,
+    createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }

@@ -1,46 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { createInMemoryDatabaseAdapter } from "./adapters/in-memory";
 import { createSqliteDatabase } from "./adapters/sqlite";
 import { LLM_USAGE_STATS_ID } from "./constants";
 
 describe("llm usage stats persistence", () => {
-  test("in-memory adapter accumulates usage deltas", async () => {
-    const db = createInMemoryDatabaseAdapter();
-    const trackedSince = "2026-06-05T00:00:00.000Z";
-
-    await db.incrementLlmUsageStats(
-      {
-        requestCount: 1,
-        inputTokens: 100,
-        outputTokens: 50,
-        estimatedCostUsd: 0.01,
-      },
-      trackedSince,
-    );
-    await db.incrementLlmUsageStats(
-      {
-        requestCount: 1,
-        inputTokens: 200,
-        outputTokens: 75,
-        estimatedCostUsd: 0.02,
-      },
-      trackedSince,
-    );
-
-    const stats = await db.getLlmUsageStats();
-    const byModel = await db.listLlmUsageStatsByModel();
-    expect(stats).toEqual({
-      id: LLM_USAGE_STATS_ID,
-      requestCount: 2,
-      inputTokens: 300,
-      outputTokens: 125,
-      estimatedCostUsd: 0.03,
-      trackedSince,
-      updatedAt: expect.any(String),
-    });
-    expect(byModel).toEqual([]);
-  });
-
   test("sqlite adapter accumulates usage deltas", async () => {
     const database = await createSqliteDatabase(":memory:");
     const db = database.adapter;

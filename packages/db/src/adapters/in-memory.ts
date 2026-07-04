@@ -23,6 +23,7 @@ import type {
   StoredTaskRunRecord,
   StoredToolRecord,
   StoredUserRecord,
+  StoredNotificationDestinationRecord,
   StoredWorkspaceSettingsRecord,
 } from "../types";
 
@@ -60,6 +61,7 @@ export function createInMemoryDatabaseAdapter(): DatabaseAdapter {
   let llmUsageStats: StoredLlmUsageStatsRecord | null = null;
   const llmUsageByModel = new Map<string, StoredLlmUsageModelStatsRecord>();
   let workspaceSettings: StoredWorkspaceSettingsRecord | null = null;
+  const notificationDestinations = new Map<string, StoredNotificationDestinationRecord>();
 
   return {
     async getUserByEmail(email) {
@@ -708,6 +710,24 @@ export function createInMemoryDatabaseAdapter(): DatabaseAdapter {
 
     async upsertWorkspaceSettings(record) {
       workspaceSettings = record;
+    },
+
+    async listNotificationDestinationsForOrg(orgId) {
+      return Array.from(notificationDestinations.values()).filter(
+        (record) => record.orgId === orgId,
+      );
+    },
+
+    async getNotificationDestination(id) {
+      return notificationDestinations.get(id) ?? null;
+    },
+
+    async upsertNotificationDestination(record) {
+      notificationDestinations.set(record.id, record);
+    },
+
+    async deleteNotificationDestination(id) {
+      return notificationDestinations.delete(id);
     },
 
     async listMcpServers() {

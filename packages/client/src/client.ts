@@ -104,10 +104,15 @@ import type {
   SetupAuthRequest,
   CreateOrganizationRequest,
   CreateOrganizationResponse,
+  CreateNotificationDestinationRequest,
   ListOrganizationsResponse,
+  ListNotificationDestinationsResponse,
   ListUserOrgsResponse,
+  NotificationDestinationSummary,
+  NotificationDestinationWithSecret,
   DataImportPreviewResponse,
   PreviewDataImportRequest,
+  RegenerateNotificationDestinationKeyResponse,
   RestoreDataImportRequest,
   RestoreDataImportResponse,
   SetActiveOrgRequest,
@@ -118,6 +123,7 @@ import type {
   ListOrgMembersResponse,
   UpdateOrgMemberRequest,
   UpdateOrganizationRequest,
+  UpdateNotificationDestinationRequest,
   OrganizationResponse,
   OrgMemberResponse,
   StoredTask,
@@ -1014,6 +1020,52 @@ export class TinyClawClient {
     return this.request<TelegramSettingsResponse>("/v1/settings/telegram/handshake", {
       method: "POST",
     });
+  }
+
+  async listNotificationDestinations(): Promise<ListNotificationDestinationsResponse> {
+    return this.request<ListNotificationDestinationsResponse>("/v1/notification-destinations");
+  }
+
+  async createNotificationDestination(
+    request: CreateNotificationDestinationRequest,
+  ): Promise<NotificationDestinationWithSecret> {
+    return this.request<NotificationDestinationWithSecret>("/v1/notification-destinations", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  async updateNotificationDestination(
+    destinationId: string,
+    request: UpdateNotificationDestinationRequest,
+  ): Promise<NotificationDestinationSummary> {
+    return this.request<NotificationDestinationSummary>(
+      `/v1/notification-destinations/${encodeURIComponent(destinationId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  async regenerateNotificationDestinationKey(
+    destinationId: string,
+  ): Promise<RegenerateNotificationDestinationKeyResponse> {
+    return this.request<RegenerateNotificationDestinationKeyResponse>(
+      `/v1/notification-destinations/${encodeURIComponent(destinationId)}/rotate-key`,
+      {
+        method: "POST",
+      },
+    );
+  }
+
+  async deleteNotificationDestination(destinationId: string): Promise<void> {
+    await this.request(
+      `/v1/notification-destinations/${encodeURIComponent(destinationId)}`,
+      {
+        method: "DELETE",
+      },
+    );
   }
 
   async getEmailSettings(): Promise<EmailSettingsResponse> {

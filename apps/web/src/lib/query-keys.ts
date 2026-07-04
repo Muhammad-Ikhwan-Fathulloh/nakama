@@ -50,6 +50,9 @@ export const queryKeys = {
   telegram: {
     settings: ["telegram", "settings"] as const,
   },
+  notificationDestinations: {
+    all: ["notificationDestinations"] as const,
+  },
   email: {
     settings: ["email", "settings"] as const,
   },

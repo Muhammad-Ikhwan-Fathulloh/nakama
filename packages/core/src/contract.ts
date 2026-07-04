@@ -735,6 +735,56 @@ export interface UpdateTelegramSettingsRequest {
   profileId?: string;
 }
 
+export type NotificationDestinationChannel = "telegram";
+
+export type NotificationWebhookLevel = "info" | "success" | "warning" | "error";
+
+export interface TelegramNotificationDestinationConfig {
+  chatId: number;
+  topicId?: number | null;
+}
+
+export interface NotificationDestinationSummary {
+  id: string;
+  name: string;
+  channel: NotificationDestinationChannel;
+  telegram: TelegramNotificationDestinationConfig;
+  webhookPath: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NotificationDestinationWithSecret {
+  destination: NotificationDestinationSummary;
+  apiKey: string;
+}
+
+export interface ListNotificationDestinationsResponse {
+  destinations: NotificationDestinationSummary[];
+}
+
+export interface CreateNotificationDestinationRequest {
+  name: string;
+  channel: NotificationDestinationChannel;
+  telegram: TelegramNotificationDestinationConfig;
+}
+
+export interface UpdateNotificationDestinationRequest {
+  name: string;
+  telegram: TelegramNotificationDestinationConfig;
+}
+
+export interface RegenerateNotificationDestinationKeyResponse {
+  destination: NotificationDestinationSummary;
+  apiKey: string;
+}
+
+export interface NotificationWebhookRequest {
+  body: string;
+  title?: string;
+  level?: NotificationWebhookLevel;
+}
+
 export interface EmailSettingsResponse {
   configured: boolean;
   imapHost: string | null;

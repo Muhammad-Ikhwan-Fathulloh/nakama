@@ -46,6 +46,7 @@ export function createTelegramOutboundAdapter(
                 body: JSON.stringify({
                   chat_id: chatId,
                   text: chunk,
+                  ...(input.topicId ? { message_thread_id: input.topicId } : {}),
                 }),
               },
             );

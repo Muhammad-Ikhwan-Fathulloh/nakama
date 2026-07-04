@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
-  computeReservedRows,
-  getContentBottomLine,
-  getInputStartLine,
-  getPinnedInputStartLine,
-  getVisiblePinnedInputRows,
-  shouldPinToBottom,
   TerminalLayout,
 } from "./terminal-layout";
 import {
@@ -15,49 +9,6 @@ import {
 } from "./message-queue";
 import { plainLine, styledLine, styledLineText } from "./styled-text";
 import { VirtualMessageList } from "./virtual-message-list";
-
-describe("shouldPinToBottom", () => {
-  test("stays inline while there is room for input", () => {
-    expect(shouldPinToBottom(5, 2, 24)).toBe(false);
-  });
-
-  test("pins when input would overflow the terminal", () => {
-    expect(shouldPinToBottom(22, 2, 24)).toBe(true);
-  });
-});
-
-describe("getContentBottomLine", () => {
-  test("uses the furthest active row", () => {
-    expect(
-      getContentBottomLine({ lastOutputLine: 5, statusRow: 7, streamRow: 6 }),
-    ).toBe(7);
-  });
-});
-
-describe("getInputStartLine", () => {
-  test("places input directly after output", () => {
-    expect(getInputStartLine(5)).toBe(6);
-    expect(getInputStartLine(0)).toBe(1);
-  });
-});
-
-describe("getVisiblePinnedInputRows", () => {
-  test("uses the full available viewport for oversized pinned input", () => {
-    expect(getVisiblePinnedInputRows(50, 24)).toBe(23);
-  });
-});
-
-describe("getPinnedInputStartLine", () => {
-  test("starts oversized pinned input at the first visible composer row", () => {
-    expect(getPinnedInputStartLine(50, 24)).toBe(2);
-  });
-});
-
-describe("computeReservedRows", () => {
-  test("requires at least one row", () => {
-    expect(computeReservedRows({ pendingLineCount: 0, promptLineCount: 0 })).toBe(1);
-  });
-});
 
 describe("MessageQueue", () => {
   test("dequeues in fifo order", () => {

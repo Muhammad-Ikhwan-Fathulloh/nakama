@@ -188,3 +188,62 @@ test("non-browser clients reload the local auth token once after a 401", async (
     await rm(configDir, { recursive: true, force: true });
   }
 });
+
+test("notification destination client methods hit the expected routes", async () => {
+  const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  const client = createClient({
+    baseUrl: "http://localhost:4310",
+    authToken: "local-auth-token",
+    orgId: "org_test",
+    fetch: async (input, init) => {
+      fetchCalls.push({ input, init });
+
+      if (init?.method === "POST" && input.toString().endsWith("/rotate-key")) {
+        return Response.json({ destination: { id: "dest_1" }, apiKey: "rotated" });
+      }
+
+      if (init?.method === "POST") {
+        return Response.json({ destination: { id: "dest_1" }, apiKey: "created" });
+      }
+
+      if (init?.method === "PUT") {
+        return Response.json({ id: "dest_1", name: "Ops" });
+      }
+
+      if (init?.method === "DELETE") {
+        return new Response(null, { status: 204 });
+      }
+
+      return Response.json({ destinations: [] });
+    },
+  });
+
+  await client.listNotificationDestinations();
+  await client.createNotificationDestination({
+    name: "Ops",
+    channel: "telegram",
+    telegram: { chatId: 1001 },
+  });
+  await client.updateNotificationDestination("dest_1", {
+    name: "Ops",
+    telegram: { chatId: 1001, topicId: 22 },
+  });
+  await client.regenerateNotificationDestinationKey("dest_1");
+  await client.deleteNotificationDestination("dest_1");
+
+  expect(fetchCalls[0]?.input.toString()).toBe(
+    "http://localhost:4310/v1/notification-destinations",
+  );
+  expect(fetchCalls[1]?.input.toString()).toBe(
+    "http://localhost:4310/v1/notification-destinations",
+  );
+  expect(fetchCalls[2]?.input.toString()).toBe(
+    "http://localhost:4310/v1/notification-destinations/dest_1",
+  );
+  expect(fetchCalls[3]?.input.toString()).toBe(
+    "http://localhost:4310/v1/notification-destinations/dest_1/rotate-key",
+  );
+  expect(fetchCalls[4]?.input.toString()).toBe(
+    "http://localhost:4310/v1/notification-destinations/dest_1",
+  );
+});

@@ -154,6 +154,21 @@ CREATE TABLE IF NOT EXISTS task_runs (
 CREATE INDEX IF NOT EXISTS task_runs_task_started
   ON task_runs (task_id, started_at DESC);
 
+CREATE TABLE IF NOT EXISTS notification_destinations (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  config TEXT NOT NULL,
+  secret_hash TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS notification_destinations_org_id
+  ON notification_destinations (org_id);
+
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY NOT NULL,
   name TEXT NOT NULL,
