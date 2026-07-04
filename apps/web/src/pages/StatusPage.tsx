@@ -3,7 +3,6 @@ import {
   ArrowUpRightIcon,
   AlertTriangleIcon,
   CheckCircle2Icon,
-  CircleGaugeIcon,
   ClockIcon,
   CoinsIcon,
   MessageCircleIcon,
