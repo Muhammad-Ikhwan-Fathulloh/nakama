@@ -404,7 +404,7 @@ export function AutomationsPage() {
                     <p className="mt-1 text-sm text-muted-foreground">Try a different search term.</p>
                   </div>
                 ) : (
-                  <ul className="divide-y divide-border">
+                  <ul className="divide-y divide-border border-b border-border">
                     {filteredAutomations.map((automation) => (
                       <li key={automation.id}>
                         <AutomationListItem
@@ -768,7 +768,7 @@ function AutomationListItem({
   return (
     <div
       className={cn(
-        "group flex w-full items-start gap-2 border-b border-border/70 transition-colors",
+        "group flex w-full items-start gap-2 transition-colors",
         "hover:bg-muted/25 focus-within:bg-muted/25",
         selected && "bg-muted/35",
       )}
