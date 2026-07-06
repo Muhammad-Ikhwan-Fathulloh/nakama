@@ -8,45 +8,26 @@ const serverEntry = join(projectRoot, "apps/server/src/index.ts");
 await killListenersOnPort(DEFAULT_SERVER_PORT);
 clearRuntimeServerUrl();
 
-const child = Bun.spawn(
-  [
-    "bun",
-    "--watch",
-    serverEntry,
-    join(projectRoot, "packages/core/src"),
-    join(projectRoot, "packages/db/src"),
-    join(projectRoot, "packages/agent/src"),
-  ],
-  {
+const child = Bun.spawn(["bun", "run", serverEntry], {
   cwd: projectRoot,
   stdout: "inherit",
   stderr: "inherit",
   stdin: "inherit",
   env: process.env,
-  },
-);
+});
 
-const exitCode = await child.exited;
-process.exit(exitCode ?? 0);
+process.exit((await child.exited) ?? 0);
 
 async function killListenersOnPort(port: number): Promise<void> {
   try {
-    const result = Bun.spawnSync(["lsof", "-ti", `:${port}`]);
-    const output = result.stdout.toString().trim();
-
+    const output = Bun.spawnSync(["lsof", "-ti", `:${port}`]).stdout.toString().trim();
     if (!output) {
       return;
     }
 
-    for (const pid of output.split("\n")) {
-      const numericPid = Number(pid);
-
-      if (!Number.isFinite(numericPid)) {
-        continue;
-      }
-
+    for (const id of output.split("\n").map(Number).filter((n) => n > 0)) {
       try {
-        process.kill(numericPid, "SIGTERM");
+        process.kill(id, "SIGTERM");
       } catch {
         // Process may already be gone.
       }

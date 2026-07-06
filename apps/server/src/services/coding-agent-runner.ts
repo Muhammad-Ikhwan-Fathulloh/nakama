@@ -10,6 +10,7 @@ import {
 } from "@nakama/core";
 import type { DatabaseAdapter, StoredCodingAgentHarnessKind } from "@nakama/db";
 import { resolveCodingAgentHarness, type CodingAgentHarnessStatus } from "./coding-agent-harness-service";
+import { ensureProcessPath } from "../lib/ensure-process-path";
 
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 const MAX_OUTPUT_CHARS = 48_000;
@@ -165,6 +166,23 @@ async function runCodex(
 }
 
 function runProcess(
+  command: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+  harness: CodingAgentHarnessStatus,
+): Promise<DelegateCodingTaskResult> {
+  return runProcessOnce(command, args, cwd, timeoutMs, harness).catch(async (error) => {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+
+    ensureProcessPath();
+    return runProcessOnce(command, args, cwd, timeoutMs, harness);
+  });
+}
+
+function runProcessOnce(
   command: string,
   args: string[],
   cwd: string,

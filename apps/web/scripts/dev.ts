@@ -23,7 +23,7 @@ try {
     stdin: "inherit",
     env: {
       ...process.env,
-      TINYCLAW_SERVER_URL: serverUrl,
+      nakama_SERVER_URL: serverUrl,
     },
   });
 

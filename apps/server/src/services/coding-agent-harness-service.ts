@@ -7,6 +7,7 @@ import type {
   StoredCodingAgentHarnessRecord,
 } from "@nakama/db";
 import { WORKSPACE_SETTINGS_ID } from "@nakama/db";
+import { ensureProcessPath } from "../lib/ensure-process-path";
 
 export interface CodingAgentHarnessStatus extends StoredCodingAgentHarnessRecord {
   installed: boolean;
@@ -322,6 +323,29 @@ function mergeHarnesses(
 async function getHarnessRuntimeStatus(
   command: string,
 ): Promise<Pick<CodingAgentHarnessStatus, "installed" | "version">> {
+  const initial = await probeHarnessVersion(command);
+
+  if (initial.installed || !initial.missing) {
+    return {
+      installed: initial.installed,
+      version: initial.version,
+    };
+  }
+
+  ensureProcessPath();
+  const retried = await probeHarnessVersion(command);
+
+  return {
+    installed: retried.installed,
+    version: retried.version,
+  };
+}
+
+async function probeHarnessVersion(command: string): Promise<{
+  installed: boolean;
+  version: string | null;
+  missing: boolean;
+}> {
   const { spawn } = await import("node:child_process");
 
   return new Promise((resolve) => {
@@ -338,11 +362,18 @@ async function getHarnessRuntimeStatus(
     child.stderr?.on("data", (chunk) => {
       stderr += chunk.toString();
     });
-    child.once("error", () => resolve({ installed: false, version: null }));
+    child.once("error", (error) =>
+      resolve({
+        installed: false,
+        version: null,
+        missing: (error as NodeJS.ErrnoException).code === "ENOENT",
+      }),
+    );
     child.once("close", (code) =>
       resolve({
         installed: code === 0,
         version: code === 0 ? extractVersion(stdout, stderr) : null,
+        missing: false,
       }),
     );
   });
