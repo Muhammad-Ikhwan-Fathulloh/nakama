@@ -3,6 +3,8 @@ import type {
   ConfigureProviderResponse,
   CreateProviderRequest,
   CreateProviderResponse,
+  HealthResponse,
+  ModelsResponse,
 } from "@nakama/core/contract";
 import {
   createContext,
@@ -21,8 +23,8 @@ import { useAuth } from "@/context/auth-context";
 import { formatError } from "@/lib/client";
 
 interface AppContextValue {
-  health: ReturnType<typeof useHealthQuery>["data"] | null;
-  models: ReturnType<typeof useModelsQuery>["data"] | null;
+  health: HealthResponse | null;
+  models: ModelsResponse | null;
   loading: boolean;
   error: string | null;
   createProvider: (request: CreateProviderRequest) => Promise<CreateProviderResponse>;
