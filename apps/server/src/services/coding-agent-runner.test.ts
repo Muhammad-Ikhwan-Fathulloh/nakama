@@ -62,8 +62,9 @@ describe("runCodingAgentTask", () => {
     expect(result.backend).toBe("claude_code");
     expect(result.stdout).toContain("Create a concise summary file for this repo.");
     expect(result.stdout).toContain("When delegating:");
-    expect(result.stdout).toContain("delegated run for Claude Code");
-    expect(result.stdout).not.toContain("delegated run for OpenCode");
+    expect(result.stdout).toContain("# Backend Guidance");
+    expect(result.stdout).toContain("preparing a delegated run for [Claude Code]");
+    expect(result.stdout).not.toContain("preparing a delegated run for [OpenCode]");
   });
 
   test("fails when no supported harness is installed", async () => {
