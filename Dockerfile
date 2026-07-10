@@ -34,9 +34,17 @@ RUN bun install --frozen-lockfile --production --ignore-scripts \
       --filter '@nakama/telegram' \
       --filter '@nakama/whatsapp' \
   && test -n "$(find node_modules/.bun -path '*/node_modules/pm2/bin/pm2-runtime' -type f -print -quit)" \
-  && groupadd --system --gid 1000 nakama \
-  && useradd --system --uid 1000 --gid nakama --home-dir /nakama/data --create-home nakama \
   && mkdir -p /nakama/data \
+  && if getent group 1000 >/dev/null; then \
+       G=$(getent group 1000 | cut -d: -f1); \
+       [ "$G" = nakama ] || groupmod -n nakama "$G"; \
+     else groupadd --system --gid 1000 nakama; fi \
+  && if getent passwd nakama >/dev/null; then \
+       usermod -d /nakama/data nakama; \
+     elif getent passwd 1000 >/dev/null; then \
+       U=$(getent passwd 1000 | cut -d: -f1); \
+       usermod -l nakama -g nakama -d /nakama/data "$U"; \
+     else useradd --system --uid 1000 --gid nakama --home-dir /nakama/data --create-home nakama; fi \
   && chown -R nakama:nakama /app /nakama
 
 ENV NODE_ENV=production \
