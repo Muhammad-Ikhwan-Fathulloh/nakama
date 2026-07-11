@@ -23,9 +23,7 @@ function Tooltip({ ...props }: TooltipPrimitive.Root.Props) {
 
 function TooltipTrigger({
   ...props
-}: React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Trigger> & {
-  asChild?: boolean
-}) {
+}: React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Trigger>) {
   return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />
 }
 

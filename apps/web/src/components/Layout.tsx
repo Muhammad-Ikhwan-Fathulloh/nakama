@@ -160,18 +160,20 @@ export function Layout() {
               onPrefetch={prefetchAppData}
             />
             <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="shrink-0 text-muted-foreground/70 hover:text-foreground"
-                  onClick={() => {
-                    void logout();
-                  }}
-                >
-                  <LogOutIcon className="sidebar-nav-icon" strokeWidth={1.75} />
-                </Button>
-              </TooltipTrigger>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="shrink-0 text-muted-foreground/70 hover:text-foreground"
+                    onClick={() => {
+                      void logout();
+                    }}
+                  >
+                    <LogOutIcon className="sidebar-nav-icon" strokeWidth={1.75} />
+                  </Button>
+                }
+              />
               <TooltipContent side="right">
                 {user?.email ?? "Log out"}
               </TooltipContent>

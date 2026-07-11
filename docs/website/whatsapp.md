@@ -141,4 +141,5 @@ Open **Integrations → WhatsApp** and check the **Reply as** profile. That is t
 
 - [Getting Started](/getting-started)
 - [Profiles](/profiles)
-- [Multi-tenancy](/multi-tenancy)
+- [Discord](/discord)
+- [Telegram](/telegram)

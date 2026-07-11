@@ -97,8 +97,9 @@ Nakama can expose the same agent runtime through:
 - CLI
 - Telegram
 - WhatsApp
+- Discord
 
-Enable Telegram or WhatsApp from the web app settings when you are ready.
+Enable Telegram, WhatsApp, or Discord from the web app settings when you are ready.
 
 Nakama can also expose webhook-based notification destinations from the same **Integrations** area.
 The first destination type is Telegram, so external apps can send simple notifications into a Telegram group or topic through Nakama.
@@ -108,6 +109,7 @@ To create a Telegram notification destination, just copy the Telegram topic shar
 Telegram replies support normal Markdown for emphasis, code, headings, short lists, and simple links.
 If you want Telegram voice notes to work, also open **Settings** and choose an OpenAI **Audio transcription model**.
 WhatsApp supports direct-chat setup through the linked-device flow with QR or pairing code.
+Discord supports DM pairing, server channels, threads, and slash commands. Enable **Message Content Intent** in the Discord Developer Portal for guild messages.
 
 ### Telegram group setup
 
@@ -121,12 +123,14 @@ Nakama still filters group messages locally, so even with privacy disabled it on
 
 For the full Telegram guide, see [Telegram](/telegram).
 For the full WhatsApp guide, see [WhatsApp](/whatsapp).
+For the full Discord guide, see [Discord](/discord).
 
 ## Next steps
 
 - [Overview](/overview) — what Nakama is and how to think about it
 - [Telegram](/telegram) — use cases, setup, groups, and troubleshooting
 - [WhatsApp](/whatsapp) — direct chat setup, pairing, and troubleshooting
+- [Discord](/discord) — bot setup, pairing, servers, and troubleshooting
 - [Multi-tenancy](/multi-tenancy) — how orgs, members, and roles work
 - [Profiles](/profiles) — how to define each bot
 - [Builtin tools](/builtin-tools) — what bots can do

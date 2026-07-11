@@ -65,6 +65,7 @@ The same Nakama profile can be used from different places:
 - CLI
 - Telegram
 - WhatsApp
+- Discord
 
 ## Typical setup
 

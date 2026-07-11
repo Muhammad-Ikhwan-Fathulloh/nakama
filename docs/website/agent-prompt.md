@@ -51,6 +51,7 @@ The chat runtime then wraps the profile prompt with general chat instructions:
 - Tool-use guidance for assigned tools
 - Memory and skill rules when those tools are available
 - Telegram or WhatsApp behavior when the message comes from those channels
+- Discord behavior when the message comes from a server channel (public replies)
 
 When soul is active, Nakama tells the agent to use tools while staying in character.
 

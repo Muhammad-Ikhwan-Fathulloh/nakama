@@ -23,7 +23,7 @@ features:
   - title: Flexible agent behavior
     details: Soul files, memory, knowledge bases, skills, and MCP servers shape how each agent works.
   - title: Works across channels
-    details: Use the same agent runtime from the web app, CLI, Telegram, or WhatsApp.
+    details: Use the same agent runtime from the web app, CLI, Telegram, WhatsApp, or Discord.
   - title: Open source and self-hosted
     details: Run locally for testing or host on your own infrastructure — no SaaS lock-in.
 ---
