@@ -106,11 +106,11 @@ export function IntegrationsPage() {
         </p>
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start">
-        <aside className="rounded-md border border-border bg-card p-2 lg:sticky lg:top-6">
+      <div className="grid gap-6 md:grid-cols-[minmax(0,13.5rem)_minmax(0,1fr)] md:items-start">
+        <aside className="rounded-md border border-border bg-card p-2 md:sticky md:top-6">
           <nav
             aria-label="Integration settings"
-            className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible"
+            className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] md:flex-col md:overflow-visible md:pb-0 [&::-webkit-scrollbar]:hidden"
           >
             {INTEGRATION_SECTIONS.map((item) => (
               <SidebarButton
@@ -199,7 +199,7 @@ function SidebarButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "flex min-w-[11rem] flex-1 items-start gap-3 rounded-md border px-3 py-3 text-left transition-colors lg:min-w-0",
+        "flex w-[11rem] shrink-0 items-start gap-3 rounded-md border px-3 py-3 text-left transition-colors md:w-full md:shrink",
         active
           ? "border-foreground/15 bg-muted text-foreground"
           : "border-transparent text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",

@@ -190,12 +190,20 @@ export function CodingHarnessSettingsPanel({
           setInstallProgress(null);
           if (status.installed) {
             setHint(`${name} installed successfully.`);
-          } else {
-            setFormError(
-              status.statusMessage ??
-                `${name} did not finish installing. Check the command output.`,
-            );
+            return;
           }
+
+          if (status.nextStep === "login") {
+            setHint(
+              status.statusMessage ??
+                `${name} is installed. Finish login on this server, then run readiness check.`,
+            );
+            return;
+          }
+
+          setHint(
+            `${name} install finished, but Nakama could not confirm it is runnable yet. Click "Run readiness check" or install manually using the command above.`,
+          );
         },
         onError: (installError) => {
           setInstallingId(null);

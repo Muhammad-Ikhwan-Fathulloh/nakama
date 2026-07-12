@@ -46,7 +46,7 @@ import { installCodingAgentHarness } from "../../services/coding-agent-harness-s
 import { streamCodingHarnessInstall } from "../coding-harness-install-stream";
 
 export function registerModelRoutes(app: HonoApp, options: ServerOptions): void {
-  const { agent, workerManager } = options;
+  const { agent, workerManager, databaseAdapter } = options;
   const errorSchema = z.object({ error: z.string() }).openapi("ApiErrorResponse");
   const providerIdParam = z.object({
     providerId: z.string().openapi({ param: { name: "providerId", in: "path" } }),
@@ -620,13 +620,17 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
     requireOrgAdminFromContext(c);
     const body = await readJson<CodingHarnessInstallRequest>(c.req.raw);
 
+    if (!databaseAdapter) {
+      return errorResponse("Database adapter is not configured.", 500);
+    }
+
     return streamCodingHarnessInstall(async (send) => {
-      const status = await installCodingAgentHarness(agent.database, body.harnessId, (message) => {
+      const status = await installCodingAgentHarness(databaseAdapter, body.harnessId, (progress) => {
         send({
           type: "progress",
-          harnessId: body.harnessId,
-          name: "",
-          message,
+          harnessId: progress.harnessId,
+          name: progress.name,
+          message: progress.message,
         });
       });
 

@@ -7,7 +7,7 @@ import type {
   StoredCodingAgentHarnessRecord,
 } from "@nakama/db";
 import { WORKSPACE_SETTINGS_ID } from "@nakama/db";
-import { ensureProcessPath } from "../lib/ensure-process-path";
+import { ensureProcessPath, ensureBunGlobalInstallDirs, getToolExecutionEnv } from "../lib/ensure-process-path";
 
 export interface CodingAgentHarnessStatus extends StoredCodingAgentHarnessRecord {
   installed: boolean;
@@ -24,23 +24,44 @@ interface CodingAgentInstallPlan {
   displayCommand: string;
 }
 
-const INSTALL_PLANS: Record<StoredCodingAgentHarnessKind, CodingAgentInstallPlan> = {
-  codex: {
-    command: "npm",
-    args: ["install", "-g", "@openai/codex"],
-    displayCommand: "npm install -g @openai/codex",
-  },
-  claude_code: {
-    command: "npm",
-    args: ["install", "-g", "@anthropic-ai/claude-code"],
-    displayCommand: "npm install -g @anthropic-ai/claude-code",
-  },
-  opencode: {
-    command: "npm",
-    args: ["install", "-g", "opencode-ai"],
-    displayCommand: "npm install -g opencode-ai",
-  },
+const HARNESS_PACKAGES: Record<StoredCodingAgentHarnessKind, string> = {
+  codex: "@openai/codex",
+  claude_code: "@anthropic-ai/claude-code",
+  opencode: "opencode-ai",
 };
+
+function detectCodingHarnessPackageManager(): "npm" | "bun" {
+  if (Bun.which("npm")) {
+    return "npm";
+  }
+
+  if (Bun.which("bun")) {
+    return "bun";
+  }
+
+  return "npm";
+}
+
+export function buildCodingHarnessInstallPlan(
+  kind: StoredCodingAgentHarnessKind,
+  packageManager: "npm" | "bun" = detectCodingHarnessPackageManager(),
+): CodingAgentInstallPlan {
+  const pkg = HARNESS_PACKAGES[kind];
+
+  if (packageManager === "bun") {
+    return {
+      command: "bun",
+      args: ["install", "-g", "--trust", pkg],
+      displayCommand: `bun install -g --trust ${pkg}`,
+    };
+  }
+
+  return {
+    command: "npm",
+    args: ["install", "-g", pkg],
+    displayCommand: `npm install -g ${pkg}`,
+  };
+}
 
 export interface CodingAgentWorkspaceSettings {
   harnesses: StoredCodingAgentHarnessRecord[];
@@ -384,7 +405,7 @@ async function probeHarnessVersion(command: string): Promise<{
 
   return new Promise((resolve) => {
     const child = spawn(command, ["--version"], {
-      env: process.env,
+      env: getToolExecutionEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -423,7 +444,7 @@ function extractVersion(stdout: string, stderr: string): string | null {
 }
 
 export function getCodingHarnessInstallCommand(kind: StoredCodingAgentHarnessKind): string {
-  return INSTALL_PLANS[kind].displayCommand;
+  return buildCodingHarnessInstallPlan(kind).displayCommand;
 }
 
 export function getCodingHarnessInstallHint(kind: StoredCodingAgentHarnessKind): string {
@@ -450,7 +471,10 @@ export async function installCodingAgentHarness(
     throw new Error("Unknown coding harness.");
   }
 
-  const installPlan = INSTALL_PLANS[harness.kind];
+  const installPlan = buildCodingHarnessInstallPlan(harness.kind);
+  if (installPlan.command === "bun") {
+    ensureBunGlobalInstallDirs();
+  }
   const emitProgress = (message: string) => {
     onProgress?.({
       harnessId: harness.id,
@@ -557,7 +581,7 @@ async function runProbeCommand(
   return new Promise((resolve) => {
     const child = spawn(harness.command, args, {
       cwd,
-      env: process.env,
+      env: getToolExecutionEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -674,7 +698,7 @@ async function runInstallCommand(
 
   return new Promise((resolve) => {
     const child = spawn(plan.command, plan.args, {
-      env: process.env,
+      env: getToolExecutionEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -766,6 +790,15 @@ async function runInstallCommand(
 }
 
 function summarizeInstallOutput(output: string): string {
-  const firstLine = output.split(/\r?\n/, 1)[0]?.trim() || output.trim();
-  return firstLine.length > 180 ? `${firstLine.slice(0, 177)}...` : firstLine;
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const meaningful =
+    lines.find((line) => /^error:/i.test(line)) ??
+    lines.find((line) => /(?:EACCES|ENOENT|EPERM|failed|permission denied)/i.test(line)) ??
+    lines.find((line) => !/^bun (?:add|install) v/i.test(line)) ??
+    lines[0] ??
+    output.trim();
+  return meaningful.length > 180 ? `${meaningful.slice(0, 177)}...` : meaningful;
 }

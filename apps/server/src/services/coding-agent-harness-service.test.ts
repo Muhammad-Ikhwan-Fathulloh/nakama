@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createInMemoryDatabaseAdapter } from "@nakama/db";
 import {
+  buildCodingHarnessInstallPlan,
   isCodingAgentCommand,
   resolveCodingAgentHarness,
 } from "./coding-agent-harness-service";
@@ -16,6 +17,14 @@ describe("coding-agent harness resolution", () => {
     expect(isCodingAgentCommand("claude --print 'task'", [{ command: "claude", enabled: false }])).toBe(
       false,
     );
+  });
+
+  test("buildCodingHarnessInstallPlan can use bun when npm is unavailable", () => {
+    expect(buildCodingHarnessInstallPlan("opencode", "bun")).toEqual({
+      command: "bun",
+      args: ["install", "-g", "--trust", "opencode-ai"],
+      displayCommand: "bun install -g --trust opencode-ai",
+    });
   });
 
   test("auto-selects the only ready harness when none is selected", async () => {
