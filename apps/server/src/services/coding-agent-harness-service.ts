@@ -313,7 +313,6 @@ export async function resolveCodingAgentHarness(
   const settings = await loadCodingAgentWorkspaceSettings(db);
   const statuses = await listCodingAgentHarnessStatuses(db);
   const enabled = statuses.filter((harness) => harness.enabled);
-  const readyHarnesses = enabled.filter((harness) => harness.ready);
 
   const notReadyError = (harness: CodingAgentHarnessStatus): Error => {
     if (!harness.installed) {
@@ -354,35 +353,18 @@ export async function resolveCodingAgentHarness(
   }
 
   if (!settings.selectedHarnessId) {
-    if (readyHarnesses.length === 1) {
-      return ensureReady(readyHarnesses[0]!);
-    }
-  } else {
-    const selected = enabled.find((harness) => harness.id === settings.selectedHarnessId);
-
-    if (selected) {
-      return ensureReady(selected);
-    }
+    throw new Error(
+      "No coding agent harness is selected. Choose one in workspace settings before using a coding agent.",
+    );
   }
 
-  const fallbackReady = readyHarnesses[0];
+  const selected = enabled.find((harness) => harness.id === settings.selectedHarnessId);
 
-  if (fallbackReady) {
-    return ensureReady(fallbackReady);
+  if (!selected) {
+    throw new Error("The selected coding agent harness is unavailable or disabled.");
   }
 
-  const selected = settings.selectedHarnessId
-    ? enabled.find((harness) => harness.id === settings.selectedHarnessId)
-    : undefined;
-  const installed = selected?.installed ? selected : enabled.find((harness) => harness.installed);
-
-  if (installed) {
-    return ensureReady(installed);
-  }
-
-  throw new Error(
-    "No supported coding agent is installed. Install Codex, Claude Code, or OpenCode first.",
-  );
+  return ensureReady(selected);
 }
 
 export async function verifyCodingAgentHarness(
