@@ -565,10 +565,15 @@ export function ProfilesPage() {
       composioToolkitsData.orgToolkits.map((toolkit) => [toolkit.id, toolkit]),
     );
 
+    const userByToolkitId = new Map(
+      composioToolkitsData.userConnections.map((connection) => [connection.toolkitId, connection]),
+    );
+
     return profileComposioData.assignments
       .map((assignment) => {
         const toolkit = toolkitById.get(assignment.toolkitId);
-        return toolkit ? { assignment, toolkit } : null;
+        const userConnection = userByToolkitId.get(assignment.toolkitId);
+        return toolkit ? { assignment, toolkit, userConnection } : null;
       })
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
   }, [composioToolkitsData, profileComposioData]);
@@ -1297,7 +1302,7 @@ export function ProfilesPage() {
                       )}
                     </div>
 
-                    {composioToolkitsData?.composioAvailable ? (
+                    {composioToolkitsData?.configured ? (
                       <div className="pt-5">
                         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                           <div>
@@ -1318,11 +1323,11 @@ export function ProfilesPage() {
 
                         {composioToolkitsData.orgToolkits.length === 0 ? (
                           <p className="type-body text-xs text-muted-foreground">
-                            Enable and connect apps on Integrations first.
+                            Ask an org admin to enable apps on Integrations first.
                           </p>
                         ) : assignedComposioToolkits.length === 0 ? null : (
                           <ul className="divide-y divide-border rounded-md border border-border">
-                            {assignedComposioToolkits.map(({ toolkit }) => (
+                            {assignedComposioToolkits.map(({ toolkit, userConnection }) => (
                               <li
                                 key={toolkit.id}
                                 className="flex items-center justify-between gap-2 px-3 py-2 first:rounded-t-md last:rounded-b-md"
@@ -1332,7 +1337,10 @@ export function ProfilesPage() {
                                     {toolkit.displayName}
                                   </p>
                                   <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
-                                    {toolkit.status}
+                                    Org: {toolkit.status}
+                                    {userConnection?.status === "connected"
+                                      ? " · You: connected"
+                                      : " · You: not connected — connect on Integrations"}
                                     {toolkit.cachedTools.length > 0
                                       ? ` · ${toolkit.cachedTools.length} tool${toolkit.cachedTools.length === 1 ? "" : "s"}`
                                       : ""}

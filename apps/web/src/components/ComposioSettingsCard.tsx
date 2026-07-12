@@ -13,20 +13,35 @@ import { useComposioSettings, useSaveComposioSettings } from "@/hooks/use-compos
 import { formatError } from "@/lib/client";
 import { cn } from "@/lib/utils";
 
-function ComposioStatusBadge({ configured }: { configured: boolean }) {
-  if (configured) {
+function ComposioStatusBadge({
+  configured,
+  composioReachable,
+}: {
+  configured: boolean;
+  composioReachable: boolean;
+}) {
+  if (!configured) {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+        <span className="size-1.5 rounded-full bg-primary" aria-hidden />
+        Not configured
+      </span>
+    );
+  }
+
+  if (composioReachable) {
     return (
       <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-200">
         <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden />
-        Configured
+        Connected
       </span>
     );
   }
 
   return (
-    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
-      <span className="size-1.5 rounded-full bg-primary" aria-hidden />
-      Not configured
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200">
+      <span className="size-1.5 rounded-full bg-amber-500" aria-hidden />
+      Key saved
     </span>
   );
 }
@@ -59,6 +74,7 @@ export function ComposioSettingsCard() {
   }
 
   const configured = settings?.configured === true;
+  const composioReachable = settings?.composioReachable === true;
   const canSave = configured || apiKey.trim().length > 0;
   const errorMessage = formError ?? (loadError ? formatError(loadError) : null);
 
@@ -86,7 +102,7 @@ export function ComposioSettingsCard() {
               assignment.
             </p>
           </div>
-          <ComposioStatusBadge configured={configured} />
+          <ComposioStatusBadge configured={configured} composioReachable={composioReachable} />
         </div>
 
         <div className="border-t border-border" />
@@ -164,6 +180,13 @@ export function ComposioSettingsCard() {
             {saveMutation.isPending ? <Spinner className="size-4" /> : "Save"}
           </Button>
         </div>
+
+        {configured && !composioReachable ? (
+          <p className="px-5 pb-1 text-sm text-amber-800 dark:text-amber-200">
+            The saved key could not reach Composio. Check that it is a project API key from Settings
+            → Project Settings → API Keys.
+          </p>
+        ) : null}
 
         {errorMessage ? (
           <p className="px-5 pb-4 text-sm text-destructive">{errorMessage}</p>

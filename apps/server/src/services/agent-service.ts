@@ -711,7 +711,13 @@ export class AgentService {
   }
 
   async getComposioSettings(): Promise<ComposioSettingsResponse> {
-    return loadComposioSettingsPublic();
+    const settings = await loadComposioSettingsPublic();
+    return {
+      ...settings,
+      composioReachable: settings.configured
+        ? await (this.composioService?.isReachable() ?? false)
+        : false,
+    };
   }
 
   async setComposioSettings(
@@ -728,6 +734,7 @@ export class AgentService {
     }
 
     if (apiKey) {
+      await this.composioService?.validateConfiguration(apiKey);
       await saveComposioConfig({ apiKey });
       this.composioService?.reloadConfiguration();
     }
@@ -2131,7 +2138,7 @@ export class AgentService {
 
   private async resolveProfileTools(
     profile: StoredProfileRecord,
-    options: { includeAutomationTools?: boolean; includeTodoTools?: boolean } = {},
+    options: { includeAutomationTools?: boolean; includeTodoTools?: boolean; userId?: string | null } = {},
   ): Promise<ToolDefinition[]> {
     const storedTools = await this.db.listToolsForProfile(profile.id);
     const tools = await resolveProfileStoredTools(storedTools, this.db);
@@ -2154,7 +2161,7 @@ export class AgentService {
       ];
     }
 
-    if (this.composioService && this.mcpClientManager) {
+    if (this.composioService && this.mcpClientManager && options.userId) {
       const orgId = profile.orgId;
 
       if (!orgId) {
@@ -2165,6 +2172,7 @@ export class AgentService {
         ...resolved,
         ...(await buildComposioToolDefinitions(
           orgId,
+          options.userId,
           profile.id,
           this.composioService,
           this.mcpClientManager,
@@ -2211,7 +2219,7 @@ export class AgentService {
   ): Promise<AgentChatSession> {
     await this.ensureVisionSettingsLoaded();
     const profile = await this.requireProfile(orgId, profileId);
-    const tools = await this.resolveProfileTools(profile);
+    const tools = await this.resolveProfileTools(profile, { userId });
     const { systemPrompt, soulActive } = await this.resolveProfileSystemPrompt(
       orgId,
       profileId,
@@ -2257,9 +2265,10 @@ export class AgentService {
           parts.push(todoContext.trim());
         }
 
-        if (this.composioService) {
+        if (this.composioService && userId) {
           const composioContext = await this.composioService.formatProfileConnectionsContext(
             orgId,
+            userId,
             profileId,
           );
 

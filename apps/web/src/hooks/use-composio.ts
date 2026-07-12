@@ -47,6 +47,17 @@ export function useEnableComposioToolkit() {
   });
 }
 
+export function useDisableComposioToolkit() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (toolkitSlug: string) => client.disableComposioToolkit(toolkitSlug),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.composio.toolkits });
+    },
+  });
+}
+
 export function useConnectComposioToolkit() {
   const queryClient = useQueryClient();
 

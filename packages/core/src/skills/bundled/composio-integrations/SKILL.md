@@ -1,6 +1,6 @@
 ---
 name: composio-integrations
-description: Use Composio-connected SaaS tools safely. Never self-authorize OAuth; hand off missing connections to org admins.
+description: Use Composio-connected SaaS tools safely. Connect missing apps on Integrations; never self-authorize OAuth in chat.
 ---
 
 # Composio integrations
@@ -9,8 +9,8 @@ Use assigned Composio tools when the user asks for external SaaS actions (email,
 
 ## Rules
 
-- Never attempt OAuth or open connect links yourself. Only org admins connect apps on Integrations.
-- If a Composio tool returns `COMPOSIO_NOT_CONNECTED`, tell the user an org admin must connect the toolkit on Integrations, then retry.
+- Never attempt OAuth or open connect links yourself in chat.
+- If a Composio tool returns `COMPOSIO_NOT_CONNECTED`, tell the user to open **Integrations → Composio** and connect the toolkit with their own account, then retry.
 - Only use Composio tools that are assigned to this profile.
 - Do not invent successful external actions when a tool fails.
 
@@ -21,5 +21,5 @@ Use assigned Composio tools when the user asks for external SaaS actions (email,
 
 ## When not to use
 
-- The user asks you to connect their account — redirect them to an org admin.
 - Builtin tools, MCP tools, or file/bash tools already cover the task.
+- The user asks you to perform OAuth — direct them to Integrations instead.

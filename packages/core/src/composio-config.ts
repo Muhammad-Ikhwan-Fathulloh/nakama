@@ -28,6 +28,10 @@ export function composioOrgUserId(orgId: string): string {
   return `nakama:org:${orgId}`;
 }
 
+export function composioUserId(userId: string): string {
+  return `nakama:user:${userId}`;
+}
+
 export function resolveComposioApiKey(file: ComposioConfigFile | null | undefined): string {
   return file?.apiKey?.trim() || "";
 }

@@ -352,3 +352,26 @@ CREATE TABLE IF NOT EXISTS profile_composio_toolkits (
   FOREIGN KEY (profile_id) REFERENCES profiles (id) ON DELETE CASCADE,
   FOREIGN KEY (toolkit_id) REFERENCES composio_toolkits (id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS composio_user_connections (
+  id TEXT PRIMARY KEY NOT NULL,
+  org_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  toolkit_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  connected_account_id TEXT,
+  session_id_enc TEXT,
+  oauth_state_hash TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations (id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  FOREIGN KEY (toolkit_id) REFERENCES composio_toolkits (id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS composio_user_connections_user_toolkit_unique
+  ON composio_user_connections (user_id, toolkit_id);
+
+CREATE INDEX IF NOT EXISTS composio_user_connections_org_user
+  ON composio_user_connections (org_id, user_id);

@@ -199,9 +199,11 @@ export interface StoredNotificationDestinationRecord {
   updatedAt: string;
 }
 
+export type StoredOrgComposioToolkitStatus = "disabled" | "enabled";
+
+/** @deprecated Use StoredOrgComposioToolkitStatus for org catalog rows. */
 export type StoredComposioToolkitStatus =
-  | "disabled"
-  | "enabled"
+  | StoredOrgComposioToolkitStatus
   | "oauth_in_progress"
   | "connected"
   | "error";
@@ -211,16 +213,29 @@ export interface StoredComposioToolkitRecord {
   orgId: string;
   toolkitSlug: string;
   displayName: string;
-  status: StoredComposioToolkitStatus;
-  connectedAccountId: string | null;
-  sessionIdEnc: string | null;
-  oauthStateHash: string | null;
+  status: StoredOrgComposioToolkitStatus;
   cachedTools: Array<{
     slug: string;
     name: string;
     description: string;
     inputSchema: Record<string, unknown>;
   }>;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StoredComposioUserConnectionStatus = "oauth_in_progress" | "connected" | "error";
+
+export interface StoredComposioUserConnectionRecord {
+  id: string;
+  orgId: string;
+  userId: string;
+  toolkitId: string;
+  status: StoredComposioUserConnectionStatus;
+  connectedAccountId: string | null;
+  sessionIdEnc: string | null;
+  oauthStateHash: string | null;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
@@ -499,6 +514,20 @@ export interface DatabaseAdapter {
   ): Promise<StoredComposioToolkitRecord | null>;
   upsertComposioToolkit(record: StoredComposioToolkitRecord): Promise<void>;
   deleteComposioToolkit(id: string): Promise<boolean>;
+
+  listComposioUserConnectionsForUser(
+    orgId: string,
+    userId: string,
+  ): Promise<StoredComposioUserConnectionRecord[]>;
+  getComposioUserConnection(
+    userId: string,
+    toolkitId: string,
+  ): Promise<StoredComposioUserConnectionRecord | null>;
+  getComposioUserConnectionById(
+    id: string,
+  ): Promise<StoredComposioUserConnectionRecord | null>;
+  upsertComposioUserConnection(record: StoredComposioUserConnectionRecord): Promise<void>;
+  deleteComposioUserConnection(id: string): Promise<boolean>;
 
   listProfileComposioToolkits(
     profileId: string,

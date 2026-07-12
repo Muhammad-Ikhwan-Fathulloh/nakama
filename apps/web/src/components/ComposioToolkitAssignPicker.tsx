@@ -28,18 +28,7 @@ interface ComposioToolkitAssignPickerProps {
 }
 
 function toolkitStatusLabel(status: ComposioToolkitSummary["status"]): string {
-  switch (status) {
-    case "connected":
-      return "Connected";
-    case "oauth_in_progress":
-      return "Connecting…";
-    case "enabled":
-      return "Enabled";
-    case "error":
-      return "Error";
-    default:
-      return "Disabled";
-  }
+  return status === "enabled" ? "Enabled for org" : "Disabled";
 }
 
 export function ComposioToolkitAssignPicker({

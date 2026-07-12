@@ -26,6 +26,7 @@ import type {
   StoredUserRecord,
   StoredNotificationDestinationRecord,
   StoredComposioToolkitRecord,
+  StoredComposioUserConnectionRecord,
   StoredProfileComposioToolkitRecord,
   StoredWorkspaceSettingsRecord,
 } from "../types";
@@ -66,6 +67,7 @@ export function createInMemoryDatabaseAdapter(): DatabaseAdapter {
   let workspaceSettings: StoredWorkspaceSettingsRecord | null = null;
   const notificationDestinations = new Map<string, StoredNotificationDestinationRecord>();
   const composioToolkits = new Map<string, StoredComposioToolkitRecord>();
+  const composioUserConnections = new Map<string, StoredComposioUserConnectionRecord>();
   const profileComposioToolkits = new Map<string, StoredProfileComposioToolkitRecord[]>();
 
   return {
@@ -775,6 +777,32 @@ export function createInMemoryDatabaseAdapter(): DatabaseAdapter {
 
     async deleteComposioToolkit(id) {
       return composioToolkits.delete(id);
+    },
+
+    async listComposioUserConnectionsForUser(orgId, userId) {
+      return Array.from(composioUserConnections.values()).filter(
+        (record) => record.orgId === orgId && record.userId === userId,
+      );
+    },
+
+    async getComposioUserConnection(userId, toolkitId) {
+      return (
+        Array.from(composioUserConnections.values()).find(
+          (record) => record.userId === userId && record.toolkitId === toolkitId,
+        ) ?? null
+      );
+    },
+
+    async getComposioUserConnectionById(id) {
+      return composioUserConnections.get(id) ?? null;
+    },
+
+    async upsertComposioUserConnection(record) {
+      composioUserConnections.set(record.id, record);
+    },
+
+    async deleteComposioUserConnection(id) {
+      return composioUserConnections.delete(id);
     },
 
     async listProfileComposioToolkits(profileId) {

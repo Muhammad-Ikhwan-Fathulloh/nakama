@@ -163,7 +163,7 @@ describe("composio routes", () => {
     });
   });
 
-  test("org member cannot manage composio toolkits", async () => {
+  test("org member can list toolkits but cannot enable them", async () => {
     const { app, databaseAdapter } = await createApp();
     const { orgId } = await seedOrgAdmin(databaseAdapter);
     const now = new Date().toISOString();
@@ -184,12 +184,25 @@ describe("composio routes", () => {
     });
 
     const session = await loginUserSession(app, "member@example.com", "password123", orgId);
-    const response = await app.fetch(
+    const listResponse = await app.fetch(
       new Request("http://localhost:4310/v1/composio/toolkits", {
         headers: session.headers(),
       }),
     );
 
-    expect(response.status).toBe(403);
+    expect(listResponse.status).toBe(200);
+
+    const enableResponse = await app.fetch(
+      new Request("http://localhost:4310/v1/composio/toolkits/gmail/enable", {
+        method: "POST",
+        headers: session.headers({
+          "X-CSRF-Token": session.csrfToken,
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ toolkitSlug: "gmail" }),
+      }),
+    );
+
+    expect(enableResponse.status).toBe(403);
   });
 });

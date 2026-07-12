@@ -57,7 +57,7 @@ export function Layout() {
           }
 
           if (item.id === "integrations") {
-            return activeOrg?.role === "admin";
+            return canAccessIntegrationsPage(activeOrg?.role);
           }
 
           return (

@@ -1,14 +1,13 @@
 import type { ComposioToolErrorResult, ToolDefinition } from "@nakama/core";
 import { emptyObjectSchema } from "@nakama/core";
-import type { StoredComposioToolkitRecord } from "@nakama/db";
 import type { ComposioService } from "./composio-service";
 import type { McpClientManager } from "./mcp-client-manager";
 import { sanitizeLlmToolNamePart } from "./mcp-tool-bridge";
 
 const COMPOSIO_META_TOOL_PATTERN = /^COMPOSIO_(MANAGE|WAIT|SEARCH|MULTI)/;
 
-export function composioConnectionKey(orgId: string, profileId: string): string {
-  return `composio:${orgId}:${profileId}`;
+export function composioConnectionKey(orgId: string, userId: string, profileId: string): string {
+  return `composio:${orgId}:${userId}:${profileId}`;
 }
 
 export function namespacedComposioToolName(toolkitSlug: string, toolSlug: string): string {
@@ -29,7 +28,7 @@ function toJsonSchema(inputSchema: Record<string, unknown> | undefined) {
 
 function notConnectedError(toolkitSlug: string): ComposioToolErrorResult {
   return {
-    error: `Composio toolkit "${toolkitSlug}" is not connected. Ask an org admin to connect it on Integrations.`,
+    error: `Composio toolkit "${toolkitSlug}" is not connected for your account. Connect it on Integrations → Composio.`,
     code: "COMPOSIO_NOT_CONNECTED",
     toolkitSlug,
   };
@@ -37,33 +36,41 @@ function notConnectedError(toolkitSlug: string): ComposioToolErrorResult {
 
 export async function buildComposioToolDefinitions(
   orgId: string,
+  userId: string,
   profileId: string,
   composioService: ComposioService,
   mcpClientManager: McpClientManager,
 ): Promise<ToolDefinition[]> {
+  if (!userId) {
+    return [];
+  }
+
   if (!(await composioService.isAvailable())) {
     return [];
   }
 
-  const assigned = await composioService.getAssignedToolkitRecords(orgId, profileId);
+  const assigned = await composioService.getAssignedToolkitRecords(orgId, userId, profileId);
   if (assigned.length === 0) {
     return [];
   }
 
   const connectedAssignments = assigned.filter(
-    ({ toolkit }) => toolkit.status === "connected" && toolkit.cachedTools.length > 0,
+    ({ orgToolkit, userConnection }) =>
+      orgToolkit.status === "enabled" &&
+      userConnection?.status === "connected" &&
+      orgToolkit.cachedTools.length > 0,
   );
 
   if (connectedAssignments.length === 0) {
     return [];
   }
 
-  const session = await composioService.getProfileSessionEndpoint(orgId, profileId);
+  const session = await composioService.getProfileSessionEndpoint(orgId, userId, profileId);
   if (!session) {
     return [];
   }
 
-  const connectionKey = composioConnectionKey(orgId, profileId);
+  const connectionKey = composioConnectionKey(orgId, userId, profileId);
 
   if (!mcpClientManager.isHttpEndpointConnected(connectionKey)) {
     await mcpClientManager.connectHttpEndpoint(connectionKey, session.url, session.headers);
@@ -72,8 +79,8 @@ export async function buildComposioToolDefinitions(
   const tools: ToolDefinition[] = [];
   const usedNames = new Set<string>();
 
-  for (const { toolkit, allowedActions } of connectedAssignments) {
-    for (const cachedTool of toolkit.cachedTools) {
+  for (const { orgToolkit, userConnection, allowedActions } of connectedAssignments) {
+    for (const cachedTool of orgToolkit.cachedTools) {
       if (isBlockedComposioMetaTool(cachedTool.slug)) {
         continue;
       }
@@ -82,7 +89,7 @@ export async function buildComposioToolDefinitions(
         continue;
       }
 
-      const baseName = namespacedComposioToolName(toolkit.toolkitSlug, cachedTool.slug);
+      const baseName = namespacedComposioToolName(orgToolkit.toolkitSlug, cachedTool.slug);
       let name = baseName;
       let suffix = 2;
 
@@ -98,8 +105,8 @@ export async function buildComposioToolDefinitions(
         description: cachedTool.description,
         parameters: toJsonSchema(cachedTool.inputSchema),
         async run(input) {
-          if (toolkit.status !== "connected") {
-            return notConnectedError(toolkit.toolkitSlug);
+          if (userConnection?.status !== "connected") {
+            return notConnectedError(orgToolkit.toolkitSlug);
           }
 
           try {
@@ -120,13 +127,13 @@ export async function buildComposioToolDefinitions(
             const message = error instanceof Error ? error.message : String(error);
 
             if (/auth|connect|oauth|unauthorized/i.test(message)) {
-              return notConnectedError(toolkit.toolkitSlug);
+              return notConnectedError(orgToolkit.toolkitSlug);
             }
 
             return {
               error: message,
               code: "COMPOSIO_TRANSIENT",
-              toolkitSlug: toolkit.toolkitSlug,
+              toolkitSlug: orgToolkit.toolkitSlug,
             } satisfies ComposioToolErrorResult;
           }
         },

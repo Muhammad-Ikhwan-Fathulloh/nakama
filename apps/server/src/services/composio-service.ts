@@ -1,6 +1,7 @@
 import {
-  composioOrgUserId,
+  composioUserId,
   createId,
+  isComposioConfiguredAsync,
   loadComposioConfigFile,
   NakamaApiError,
   nanoid,
@@ -8,6 +9,7 @@ import {
   type ComposioCatalogToolkitSummary,
   type ComposioConnectResponse,
   type ComposioToolkitSummary,
+  type ComposioUserConnectionSummary,
   type ListComposioToolkitsResponse,
   type ListProfileComposioToolkitsResponse,
   type ProfileComposioToolkitAssignment,
@@ -17,6 +19,7 @@ import { normalizeEnableComposioToolkitRequest, normalizeUpdateProfileComposioTo
 import type {
   DatabaseAdapter,
   StoredComposioToolkitRecord,
+  StoredComposioUserConnectionRecord,
   StoredProfileComposioToolkitRecord,
   StoredProfileRecord,
 } from "@nakama/db";
@@ -30,20 +33,35 @@ import { decryptComposioSecret, encryptComposioSecret } from "./composio-secret"
 
 export interface ComposioOAuthStatePayload {
   orgId: string;
+  userId: string;
   toolkitId: string;
+  connectionId: string;
   nonce: string;
 }
 
-function toToolkitSummary(record: StoredComposioToolkitRecord): ComposioToolkitSummary {
+function toOrgToolkitSummary(record: StoredComposioToolkitRecord): ComposioToolkitSummary {
   return {
     id: record.id,
     toolkitSlug: record.toolkitSlug,
     displayName: record.displayName,
     status: record.status,
-    connectedAccountId: record.connectedAccountId,
     cachedTools: record.cachedTools,
     lastError: record.lastError,
     updatedAt: record.updatedAt,
+  };
+}
+
+function toUserConnectionSummary(
+  connection: StoredComposioUserConnectionRecord,
+  toolkitSlug: string,
+): ComposioUserConnectionSummary {
+  return {
+    id: connection.id,
+    toolkitId: connection.toolkitId,
+    toolkitSlug,
+    status: connection.status,
+    lastError: connection.lastError,
+    updatedAt: connection.updatedAt,
   };
 }
 
@@ -88,42 +106,119 @@ export class ComposioService {
   }
 
   async isAvailable(): Promise<boolean> {
-    return Boolean(await this.getApiClient());
+    return this.isReachable();
   }
 
-  async listToolkits(orgId: string): Promise<ListComposioToolkitsResponse> {
+  async isReachable(): Promise<boolean> {
     const apiClient = await this.getApiClient();
-    const composioAvailable = apiClient !== null;
-    const orgToolkits = (await this.databaseAdapter.listComposioToolkitsForOrg(orgId)).map(
-      toToolkitSummary,
-    );
-
-    if (!composioAvailable) {
-      return { composioAvailable: false, catalog: [], orgToolkits };
+    if (!apiClient) {
+      return false;
     }
 
-    let catalog: ComposioCatalogToolkitSummary[] = [];
+    try {
+      await apiClient.listCatalogToolkits();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async validateConfiguration(apiKey?: string): Promise<void> {
+    const resolvedKey = apiKey?.trim() || (await this.resolveApiKey());
+    if (!resolvedKey) {
+      throw new NakamaApiError("Composio API key is required.", 400);
+    }
+
+    const client = createComposioApiClient(resolvedKey);
+    if (!client) {
+      throw new NakamaApiError("Composio API key is required.", 400);
+    }
+
+    try {
+      await client.listCatalogToolkits();
+    } catch (error) {
+      throw new NakamaApiError(
+        error instanceof Error ? error.message : "Failed to validate Composio API key.",
+        400,
+      );
+    }
+  }
+
+  async listToolkits(orgId: string, userId: string): Promise<ListComposioToolkitsResponse> {
+    const configured = await isComposioConfiguredAsync();
+    const orgToolkits = (await this.databaseAdapter.listComposioToolkitsForOrg(orgId)).map(
+      toOrgToolkitSummary,
+    );
+    const toolkitSlugById = new Map(
+      orgToolkits.map((toolkit) => [toolkit.id, toolkit.toolkitSlug] as const),
+    );
+    const userConnectionRecords = await this.databaseAdapter.listComposioUserConnectionsForUser(
+      orgId,
+      userId,
+    );
+    const userConnections = userConnectionRecords
+      .map((connection) => {
+        const toolkitSlug = toolkitSlugById.get(connection.toolkitId);
+        return toolkitSlug ? toUserConnectionSummary(connection, toolkitSlug) : null;
+      })
+      .filter((connection): connection is ComposioUserConnectionSummary => connection !== null);
+
+    if (!configured) {
+      return {
+        configured: false,
+        composioReachable: false,
+        composioAvailable: false,
+        catalog: [],
+        orgToolkits,
+        userConnections,
+        catalogError: null,
+      };
+    }
+
+    const apiClient = await this.getApiClient();
+    if (!apiClient) {
+      return {
+        configured: false,
+        composioReachable: false,
+        composioAvailable: false,
+        catalog: [],
+        orgToolkits,
+        userConnections,
+        catalogError: null,
+      };
+    }
 
     try {
       const remoteCatalog = await apiClient.listCatalogToolkits();
-      catalog = remoteCatalog.map((toolkit) => ({
+      const catalog: ComposioCatalogToolkitSummary[] = remoteCatalog.map((toolkit) => ({
         slug: toolkit.slug,
         name: toolkit.name,
         description: toolkit.description,
       }));
-    } catch (error) {
+
       return {
+        configured: true,
+        composioReachable: true,
         composioAvailable: true,
+        catalog,
+        orgToolkits,
+        userConnections,
+        catalogError: null,
+      };
+    } catch (error) {
+      const catalogError =
+        error instanceof Error ? error.message : "Failed to load Composio toolkit catalog.";
+
+      return {
+        configured: true,
+        composioReachable: false,
+        composioAvailable: false,
         catalog: [],
-        orgToolkits: orgToolkits.map((toolkit) => ({
-          ...toolkit,
-          lastError:
-            error instanceof Error ? error.message : "Failed to load Composio toolkit catalog.",
-        })),
+        orgToolkits,
+        userConnections,
+        catalogError,
       };
     }
-
-    return { composioAvailable: true, catalog, orgToolkits };
   }
 
   async enableToolkit(orgId: string, input: unknown): Promise<ComposioToolkitSummary> {
@@ -135,12 +230,12 @@ export class ComposioService {
     if (existing) {
       const updated: StoredComposioToolkitRecord = {
         ...existing,
-        status: existing.status === "disabled" ? "enabled" : existing.status,
+        status: "enabled",
         lastError: null,
         updatedAt: now,
       };
       await this.databaseAdapter.upsertComposioToolkit(updated);
-      return toToolkitSummary(updated);
+      return toOrgToolkitSummary(updated);
     }
 
     const record: StoredComposioToolkitRecord = {
@@ -149,9 +244,6 @@ export class ComposioService {
       toolkitSlug: request.toolkitSlug,
       displayName: titleCaseToolkit(request.toolkitSlug),
       status: "enabled",
-      connectedAccountId: null,
-      sessionIdEnc: null,
-      oauthStateHash: null,
       cachedTools: [],
       lastError: null,
       createdAt: now,
@@ -159,7 +251,7 @@ export class ComposioService {
     };
 
     await this.databaseAdapter.upsertComposioToolkit(record);
-    return toToolkitSummary(record);
+    return toOrgToolkitSummary(record);
   }
 
   async disableToolkit(orgId: string, toolkitSlug: string): Promise<ComposioToolkitSummary> {
@@ -170,46 +262,60 @@ export class ComposioService {
       updatedAt: new Date().toISOString(),
     };
     await this.databaseAdapter.upsertComposioToolkit(updated);
-    return toToolkitSummary(updated);
+    return toOrgToolkitSummary(updated);
   }
 
   async connectToolkit(
     orgId: string,
+    userId: string,
     toolkitSlug: string,
     callbackBaseUrl: string,
   ): Promise<ComposioConnectResponse> {
     const apiClient = await this.requireAvailable();
-    const record = await this.getOwnedToolkitBySlug(orgId, toolkitSlug);
+    const orgToolkit = await this.getOwnedToolkitBySlug(orgId, toolkitSlug);
 
-    if (record.status === "disabled") {
-      throw new NakamaApiError("Enable the toolkit before connecting.", 400);
+    if (orgToolkit.status !== "enabled") {
+      throw new NakamaApiError("An org admin must enable this toolkit before you can connect.", 400);
     }
 
+    const now = new Date().toISOString();
+    const existingConnection = await this.databaseAdapter.getComposioUserConnection(
+      userId,
+      orgToolkit.id,
+    );
+    const connectionId = existingConnection?.id ?? createId("cuc");
     const oauthNonce = nanoid(32);
     const state = Buffer.from(
       JSON.stringify({
         orgId,
-        toolkitId: record.id,
+        userId,
+        toolkitId: orgToolkit.id,
+        connectionId,
         nonce: oauthNonce,
       } satisfies ComposioOAuthStatePayload),
     ).toString("base64url");
     const callbackUrl = `${callbackBaseUrl.replace(/\/$/, "")}/v1/composio/oauth/callback?state=${encodeURIComponent(state)}`;
     const link = await apiClient.linkToolkitAccount(
-      composioOrgUserId(orgId),
+      composioUserId(userId),
       toolkitSlug,
       callbackUrl,
     );
 
-    const updated: StoredComposioToolkitRecord = {
-      ...record,
+    const connection: StoredComposioUserConnectionRecord = {
+      id: connectionId,
+      orgId,
+      userId,
+      toolkitId: orgToolkit.id,
       status: "oauth_in_progress",
+      connectedAccountId: link.connectedAccountId ?? existingConnection?.connectedAccountId ?? null,
+      sessionIdEnc: null,
       oauthStateHash: this.authService.hashToken(oauthNonce),
-      connectedAccountId: link.connectedAccountId ?? record.connectedAccountId,
       lastError: null,
-      updatedAt: new Date().toISOString(),
+      createdAt: existingConnection?.createdAt ?? now,
+      updatedAt: now,
     };
 
-    await this.databaseAdapter.upsertComposioToolkit(updated);
+    await this.databaseAdapter.upsertComposioUserConnection(connection);
 
     return { redirectUrl: link.redirectUrl };
   }
@@ -225,82 +331,107 @@ export class ComposioService {
       throw new NakamaApiError("Invalid OAuth state.", 400);
     }
 
-    const record = await this.getOwnedToolkit(payload.orgId, payload.toolkitId);
+    const orgToolkit = await this.getOwnedToolkit(payload.orgId, payload.toolkitId);
+    const connection = await this.databaseAdapter.getComposioUserConnectionById(payload.connectionId);
 
-    if (!record.oauthStateHash || this.authService.hashToken(payload.nonce) !== record.oauthStateHash) {
+    if (
+      !connection ||
+      connection.orgId !== payload.orgId ||
+      connection.userId !== payload.userId ||
+      connection.toolkitId !== payload.toolkitId
+    ) {
       throw new NakamaApiError("Invalid OAuth state.", 400);
     }
 
-    const updated: StoredComposioToolkitRecord = {
-      ...record,
+    if (
+      !connection.oauthStateHash ||
+      this.authService.hashToken(payload.nonce) !== connection.oauthStateHash
+    ) {
+      throw new NakamaApiError("Invalid OAuth state.", 400);
+    }
+
+    const updatedConnection: StoredComposioUserConnectionRecord = {
+      ...connection,
       status: "connected",
       oauthStateHash: null,
       lastError: null,
       updatedAt: new Date().toISOString(),
     };
 
-    await this.databaseAdapter.upsertComposioToolkit(updated);
-    await this.syncToolkit(payload.orgId, record.toolkitSlug);
+    await this.databaseAdapter.upsertComposioUserConnection(updatedConnection);
+    await this.syncUserToolkit(payload.orgId, payload.userId, orgToolkit.toolkitSlug);
 
-    return { orgId: payload.orgId, toolkitSlug: record.toolkitSlug };
+    return { orgId: payload.orgId, toolkitSlug: orgToolkit.toolkitSlug };
   }
 
-  async disconnectToolkit(orgId: string, toolkitSlug: string): Promise<ComposioToolkitSummary> {
+  async disconnectToolkit(
+    orgId: string,
+    userId: string,
+    toolkitSlug: string,
+  ): Promise<ComposioToolkitSummary> {
     const apiClient = await this.requireAvailable();
-    const record = await this.getOwnedToolkitBySlug(orgId, toolkitSlug);
+    const orgToolkit = await this.getOwnedToolkitBySlug(orgId, toolkitSlug);
+    const connection = await this.databaseAdapter.getComposioUserConnection(userId, orgToolkit.id);
 
-    if (record.connectedAccountId) {
+    if (!connection) {
+      return toOrgToolkitSummary(orgToolkit);
+    }
+
+    if (connection.connectedAccountId) {
       try {
-        await apiClient.deleteConnectedAccount(record.connectedAccountId);
+        await apiClient.deleteConnectedAccount(connection.connectedAccountId);
       } catch {
-        // Best-effort remote revoke; local state still clears below.
+        // Best-effort remote revoke.
       }
     }
 
-    const updated: StoredComposioToolkitRecord = {
-      ...record,
-      status: record.status === "disabled" ? "disabled" : "enabled",
-      connectedAccountId: null,
-      sessionIdEnc: null,
-      oauthStateHash: null,
-      cachedTools: [],
-      lastError: null,
-      updatedAt: new Date().toISOString(),
-    };
+    await this.databaseAdapter.deleteComposioUserConnection(connection.id);
 
-    await this.databaseAdapter.upsertComposioToolkit(updated);
-    return toToolkitSummary(updated);
+    return toOrgToolkitSummary(orgToolkit);
   }
 
-  async syncToolkit(orgId: string, toolkitSlug: string): Promise<ComposioToolkitSummary> {
+  async syncUserToolkit(
+    orgId: string,
+    userId: string,
+    toolkitSlug: string,
+  ): Promise<ComposioToolkitSummary> {
     const apiClient = await this.requireAvailable();
-    const record = await this.getOwnedToolkitBySlug(orgId, toolkitSlug);
+    const orgToolkit = await this.getOwnedToolkitBySlug(orgId, toolkitSlug);
+    const connection = await this.databaseAdapter.getComposioUserConnection(userId, orgToolkit.id);
 
-    if (record.status !== "connected") {
+    if (!connection || connection.status !== "connected") {
       throw new NakamaApiError("Connect the toolkit before syncing tools.", 400);
     }
 
     try {
-      const session = await this.openOrgSession(orgId, [record.toolkitSlug], {
-        [record.toolkitSlug]: null,
+      const session = await this.openUserSession(userId, [orgToolkit.toolkitSlug], {
+        [orgToolkit.toolkitSlug]: null,
       });
       const cachedTools = await apiClient.listSessionTools(session);
-      const updated: StoredComposioToolkitRecord = {
-        ...record,
-        sessionIdEnc: await this.encryptSessionId(session.sessionId),
+      const updatedOrgToolkit: StoredComposioToolkitRecord = {
+        ...orgToolkit,
         cachedTools,
         lastError: null,
         updatedAt: new Date().toISOString(),
       };
-      await this.databaseAdapter.upsertComposioToolkit(updated);
-      return toToolkitSummary(updated);
-    } catch (error) {
-      const updated: StoredComposioToolkitRecord = {
-        ...record,
-        lastError: error instanceof Error ? error.message : String(error),
+      const updatedConnection: StoredComposioUserConnectionRecord = {
+        ...connection,
+        sessionIdEnc: await this.encryptSessionId(session.sessionId),
+        lastError: null,
         updatedAt: new Date().toISOString(),
       };
-      await this.databaseAdapter.upsertComposioToolkit(updated);
+
+      await this.databaseAdapter.upsertComposioToolkit(updatedOrgToolkit);
+      await this.databaseAdapter.upsertComposioUserConnection(updatedConnection);
+      return toOrgToolkitSummary(updatedOrgToolkit);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const updatedConnection: StoredComposioUserConnectionRecord = {
+        ...connection,
+        lastError: message,
+        updatedAt: new Date().toISOString(),
+      };
+      await this.databaseAdapter.upsertComposioUserConnection(updatedConnection);
       throw error;
     }
   }
@@ -364,6 +495,7 @@ export class ComposioService {
 
   async getProfileSessionEndpoint(
     orgId: string,
+    userId: string,
     profileId: string,
   ): Promise<ComposioSessionMcpEndpoint | null> {
     const apiClient = await this.getApiClient();
@@ -381,10 +513,18 @@ export class ComposioService {
     const toolkitById = new Map(orgToolkits.map((toolkit) => [toolkit.id, toolkit]));
     const enabledToolkits: string[] = [];
     const allowedToolsByToolkit: Record<string, string[] | null> = {};
+    const userConnections = await this.databaseAdapter.listComposioUserConnectionsForUser(
+      orgId,
+      userId,
+    );
+    const connectionByToolkitId = new Map(
+      userConnections.map((connection) => [connection.toolkitId, connection] as const),
+    );
 
     for (const assignment of assignments) {
       const toolkit = toolkitById.get(assignment.toolkitId);
-      if (!toolkit || toolkit.status !== "connected") {
+      const connection = connectionByToolkitId.get(assignment.toolkitId);
+      if (!toolkit || toolkit.status !== "enabled" || connection?.status !== "connected") {
         continue;
       }
 
@@ -396,8 +536,7 @@ export class ComposioService {
       return null;
     }
 
-    const existingSessionId = await this.readExistingSessionId(orgToolkits, enabledToolkits);
-    const userId = composioOrgUserId(orgId);
+    const existingSessionId = await this.readExistingSessionId(userConnections, enabledToolkits, orgToolkits);
 
     if (existingSessionId) {
       return apiClient.reuseProfileSession(
@@ -407,89 +546,129 @@ export class ComposioService {
       );
     }
 
-    return apiClient.createProfileSession(userId, enabledToolkits, allowedToolsByToolkit);
+    return apiClient.createProfileSession(
+      composioUserId(userId),
+      enabledToolkits,
+      allowedToolsByToolkit,
+    );
   }
 
-  async formatProfileConnectionsContext(orgId: string, profileId: string): Promise<string> {
+  async formatProfileConnectionsContext(
+    orgId: string,
+    userId: string,
+    profileId: string,
+  ): Promise<string> {
     if (!(await this.isAvailable())) {
       return "";
     }
 
-    const assigned = await this.getAssignedToolkitRecords(orgId, profileId);
+    const assigned = await this.getAssignedToolkitRecords(orgId, userId, profileId);
     if (assigned.length === 0) {
       return "";
     }
 
-    const lines = assigned.map(({ toolkit, allowedActions }) => {
-      const toolCount = toolkit.cachedTools.length;
+    const lines = assigned.map(({ orgToolkit, userConnection, allowedActions }) => {
+      const toolCount = orgToolkit.cachedTools.length;
       const toolsSuffix = toolCount > 0 ? `, ${toolCount} tool${toolCount === 1 ? "" : "s"}` : "";
       const actionsSuffix =
         allowedActions && allowedActions.length > 0
           ? ` (allowed actions: ${allowedActions.join(", ")})`
           : "";
+      const connectionStatus = userConnection?.status ?? "not_connected";
 
-      return `- ${toolkit.displayName} (\`${toolkit.toolkitSlug}\`): ${toolkit.status}${toolsSuffix}${actionsSuffix}`;
+      return `- ${orgToolkit.displayName} (\`${orgToolkit.toolkitSlug}\`): org ${orgToolkit.status}, your connection ${connectionStatus}${toolsSuffix}${actionsSuffix}`;
     });
 
     return [
       "## Composio integrations",
       "",
-      "Assigned SaaS toolkits for this profile:",
+      "Assigned SaaS toolkits for this profile (your personal connections):",
       ...lines,
       "",
-      "Use assigned Composio tools for external SaaS actions. Org admins connect apps on Integrations — never self-authorize OAuth.",
+      "Use assigned Composio tools for external SaaS actions. If your connection is missing, open Integrations → Composio to connect — never self-authorize OAuth in chat.",
     ].join("\n");
   }
 
   async getAssignedToolkitRecords(
     orgId: string,
+    userId: string,
     profileId: string,
-  ): Promise<Array<{ toolkit: StoredComposioToolkitRecord; allowedActions: string[] | null }>> {
+  ): Promise<
+    Array<{
+      orgToolkit: StoredComposioToolkitRecord;
+      userConnection: StoredComposioUserConnectionRecord | null;
+      allowedActions: string[] | null;
+    }>
+  > {
     const assignments = await this.databaseAdapter.listProfileComposioToolkits(profileId);
     const orgToolkits = await this.databaseAdapter.listComposioToolkitsForOrg(orgId);
     const toolkitById = new Map(orgToolkits.map((toolkit) => [toolkit.id, toolkit]));
+    const userConnections = await this.databaseAdapter.listComposioUserConnectionsForUser(
+      orgId,
+      userId,
+    );
+    const connectionByToolkitId = new Map(
+      userConnections.map((connection) => [connection.toolkitId, connection] as const),
+    );
 
     return assignments
       .map((assignment) => {
-        const toolkit = toolkitById.get(assignment.toolkitId);
-        return toolkit ? { toolkit, allowedActions: assignment.allowedActions } : null;
+        const orgToolkit = toolkitById.get(assignment.toolkitId);
+        if (!orgToolkit) {
+          return null;
+        }
+
+        return {
+          orgToolkit,
+          userConnection: connectionByToolkitId.get(assignment.toolkitId) ?? null,
+          allowedActions: assignment.allowedActions,
+        };
       })
-      .filter((entry): entry is { toolkit: StoredComposioToolkitRecord; allowedActions: string[] | null } =>
-        entry !== null,
+      .filter(
+        (
+          entry,
+        ): entry is {
+          orgToolkit: StoredComposioToolkitRecord;
+          userConnection: StoredComposioUserConnectionRecord | null;
+          allowedActions: string[] | null;
+        } => entry !== null,
       );
   }
 
-  private async openOrgSession(
-    orgId: string,
+  private async openUserSession(
+    userId: string,
     toolkitSlugs: string[],
     allowedToolsByToolkit: Record<string, string[] | null>,
   ): Promise<ComposioSessionMcpEndpoint> {
     const apiClient = await this.requireAvailable();
     return apiClient.createProfileSession(
-      composioOrgUserId(orgId),
+      composioUserId(userId),
       toolkitSlugs,
       allowedToolsByToolkit,
     );
   }
 
   private async readExistingSessionId(
-    orgToolkits: StoredComposioToolkitRecord[],
+    userConnections: StoredComposioUserConnectionRecord[],
     enabledToolkits: string[],
+    orgToolkits: StoredComposioToolkitRecord[],
   ): Promise<string | null> {
     const secret = await this.resolveApiKey();
     if (!secret) {
       return null;
     }
 
+    const slugByToolkitId = new Map(orgToolkits.map((toolkit) => [toolkit.id, toolkit.toolkitSlug]));
     const enabled = new Set(enabledToolkits);
 
-    for (const toolkit of orgToolkits) {
-      if (!enabled.has(toolkit.toolkitSlug) || !toolkit.sessionIdEnc) {
+    for (const connection of userConnections) {
+      const slug = slugByToolkitId.get(connection.toolkitId);
+      if (!slug || !enabled.has(slug) || !connection.sessionIdEnc) {
         continue;
       }
 
       try {
-        return decryptComposioSecret(toolkit.sessionIdEnc, secret);
+        return decryptComposioSecret(connection.sessionIdEnc, secret);
       } catch {
         return null;
       }

@@ -78,7 +78,6 @@ function resolveSection(value: string | null): IntegrationSectionId {
 export function IntegrationsPage() {
   const { activeOrg, isLoading } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
-  const section = resolveSection(searchParams.get("section"));
 
   if (isLoading) {
     return (
@@ -88,9 +87,15 @@ export function IntegrationsPage() {
     );
   }
 
-  if (activeOrg?.role !== "admin") {
+  if (activeOrg?.role === "viewer") {
     return <Navigate to="/chat" replace />;
   }
+
+  const isOrgAdmin = activeOrg?.role === "admin";
+  const section = resolveSection(isOrgAdmin ? searchParams.get("section") : "composio");
+  const visibleSections = isOrgAdmin
+    ? INTEGRATION_SECTIONS
+    : INTEGRATION_SECTIONS.filter((item) => item.id === "composio");
 
   function setSection(nextSection: IntegrationSectionId) {
     setSearchParams(
@@ -112,8 +117,9 @@ export function IntegrationsPage() {
       <header className="space-y-1">
         <h1 className="type-page-title">Integrations</h1>
         <p className="type-body max-w-2xl">
-          Manage bridge access, coding agents, Composio SaaS connections, Telegram setup,
-          notification webhooks, and WhatsApp linking from one place.
+          {isOrgAdmin
+            ? "Manage bridge access, coding agents, Composio SaaS connections, Telegram setup, notification webhooks, and WhatsApp linking from one place."
+            : "Connect your personal Composio accounts for org-enabled SaaS toolkits."}
         </p>
       </header>
 
@@ -123,7 +129,7 @@ export function IntegrationsPage() {
             aria-label="Integration settings"
             className="flex gap-1 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] md:flex-col md:overflow-visible md:pb-0 [&::-webkit-scrollbar]:hidden"
           >
-            {INTEGRATION_SECTIONS.map((item) => (
+            {visibleSections.map((item) => (
               <SidebarButton
                 key={item.id}
                 label={item.label}
@@ -150,7 +156,7 @@ export function IntegrationsPage() {
 
           {section === "composio" ? (
             <div className="space-y-4">
-              <ComposioSettingsCard />
+              {isOrgAdmin ? <ComposioSettingsCard /> : null}
               <ComposioConnectionsCard />
             </div>
           ) : null}

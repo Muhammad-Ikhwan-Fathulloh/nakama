@@ -75,6 +75,10 @@ export interface HealthResponse {
   apiVersion: typeof NAKAMA_API_VERSION;
   providerConfigured: boolean;
   userConfigured: boolean;
+  /** A Composio project API key is saved on this server. */
+  composioConfigured: boolean;
+  /** Nakama can reach the Composio API with the saved key. */
+  composioAvailable: boolean;
 }
 
 export interface AutomationSchedule {
@@ -738,6 +742,7 @@ export interface UpdateTelegramSettingsRequest {
 export interface ComposioSettingsResponse {
   configured: boolean;
   apiKeyMasked: string | null;
+  composioReachable: boolean;
 }
 
 export interface UpdateComposioSettingsRequest {
@@ -1538,12 +1543,14 @@ export interface ToolDefinition<Input = unknown, Output = unknown> {
 
 export const COMPOSIO_TOOLKIT_SLUG_PATTERN = /^[a-z0-9_-]+$/;
 
+export type ComposioOrgToolkitStatus = "disabled" | "enabled";
+
+export type ComposioUserConnectionStatus = "oauth_in_progress" | "connected" | "error";
+
+/** @deprecated Org catalog uses ComposioOrgToolkitStatus; user rows use ComposioUserConnectionStatus. */
 export type ComposioToolkitStatus =
-  | "disabled"
-  | "enabled"
-  | "oauth_in_progress"
-  | "connected"
-  | "error";
+  | ComposioOrgToolkitStatus
+  | ComposioUserConnectionStatus;
 
 export type ComposioToolErrorCode = "COMPOSIO_NOT_CONNECTED" | "COMPOSIO_TRANSIENT" | "COMPOSIO_POLICY";
 
@@ -1558,9 +1565,17 @@ export interface ComposioToolkitSummary {
   id: string;
   toolkitSlug: string;
   displayName: string;
-  status: ComposioToolkitStatus;
-  connectedAccountId: string | null;
+  status: ComposioOrgToolkitStatus;
   cachedTools: ComposioCachedToolSummary[];
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export interface ComposioUserConnectionSummary {
+  id: string;
+  toolkitId: string;
+  toolkitSlug: string;
+  status: ComposioUserConnectionStatus;
   lastError: string | null;
   updatedAt: string;
 }
@@ -1572,9 +1587,16 @@ export interface ComposioCatalogToolkitSummary {
 }
 
 export interface ListComposioToolkitsResponse {
+  /** A Composio project API key is saved on this server. */
+  configured: boolean;
+  /** Nakama can reach the Composio API with the saved key. */
+  composioReachable: boolean;
+  /** @deprecated Use composioReachable. */
   composioAvailable: boolean;
   catalog: ComposioCatalogToolkitSummary[];
   orgToolkits: ComposioToolkitSummary[];
+  userConnections: ComposioUserConnectionSummary[];
+  catalogError: string | null;
 }
 
 export interface EnableComposioToolkitRequest {

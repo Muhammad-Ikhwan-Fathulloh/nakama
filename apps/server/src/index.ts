@@ -118,6 +118,8 @@ const systemStatus = new SystemStatusService(
   taskRunner,
   workerManager,
   mcpService,
+  composioService,
+  database.adapter,
 );
 
 const webDistDir = resolveWebDistDir(projectRoot);

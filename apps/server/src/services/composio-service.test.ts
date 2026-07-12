@@ -9,17 +9,19 @@ import { ComposioService } from "./composio-service";
 import type { ComposioApiClient } from "./composio-api-client";
 
 const TEST_API_KEY = "ck_test";
+const USER_ID = "user_admin";
 
 function createMockClient(): ComposioApiClient {
   return {
     async listCatalogToolkits() {
       return [{ slug: "gmail", name: "Gmail", description: "Google Mail" }];
     },
-    async linkToolkitAccount() {
-      return { redirectUrl: "https://example.com/oauth" };
+    async linkToolkitAccount(_userId, _toolkitSlug) {
+      return { redirectUrl: "https://example.com/oauth", connectedAccountId: "ca_1" };
     },
     async deleteConnectedAccount() {},
-    async createProfileSession() {
+    async createProfileSession(userId) {
+      expect(userId).toBe("nakama:user:user_admin");
       return {
         sessionId: "sess_1",
         url: "https://mcp.composio.dev/sess_1",
@@ -86,27 +88,54 @@ describe("ComposioService", () => {
       expect(toolkit.toolkitSlug).toBe("gmail");
       expect(toolkit.status).toBe("enabled");
 
-      const listed = await service.listToolkits("org_1");
+      const listed = await service.listToolkits("org_1", USER_ID);
       expect(listed.orgToolkits).toHaveLength(1);
+      expect(listed.userConnections).toEqual([]);
     } finally {
       restore();
     }
   });
 
-  test("connectToolkit stores oauth state and returns redirect URL", async () => {
+  test("connectToolkit stores oauth state on user connection and returns redirect URL", async () => {
     const { service, restore } = await createConfiguredService();
 
     try {
       await service.enableToolkit("org_1", { toolkitSlug: "gmail" });
       const response = await service.connectToolkit(
         "org_1",
+        USER_ID,
         "gmail",
         "http://localhost:4310",
       );
 
       expect(response.redirectUrl).toBe("https://example.com/oauth");
-      const listed = await service.listToolkits("org_1");
-      expect(listed.orgToolkits[0]?.status).toBe("oauth_in_progress");
+      const listed = await service.listToolkits("org_1", USER_ID);
+      expect(listed.orgToolkits[0]?.status).toBe("enabled");
+      expect(listed.userConnections[0]?.status).toBe("oauth_in_progress");
+    } finally {
+      restore();
+    }
+  });
+
+  test("listToolkits surfaces catalogError when catalog fetch fails", async () => {
+    const { service, restore } = await createConfiguredService();
+
+    injectMockComposioClient(service, {
+      ...createMockClient(),
+      async listCatalogToolkits() {
+        throw new Error("Failed to fetch toolkits");
+      },
+    });
+
+    try {
+      const listed = await service.listToolkits("org_1", USER_ID);
+      expect(listed.configured).toBe(true);
+      expect(listed.composioReachable).toBe(false);
+      expect(listed.composioAvailable).toBe(false);
+      expect(listed.catalogError).toBe("Failed to fetch toolkits");
+      expect(listed.catalog).toEqual([]);
+      expect(listed.orgToolkits).toEqual([]);
+      expect(listed.userConnections).toEqual([]);
     } finally {
       restore();
     }

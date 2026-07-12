@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildComposioToolDefinitions,
+  composioConnectionKey,
   namespacedComposioToolName,
 } from "./composio-tool-bridge";
 import type { ComposioService } from "./composio-service";
@@ -13,21 +14,24 @@ describe("composio-tool-bridge", () => {
     );
   });
 
+  test("connection key includes user id", () => {
+    expect(composioConnectionKey("org_1", "usr_a", "profile_1")).toBe(
+      "composio:org_1:usr_a:profile_1",
+    );
+  });
+
   test("filters meta tools and disconnected assignments", async () => {
     const composioService = {
       isAvailable: async () => true,
       async getAssignedToolkitRecords() {
         return [
           {
-            toolkit: {
+            orgToolkit: {
               id: "ctk_1",
               orgId: "org_1",
               toolkitSlug: "gmail",
               displayName: "Gmail",
-              status: "connected",
-              connectedAccountId: "ca_1",
-              sessionIdEnc: null,
-              oauthStateHash: null,
+              status: "enabled",
               cachedTools: [
                 {
                   slug: "GMAIL_SEND_EMAIL",
@@ -42,6 +46,19 @@ describe("composio-tool-bridge", () => {
                   inputSchema: { type: "object", properties: {} },
                 },
               ],
+              lastError: null,
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            },
+            userConnection: {
+              id: "cuc_1",
+              orgId: "org_1",
+              userId: "usr_1",
+              toolkitId: "ctk_1",
+              status: "connected",
+              connectedAccountId: "ca_1",
+              sessionIdEnc: null,
+              oauthStateHash: null,
               lastError: null,
               createdAt: "2026-01-01T00:00:00.000Z",
               updatedAt: "2026-01-01T00:00:00.000Z",
@@ -66,6 +83,7 @@ describe("composio-tool-bridge", () => {
 
     const tools = await buildComposioToolDefinitions(
       "org_1",
+      "usr_1",
       "profile_1",
       composioService,
       manager,
@@ -73,5 +91,22 @@ describe("composio-tool-bridge", () => {
 
     expect(tools).toHaveLength(1);
     expect(tools[0]?.name).toBe("composio__gmail__GMAIL_SEND_EMAIL");
+  });
+
+  test("returns no tools when user id is missing", async () => {
+    const composioService = {
+      isAvailable: async () => true,
+    } as unknown as ComposioService;
+    const manager = new McpClientManager();
+
+    const tools = await buildComposioToolDefinitions(
+      "org_1",
+      "",
+      "profile_1",
+      composioService,
+      manager,
+    );
+
+    expect(tools).toEqual([]);
   });
 });

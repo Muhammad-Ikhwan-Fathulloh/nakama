@@ -29,6 +29,7 @@ import type {
   StoredUserRecord,
   StoredNotificationDestinationRecord,
   StoredComposioToolkitRecord,
+  StoredComposioUserConnectionRecord,
   StoredProfileComposioToolkitRecord,
   StoredWorkspaceSettingsRecord,
 } from "../types";
@@ -213,6 +214,20 @@ interface ProfileComposioToolkitRow {
   profile_id: string;
   toolkit_id: string;
   allowed_actions: string | null;
+}
+
+interface ComposioUserConnectionRow {
+  id: string;
+  org_id: string;
+  user_id: string;
+  toolkit_id: string;
+  status: string;
+  connected_account_id: string | null;
+  session_id_enc: string | null;
+  oauth_state_hash: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 interface SkillRow {
@@ -840,6 +855,85 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
   const insertProfileComposioToolkitStmt = db.prepare(`
     INSERT INTO profile_composio_toolkits (profile_id, toolkit_id, allowed_actions)
     VALUES (?, ?, ?)
+  `);
+  const listComposioUserConnectionsForUserStmt = db.prepare(`
+    SELECT
+      id,
+      org_id,
+      user_id,
+      toolkit_id,
+      status,
+      connected_account_id,
+      session_id_enc,
+      oauth_state_hash,
+      last_error,
+      created_at,
+      updated_at
+    FROM composio_user_connections
+    WHERE org_id = ? AND user_id = ?
+    ORDER BY updated_at DESC
+  `);
+  const getComposioUserConnectionStmt = db.prepare(`
+    SELECT
+      id,
+      org_id,
+      user_id,
+      toolkit_id,
+      status,
+      connected_account_id,
+      session_id_enc,
+      oauth_state_hash,
+      last_error,
+      created_at,
+      updated_at
+    FROM composio_user_connections
+    WHERE user_id = ? AND toolkit_id = ?
+  `);
+  const getComposioUserConnectionByIdStmt = db.prepare(`
+    SELECT
+      id,
+      org_id,
+      user_id,
+      toolkit_id,
+      status,
+      connected_account_id,
+      session_id_enc,
+      oauth_state_hash,
+      last_error,
+      created_at,
+      updated_at
+    FROM composio_user_connections
+    WHERE id = ?
+  `);
+  const upsertComposioUserConnectionStmt = db.prepare(`
+    INSERT INTO composio_user_connections (
+      id,
+      org_id,
+      user_id,
+      toolkit_id,
+      status,
+      connected_account_id,
+      session_id_enc,
+      oauth_state_hash,
+      last_error,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      org_id = excluded.org_id,
+      user_id = excluded.user_id,
+      toolkit_id = excluded.toolkit_id,
+      status = excluded.status,
+      connected_account_id = excluded.connected_account_id,
+      session_id_enc = excluded.session_id_enc,
+      oauth_state_hash = excluded.oauth_state_hash,
+      last_error = excluded.last_error,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at
+  `);
+  const deleteComposioUserConnectionStmt = db.prepare(`
+    DELETE FROM composio_user_connections WHERE id = ?
   `);
 
   const getUserByEmailStmt = db.prepare("SELECT * FROM users WHERE email = ?");
@@ -1711,9 +1805,9 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
         record.toolkitSlug,
         record.displayName,
         record.status,
-        record.connectedAccountId,
-        record.sessionIdEnc,
-        record.oauthStateHash,
+        null,
+        null,
+        null,
         JSON.stringify(record.cachedTools),
         record.lastError,
         record.createdAt,
@@ -1723,6 +1817,45 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
 
     async deleteComposioToolkit(id) {
       const result = deleteComposioToolkitStmt.run(id);
+      return result.changes > 0;
+    },
+
+    async listComposioUserConnectionsForUser(orgId, userId) {
+      return listComposioUserConnectionsForUserStmt
+        .all(orgId, userId)
+        .map((row) => toComposioUserConnectionRecord(row as ComposioUserConnectionRow));
+    },
+
+    async getComposioUserConnection(userId, toolkitId) {
+      const row = getComposioUserConnectionStmt.get(userId, toolkitId) as
+        | ComposioUserConnectionRow
+        | null;
+      return row ? toComposioUserConnectionRecord(row) : null;
+    },
+
+    async getComposioUserConnectionById(id) {
+      const row = getComposioUserConnectionByIdStmt.get(id) as ComposioUserConnectionRow | null;
+      return row ? toComposioUserConnectionRecord(row) : null;
+    },
+
+    async upsertComposioUserConnection(record) {
+      upsertComposioUserConnectionStmt.run(
+        record.id,
+        record.orgId,
+        record.userId,
+        record.toolkitId,
+        record.status,
+        record.connectedAccountId,
+        record.sessionIdEnc,
+        record.oauthStateHash,
+        record.lastError,
+        record.createdAt,
+        record.updatedAt,
+      );
+    },
+
+    async deleteComposioUserConnection(id) {
+      const result = deleteComposioUserConnectionStmt.run(id);
       return result.changes > 0;
     },
 
@@ -2288,17 +2421,36 @@ function toNotificationDestinationRecord(
   };
 }
 
+function normalizeOrgComposioToolkitStatus(status: string): StoredComposioToolkitRecord["status"] {
+  return status === "disabled" ? "disabled" : "enabled";
+}
+
 function toComposioToolkitRecord(row: ComposioToolkitRow): StoredComposioToolkitRecord {
   return {
     id: row.id,
     orgId: row.org_id,
     toolkitSlug: row.toolkit_slug,
     displayName: row.display_name,
-    status: row.status as StoredComposioToolkitRecord["status"],
+    status: normalizeOrgComposioToolkitStatus(row.status),
+    cachedTools: JSON.parse(row.cached_tools) as StoredComposioToolkitRecord["cachedTools"],
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toComposioUserConnectionRecord(
+  row: ComposioUserConnectionRow,
+): StoredComposioUserConnectionRecord {
+  return {
+    id: row.id,
+    orgId: row.org_id,
+    userId: row.user_id,
+    toolkitId: row.toolkit_id,
+    status: row.status as StoredComposioUserConnectionRecord["status"],
     connectedAccountId: row.connected_account_id,
     sessionIdEnc: row.session_id_enc,
     oauthStateHash: row.oauth_state_hash,
-    cachedTools: JSON.parse(row.cached_tools) as StoredComposioToolkitRecord["cachedTools"],
     lastError: row.last_error,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

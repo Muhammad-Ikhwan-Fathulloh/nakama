@@ -24,12 +24,13 @@ const DOCS_HTML = `<!doctype html>
 `;
 
 export function registerSystemRoutes(app: HonoApp, options: ServerOptions): void {
-  const { agent, databaseAdapter, systemStatus } = options;
+  const { agent, databaseAdapter, systemStatus, composioService } = options;
   const healthResponseSchema = z.object({
     ok: z.literal(true),
     apiVersion: z.number().int(),
     providerConfigured: z.boolean(),
     userConfigured: z.boolean(),
+    composioConfigured: z.boolean(),
     composioAvailable: z.boolean(),
   }).openapi("HealthResponse");
   const systemStatusSchema = z.object({ ok: z.boolean() }).passthrough().openapi("SystemStatusResponse");
@@ -81,12 +82,14 @@ export function registerSystemRoutes(app: HonoApp, options: ServerOptions): void
 
   app.openapi(healthRoute, async (c) => {
     const humanUserCount = (await databaseAdapter?.countHumanUsers()) ?? 0;
+    const composioConfigured = await isComposioConfiguredAsync();
     return c.json({
       ok: true,
       apiVersion: NAKAMA_API_VERSION,
       providerConfigured: agent.providerConfigured,
       userConfigured: humanUserCount > 0,
-      composioAvailable: await isComposioConfiguredAsync(),
+      composioConfigured,
+      composioAvailable: composioConfigured ? await (composioService?.isReachable() ?? false) : false,
     }, 200);
   });
 

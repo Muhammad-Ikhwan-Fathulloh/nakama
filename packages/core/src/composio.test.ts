@@ -7,6 +7,7 @@ import {
   isComposioConfigured,
   isComposioConfiguredAsync,
   composioOrgUserId,
+  composioUserId,
   loadComposioConfigFile,
   loadComposioSettingsPublic,
   resolveComposioApiKey,
@@ -34,6 +35,10 @@ describe("composio-config", () => {
 
   test("composioOrgUserId namespaces org id", () => {
     expect(composioOrgUserId("org_123")).toBe("nakama:org:org_123");
+  });
+
+  test("composioUserId namespaces nakama user id", () => {
+    expect(composioUserId("usr_123")).toBe("nakama:user:usr_123");
   });
 
   test("saveComposioConfig writes config.ini", async () => {

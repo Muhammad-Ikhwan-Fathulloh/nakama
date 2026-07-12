@@ -9,7 +9,7 @@ import type {
 import { NakamaApiError } from "@nakama/core";
 import { ComposioService } from "../../services/composio-service";
 import type { ServerOptions } from "../context";
-import { requireOrgAdminFromContext } from "../org-guards";
+import { requireNotViewerFromContext, requireOrgAdminFromContext } from "../org-guards";
 import { errorResponse, json, readJson } from "../shared";
 import type { HonoApp } from "../types";
 
@@ -50,8 +50,10 @@ export function registerComposioRoutes(app: HonoApp, options: ServerOptions): vo
   }
 
   app.get("/v1/composio/toolkits", async (c) => {
-    const auth = requireOrgAdminFromContext(c);
-    return json<ListComposioToolkitsResponse>(await service.listToolkits(auth.activeOrgId!));
+    const auth = requireNotViewerFromContext(c);
+    return json<ListComposioToolkitsResponse>(
+      await service.listToolkits(auth.activeOrgId!, auth.userId),
+    );
   });
 
   app.post("/v1/composio/toolkits/:toolkitSlug/enable", async (c) => {
@@ -61,7 +63,7 @@ export function registerComposioRoutes(app: HonoApp, options: ServerOptions): vo
       return json<ComposioToolkitSummary>(
         await service.enableToolkit(auth.activeOrgId!, {
           toolkitSlug: c.req.param("toolkitSlug"),
-        }),
+        } satisfies EnableComposioToolkitRequest),
       );
     } catch (error) {
       if (error instanceof NakamaApiError) {
@@ -89,12 +91,13 @@ export function registerComposioRoutes(app: HonoApp, options: ServerOptions): vo
   });
 
   app.post("/v1/composio/toolkits/:toolkitSlug/connect", async (c) => {
-    const auth = requireOrgAdminFromContext(c);
+    const auth = requireNotViewerFromContext(c);
 
     try {
       return json<ComposioConnectResponse>(
         await service.connectToolkit(
           auth.activeOrgId!,
+          auth.userId,
           c.req.param("toolkitSlug"),
           resolveCallbackBaseUrl(c.req.raw),
         ),
@@ -109,11 +112,15 @@ export function registerComposioRoutes(app: HonoApp, options: ServerOptions): vo
   });
 
   app.post("/v1/composio/toolkits/:toolkitSlug/disconnect", async (c) => {
-    const auth = requireOrgAdminFromContext(c);
+    const auth = requireNotViewerFromContext(c);
 
     try {
       return json<ComposioToolkitSummary>(
-        await service.disconnectToolkit(auth.activeOrgId!, c.req.param("toolkitSlug")),
+        await service.disconnectToolkit(
+          auth.activeOrgId!,
+          auth.userId,
+          c.req.param("toolkitSlug"),
+        ),
       );
     } catch (error) {
       if (error instanceof NakamaApiError) {
@@ -125,11 +132,15 @@ export function registerComposioRoutes(app: HonoApp, options: ServerOptions): vo
   });
 
   app.post("/v1/composio/toolkits/:toolkitSlug/sync", async (c) => {
-    const auth = requireOrgAdminFromContext(c);
+    const auth = requireNotViewerFromContext(c);
 
     try {
       return json<ComposioToolkitSummary>(
-        await service.syncToolkit(auth.activeOrgId!, c.req.param("toolkitSlug")),
+        await service.syncUserToolkit(
+          auth.activeOrgId!,
+          auth.userId,
+          c.req.param("toolkitSlug"),
+        ),
       );
     } catch (error) {
       if (error instanceof NakamaApiError) {
