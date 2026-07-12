@@ -230,6 +230,8 @@ Run a one-off shell command in the profile workspace and return stdout, stderr, 
 | `command` | string | Yes | Shell command to run |
 | `cwd` | string | No | Working directory within the profile workspace |
 | `timeoutMs` | number | No | Default 30000, max 1800000 (30 minutes) |
+| `env` | object | No | Extra env vars merged at spawn time (string values) |
+| `codingAgent` | boolean | No | When true, Nakama merges coding-agent spawn env (gateway routing) for this command |
 
 **Returns:** `{ exitCode, stdout, stderr, timedOut }`
 

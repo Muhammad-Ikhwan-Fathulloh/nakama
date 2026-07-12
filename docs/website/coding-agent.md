@@ -108,6 +108,49 @@ Nakama blocks assigning `coding-delegation` until a harness is ready. The skill 
 
 When the user's message looks like a code-change request, the skill matcher attaches the full `coding-delegation` body plus harness context for that turn. The agent should call `bash` with an appropriate `timeoutMs` (often 10–30 minutes for large tasks; see [bash](/builtin-tools#bash)).
 
+## Launch directly (CLI)
+
+Power users can spawn an interactive coding agent from the terminal without going through chat:
+
+```bash
+bun run dev:cli -- launch claude
+```
+
+Common flags:
+
+| Flag | Purpose |
+|------|---------|
+| `--profile ID` | Profile whose model settings route through the gateway |
+| `--model MODEL` | Override the profile model for this launch |
+| `--cwd DIR` | Working directory (defaults to your current shell directory) |
+| `--yes` | Skip the profile picker when no `--profile` is set |
+| `--save-harness` | Persist the selected harness in Integrations (org admins only) |
+| `-- ARGS...` | Forward args to the coding CLI (for example one-shot `claude -p "task"`) |
+
+Examples:
+
+```bash
+# Interactive Claude Code in the current directory
+bun run dev:cli -- launch claude --profile super_bot
+
+# One-shot print mode
+bun run dev:cli -- launch claude -- --print "fix failing tests"
+
+# Codex with an explicit model override
+bun run dev:cli -- launch codex --model gpt-4.1 -- --help
+```
+
+When `NAKAMA_INFERENCE_GATEWAY_ENABLED=1`, `nakama launch` applies the same spawn env as chat delegation (`ANTHROPIC_BASE_URL`, tier model aliases, local auth token). Without the gateway, the coding CLI uses its own vendor authentication on the host.
+
+Manual equivalent for Claude Code:
+
+```bash
+ANTHROPIC_BASE_URL=http://127.0.0.1:4310 \
+ANTHROPIC_API_KEY="" \
+ANTHROPIC_AUTH_TOKEN=<your-local-nakama-token> \
+claude
+```
+
 ## When to use a coding agent vs Nakama alone
 
 Use a **coding agent** when the user wants **concrete changes** in the current project:
@@ -140,7 +183,7 @@ The Nakama agent then:
 3. Reads stdout/stderr from the coding agent
 4. Summarizes what changed, what was verified, and any follow-up risks
 
-Runs execute in the **active profile workspace** (`~/.nakama/orgs/{orgId}/profiles/{profileId}/`). The coding CLI uses the server's environment and auth — complete login on the host running Nakama.
+Runs execute in the **active profile workspace** when delegated from chat (`~/.nakama/orgs/{orgId}/profiles/{profileId}/`). `nakama launch` defaults to your **current shell directory** unless you pass `--cwd`. When the inference gateway is enabled, spawn env routes API calls through Nakama using the selected profile's model; otherwise the coding CLI uses vendor auth configured on the host.
 
 ## Safety boundaries
 

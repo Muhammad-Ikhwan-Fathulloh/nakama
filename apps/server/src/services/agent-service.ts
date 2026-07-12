@@ -51,6 +51,8 @@ import type {
   SyncSkillsResponse,
   SoulStatusResponse,
   CodingHarnessSettingsResponse,
+  CodingAgentLaunchPlanResponse,
+  PrepareCodingAgentLaunchRequest,
   TelegramSettingsResponse,
   EmailSettingsResponse,
   SendEmailTestRequest,
@@ -186,6 +188,7 @@ import {
   formatCodingAgentCommandContext,
   getBackendSkillName,
 } from "./coding-agent-command";
+import { prepareCodingAgentLaunch as buildCodingAgentLaunchPlan } from "./coding-agent-launcher";
 import {
   getInferenceGatewayBaseUrl,
   normalizeCodingAgentModel,
@@ -776,6 +779,22 @@ export class AgentService {
 
   async verifyCodingHarness(harnessId?: string): Promise<VerifyCodingHarnessResponse> {
     return verifyCodingAgentHarness(this.db, harnessId);
+  }
+
+  async prepareCodingAgentLaunch(
+    orgId: string,
+    input: PrepareCodingAgentLaunchRequest,
+    options: { persistSelection?: boolean } = {},
+  ): Promise<CodingAgentLaunchPlanResponse> {
+    return buildCodingAgentLaunchPlan(this.db, {
+      orgId,
+      profileId: input.profileId,
+      backend: input.backend,
+      model: input.model,
+      cwd: input.cwd,
+      passthroughArgs: input.passthroughArgs,
+      persistSelection: options.persistSelection === true,
+    });
   }
 
   async getWhatsAppSettings(): Promise<WhatsAppSettingsResponse> {

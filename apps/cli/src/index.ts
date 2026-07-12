@@ -10,6 +10,7 @@ import {
   isRotateTokenCommand,
   runRotateToken,
 } from "./rotate-token";
+import { formatLaunchError, isLaunchCommand, runLaunch } from "./launch";
 
 if (isRotateTokenCommand()) {
   try {
@@ -17,6 +18,16 @@ if (isRotateTokenCommand()) {
     process.exit(0);
   } catch (error) {
     console.error(formatRotateTokenError(error));
+    process.exit(1);
+  }
+}
+
+if (isLaunchCommand()) {
+  try {
+    const exitCode = await runLaunch();
+    process.exit(exitCode);
+  } catch (error) {
+    console.error(formatLaunchError(error));
     process.exit(1);
   }
 }
