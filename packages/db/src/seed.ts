@@ -10,6 +10,7 @@ const DEPRECATED_BUILTIN_TOOL_NAMES = new Set([
   "archive_profile_memory",
   "update_profile_memory",
   "save_artifact",
+  "create_skill",
 ]);
 const SUPPORTED_TOOL_HANDLER_TYPES = new Set(["builtin", "bash", "javascript"]);
 

@@ -108,6 +108,38 @@ describe("seed cleanup", () => {
     expect(await db.listToolsForProfile("profile_test")).toHaveLength(0);
   });
 
+  test("removes deprecated create_skill tool", async () => {
+    const db = createInMemoryDatabaseAdapter();
+    const now = new Date().toISOString();
+
+    await db.upsertProfile({
+      id: "profile_test",
+      name: "Test",
+      systemPrompt: "test",
+      model: null,
+      isSuper: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await db.upsertTool({
+      id: "tool_create_skill",
+      name: "create_skill",
+      description: "Deprecated skill creation tool",
+      handlerType: "builtin",
+      handlerConfig: { name: "create_skill" },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await db.assignToolToProfile("profile_test", "tool_create_skill");
+
+    await removeDeprecatedBuiltinTools(db);
+
+    expect(await db.getTool("tool_create_skill")).toBeNull();
+    expect(await db.listToolsForProfile("profile_test")).toHaveLength(0);
+  });
+
   test("removes deprecated save_artifact tool", async () => {
     const db = createInMemoryDatabaseAdapter();
     const now = new Date().toISOString();
@@ -174,6 +206,7 @@ describe("seed built-in tools", () => {
     expect(await db.getTool("tool_archive_profile_memory")).toBeNull();
     expect(await db.getTool("tool_update_profile_memory")).toBeNull();
     expect(await db.getTool("tool_save_artifact")).toBeNull();
+    expect(await db.getTool("tool_create_skill")).toBeNull();
   });
 
   test("ensureServerToolDefinitions registers delegate coding task", async () => {
