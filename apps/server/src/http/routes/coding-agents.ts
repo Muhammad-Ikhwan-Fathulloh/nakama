@@ -53,6 +53,9 @@ export function registerCodingAgentRoutes(app: HonoApp, options: ServerOptions):
     try {
       const plan = await agent.prepareCodingAgentLaunch(orgId, body, {
         persistSelection: body.persistSelection === true && (auth.orgRole === "admin" || auth.isPlatformAdmin),
+        orgRole: auth.orgRole,
+        isPlatformAdmin: auth.isPlatformAdmin,
+        localCli: auth.mode === "local-token",
       });
 
       return json<CodingAgentLaunchPlanResponse>(plan);

@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
-import type { DatabaseAdapter, StoredCodingAgentHarnessKind } from "@nakama/db";
-import { getProfileSoulDir } from "@nakama/core";
+import type { DatabaseAdapter, StoredCodingAgentHarnessKind, StoredProfileRecord } from "@nakama/db";
+import { getProfileSoulDir, NakamaApiError, type OrgRole, type ProfileSummary } from "@nakama/core";
 import { loadLocalAuthToken } from "@nakama/core/local-auth";
+import { canAccessSuperBotProfile, resolveProfileInput } from "@nakama/core/profiles";
 import {
   buildSpawnEnvForHarness,
   getInferenceGatewayBaseUrl,
+  mergeCodingAgentSpawnEnv,
   normalizeCodingAgentModel,
 } from "./coding-agent-spawn-env";
 import {
@@ -42,6 +44,72 @@ export interface PrepareCodingAgentLaunchInput {
   cwd?: string | null;
   passthroughArgs?: string[];
   persistSelection?: boolean;
+}
+
+export interface CodingAgentLaunchAccess {
+  orgRole?: OrgRole | null;
+  isPlatformAdmin?: boolean;
+  localCli?: boolean;
+}
+
+function toProfileSummary(profile: StoredProfileRecord): ProfileSummary {
+  return {
+    id: profile.id,
+    name: profile.name,
+    model: profile.model,
+    isDefault: profile.isDefault ?? false,
+    isSuper: profile.isSuper,
+    toolCount: 0,
+    mcpServerCount: 0,
+    soulActive: false,
+    hasAvatar: false,
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+  };
+}
+
+export async function resolveCodingAgentLaunchProfileId(
+  db: DatabaseAdapter,
+  orgId: string,
+  profileRef: string,
+): Promise<string> {
+  const trimmed = profileRef.trim();
+  const profiles = await db.listProfilesForOrg(orgId);
+  const match = resolveProfileInput(profiles.map(toProfileSummary), trimmed);
+
+  if (match) {
+    return match.id;
+  }
+
+  const direct = await db.getProfileForOrg(trimmed, orgId);
+
+  if (direct) {
+    return direct.id;
+  }
+
+  throw new Error(`Unknown profile: ${trimmed}`);
+}
+
+export function assertCanLaunchCodingAgentProfile(
+  profile: StoredProfileRecord,
+  access: CodingAgentLaunchAccess = {},
+): void {
+  if (!profile.isSuper) {
+    return;
+  }
+
+  if (access.localCli) {
+    return;
+  }
+
+  if (
+    !canAccessSuperBotProfile({
+      orgRole: access.orgRole,
+      isPlatformAdmin: access.isPlatformAdmin,
+    })
+  ) {
+    throw new NakamaApiError("Super Bot is only available to org admins.", 403);
+  }
 }
 
 export function resolveCodingAgentKindAlias(
@@ -88,11 +156,11 @@ export function buildCodingAgentLaunchPlan(input: {
 export async function prepareCodingAgentLaunch(
   db: DatabaseAdapter,
   input: PrepareCodingAgentLaunchInput,
+  access: CodingAgentLaunchAccess = {},
 ): Promise<CodingAgentLaunchPlan> {
-  const profileId = input.profileId.trim();
   const orgId = input.orgId.trim();
 
-  if (!profileId) {
+  if (!input.profileId.trim()) {
     throw new Error("Profile id is required.");
   }
 
@@ -100,11 +168,18 @@ export async function prepareCodingAgentLaunch(
     throw new Error("Organization context is required.");
   }
 
-  const profile = await db.getProfile(profileId);
+  const resolvedProfileId = await resolveCodingAgentLaunchProfileId(
+    db,
+    orgId,
+    input.profileId,
+  );
+  const profile = await db.getProfileForOrg(resolvedProfileId, orgId);
 
   if (!profile) {
-    throw new Error(`Unknown profile: ${profileId}`);
+    throw new Error(`Unknown profile: ${input.profileId.trim()}`);
   }
+
+  assertCanLaunchCodingAgentProfile(profile, access);
 
   const preferredKind = resolveCodingAgentKindAlias(input.backend);
   const harness = await resolveCodingAgentHarness(db, preferredKind);
@@ -120,7 +195,7 @@ export async function prepareCodingAgentLaunch(
   }
 
   const profileModel = normalizeCodingAgentModel(
-    input.model?.trim() || (await resolveProfileModelId(db, profileId)),
+    input.model?.trim() || (await resolveProfileModelId(db, resolvedProfileId)),
   );
   const gatewayBaseUrl = getInferenceGatewayBaseUrl();
   const authToken = gatewayBaseUrl ? await resolveInferenceAuthToken() : null;
@@ -128,8 +203,10 @@ export async function prepareCodingAgentLaunch(
     model: profileModel,
     gatewayBaseUrl,
     authToken,
+    orgId,
+    profileId: resolvedProfileId,
   });
-  const cwd = input.cwd?.trim() || getProfileSoulDir(orgId, profileId);
+  const cwd = input.cwd?.trim() || getProfileSoulDir(orgId, resolvedProfileId);
 
   if (input.persistSelection) {
     await saveCodingAgentWorkspaceSettings(db, {
@@ -150,10 +227,7 @@ export async function execCodingAgentLaunch(plan: CodingAgentLaunchPlan): Promis
   return new Promise((resolve, reject) => {
     const child = spawn(plan.command, plan.args, {
       cwd: plan.cwd,
-      env: {
-        ...process.env,
-        ...plan.env,
-      },
+      env: mergeCodingAgentSpawnEnv(process.env, plan.env),
       stdio: "inherit",
     });
 

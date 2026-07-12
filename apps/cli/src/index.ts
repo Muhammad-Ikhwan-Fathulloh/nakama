@@ -2,6 +2,7 @@ import { createClient } from "@nakama/client";
 import { loadLocalAuthToken } from "@nakama/core/local-auth";
 import { runChat } from "./chat";
 import { parseCliProfileArgs } from "./profile";
+import { parseCliOrgArgs, resolveCliOrgId } from "./org";
 import { ensureUserConfiguredViaCli, ensureProviderConfiguredViaCli } from "./setup";
 import { ensureServerRunning, stopSpawnedServer } from "@nakama/core/ensure-server";
 import { setTheme, type Theme, detectTheme } from "./styled-text";
@@ -78,6 +79,10 @@ try {
     baseUrl: serverUrl,
     authToken: await loadLocalAuthToken("cli@nakama.internal"),
   });
+
+  const cliOrg = parseCliOrgArgs();
+  await resolveCliOrgId(client, cliOrg);
+
   let health = await client.health();
 
   if (!health.userConfigured) {

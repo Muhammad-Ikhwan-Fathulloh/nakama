@@ -6,6 +6,7 @@ import {
   type ToolContext,
   type ToolDefinition,
 } from "@nakama/core";
+import { mergeCodingAgentSpawnEnv } from "../services/coding-agent-spawn-env";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 30 * 60_000;
@@ -112,7 +113,7 @@ function runShellCommand(
   return new Promise((resolve, reject) => {
     const child = spawn("/bin/bash", ["-lc", command], {
       cwd,
-      env: { ...process.env, ...envOverrides },
+      env: mergeCodingAgentSpawnEnv(process.env, envOverrides),
       stdio: ["ignore", "pipe", "pipe"],
     });
 

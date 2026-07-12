@@ -21,7 +21,9 @@ export function registerInferenceGatewayRoutes(app: HonoApp, options: ServerOpti
       return errorResponse("Database not configured", 500);
     }
 
-    const profileId = c.req.query("profileId")?.trim() || null;
+    const profileId = c.req.query("profileId")?.trim()
+      || c.req.header("x-nakama-profile-id")?.trim()
+      || null;
     let body: unknown;
 
     try {

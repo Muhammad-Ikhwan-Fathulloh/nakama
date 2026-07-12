@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
 import type { NakamaClient } from "@nakama/client";
 import type { CodingAgentLaunchPlanResponse } from "@nakama/core";
-import { pickProfileForOrg } from "@nakama/core";
+import { pickProfileForOrg } from "@nakama/core/profiles";
 import { ensureServerRunning } from "@nakama/core/ensure-server";
 import { loadLocalAuthToken } from "@nakama/core/local-auth";
 import { createClient } from "@nakama/client";
 import { loadSavedCliProfileId } from "./cli-config";
-import { resolveProfileInput, resolveStartupProfile } from "./profile";
+import { resolveStartupProfile } from "./profile";
+import { resolveCliOrgId } from "./org";
 
 export interface LaunchCliOptions {
   argv?: string[];
@@ -19,6 +20,7 @@ export function isLaunchCommand(argv = process.argv.slice(2)): boolean {
 export function parseLaunchArgs(argv = process.argv.slice(2)): {
   backend?: string;
   profileId?: string;
+  orgId?: string;
   model?: string;
   cwd?: string;
   yes: boolean;
@@ -28,6 +30,7 @@ export function parseLaunchArgs(argv = process.argv.slice(2)): {
   const launchArgv = argv[0] === "launch" ? argv.slice(1) : argv;
   let backend: string | undefined;
   let profileId: string | undefined;
+  let orgId: string | undefined;
   let model: string | undefined;
   let cwd: string | undefined;
   let yes = false;
@@ -56,6 +59,17 @@ export function parseLaunchArgs(argv = process.argv.slice(2)): {
 
     if (arg.startsWith("--profile=")) {
       profileId = arg.slice("--profile=".length).trim();
+      continue;
+    }
+
+    if (arg === "--org" || arg === "-o") {
+      orgId = launchArgv[index + 1]?.trim();
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--org=")) {
+      orgId = arg.slice("--org=".length).trim();
       continue;
     }
 
@@ -106,6 +120,7 @@ export function parseLaunchArgs(argv = process.argv.slice(2)): {
   return {
     backend,
     profileId,
+    orgId,
     model,
     cwd,
     yes,
@@ -120,7 +135,7 @@ export async function runLaunch(options: LaunchCliOptions = {}): Promise<number>
   if (!parsed.backend) {
     throw new Error(
       [
-        "Usage: nakama launch <backend> [--profile ID] [--model MODEL] [--cwd DIR] [--yes] [--save-harness] [-- ARGS...]",
+        "Usage: nakama launch <backend> [--org ID] [--profile ID] [--model MODEL] [--cwd DIR] [--yes] [--save-harness] [-- ARGS...]",
         "",
         "Backends: claude, codex, opencode",
       ].join("\n"),
@@ -133,15 +148,19 @@ export async function runLaunch(options: LaunchCliOptions = {}): Promise<number>
     authToken: await loadLocalAuthToken("cli@nakama.internal"),
   });
 
-  await client.getMe();
+  await resolveCliOrgId(client, { orgId: parsed.orgId });
 
-  const profile = await resolveLaunchProfile(client, {
-    profileId: parsed.profileId,
-    yes: parsed.yes,
-  });
+  let profileId = parsed.profileId?.trim();
+
+  if (!profileId) {
+    const profile = await resolveLaunchProfile(client, {
+      yes: parsed.yes,
+    });
+    profileId = profile.id;
+  }
 
   const plan = await client.prepareCodingAgentLaunch({
-    profileId: profile.id,
+    profileId,
     backend: parsed.backend,
     model: parsed.model,
     cwd: parsed.cwd ?? process.cwd(),
@@ -155,24 +174,12 @@ export async function runLaunch(options: LaunchCliOptions = {}): Promise<number>
 
 async function resolveLaunchProfile(
   client: NakamaClient,
-  options: { profileId?: string; yes: boolean },
+  options: { yes: boolean },
 ) {
   const { profiles } = await client.listProfiles();
 
   if (profiles.length === 0) {
     throw new Error("No bot profiles found.");
-  }
-
-  const explicitProfileId = options.profileId?.trim();
-
-  if (explicitProfileId) {
-    const match = resolveProfileInput(profiles, explicitProfileId);
-
-    if (!match) {
-      throw new Error(`Unknown profile: ${explicitProfileId}`);
-    }
-
-    return match;
   }
 
   if (options.yes) {
@@ -197,10 +204,37 @@ function printLaunchSummary(plan: CodingAgentLaunchPlanResponse): void {
   console.log(`Command: ${commandLine}`);
 
   if (Object.keys(plan.env).length > 0) {
-    console.log("Spawn env: inference gateway routing enabled");
+    console.log("Spawn env: Nakama inference gateway routing enabled");
+    return;
+  }
+
+  if (plan.harnessKind === "claude_code") {
+    console.log("");
+    console.log(
+      "No gateway env was applied. Claude Code will ask for /login unless you already have Anthropic credentials.",
+    );
+    console.log(
+      "Enable the Nakama gateway on the server, then restart dev:server:",
+    );
+    console.log("  export NAKAMA_INFERENCE_GATEWAY_ENABLED=1");
   }
 
   console.log("");
+}
+
+function mergeCodingAgentSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  spawnEnv: Record<string, string>,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv, ...spawnEnv };
+
+  for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] as const) {
+    if (key in spawnEnv && spawnEnv[key] === "") {
+      delete env[key];
+    }
+  }
+
+  return env;
 }
 
 export async function execCodingAgentLaunch(plan: CodingAgentLaunchPlanResponse): Promise<number> {
@@ -222,5 +256,16 @@ export async function execCodingAgentLaunch(plan: CodingAgentLaunchPlanResponse)
 }
 
 export function formatLaunchError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (message === "Not found") {
+    return [
+      message,
+      "",
+      "If you recently pulled code, restart the server so it registers /v1/coding-agents/prepare-launch:",
+      "  bun run dev:server",
+    ].join("\n");
+  }
+
+  return message;
 }

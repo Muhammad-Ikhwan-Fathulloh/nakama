@@ -57,6 +57,8 @@ export async function enrichCodingAgentBashInput(
     model: profileModel,
     gatewayBaseUrl,
     authToken,
+    orgId: context.orgId,
+    profileId: context.profileId,
   });
   const explicitEnv = readStringRecord(record.env);
   const mergedEnv = { ...spawnEnv, ...explicitEnv };

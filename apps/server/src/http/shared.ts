@@ -132,7 +132,7 @@ export async function authenticateRequest(
     }
 
     let user = await databaseAdapter.getUserByEmail(payload.email);
-    if (!user && payload.email === LOCAL_CLIENT_EMAIL) {
+    if (payload.email === LOCAL_CLIENT_EMAIL) {
       await ensureLocalClientAccess(databaseAdapter);
       user = await databaseAdapter.getUserByEmail(payload.email);
     }
@@ -157,7 +157,7 @@ export async function authenticateRequest(
       if (payload) {
         let user = await databaseAdapter.getUserByEmail(payload.email);
 
-        if (!user && payload.email === LOCAL_CLIENT_EMAIL) {
+        if (payload.email === LOCAL_CLIENT_EMAIL) {
           await ensureLocalClientAccess(databaseAdapter);
           user = await databaseAdapter.getUserByEmail(payload.email);
         }

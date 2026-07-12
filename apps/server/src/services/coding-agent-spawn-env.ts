@@ -4,6 +4,8 @@ export interface CodingAgentSpawnEnvOptions {
   model?: string | null;
   gatewayBaseUrl?: string | null;
   authToken?: string | null;
+  orgId?: string | null;
+  profileId?: string | null;
 }
 
 export function normalizeCodingAgentModel(model: string | null | undefined): string | null {
@@ -39,12 +41,21 @@ export function buildClaudeCodeSpawnEnv(
   }
 
   const model = normalizeCodingAgentModel(options.model) ?? "claude-sonnet-4-6";
-  const authToken = options.authToken?.trim() || "nakama";
+  const authToken = options.authToken?.trim();
+
+  if (!authToken) {
+    throw new Error(
+      "Inference gateway is enabled but no local Nakama auth token is available for Claude Code.",
+    );
+  }
+
+  const customHeaders = buildAnthropicCustomHeaders(options.orgId, options.profileId);
 
   return {
     ANTHROPIC_BASE_URL: gatewayBaseUrl.replace(/\/$/, ""),
     ANTHROPIC_API_KEY: "",
     ANTHROPIC_AUTH_TOKEN: authToken,
+    ...(customHeaders ? { ANTHROPIC_CUSTOM_HEADERS: customHeaders } : {}),
     ANTHROPIC_DEFAULT_OPUS_MODEL: model,
     ANTHROPIC_DEFAULT_SONNET_MODEL: model,
     ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
@@ -112,4 +123,38 @@ export function getInferenceGatewayBaseUrl(): string | null {
   }
 
   return `http://127.0.0.1:${port}`;
+}
+
+function buildAnthropicCustomHeaders(
+  orgId?: string | null,
+  profileId?: string | null,
+): string | null {
+  const headers: string[] = [];
+  const trimmedOrgId = orgId?.trim();
+  const trimmedProfileId = profileId?.trim();
+
+  if (trimmedOrgId) {
+    headers.push(`X-Org-Id: ${trimmedOrgId}`);
+  }
+
+  if (trimmedProfileId) {
+    headers.push(`X-Nakama-Profile-Id: ${trimmedProfileId}`);
+  }
+
+  return headers.length > 0 ? headers.join("\n") : null;
+}
+
+export function mergeCodingAgentSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  spawnEnv: Record<string, string>,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv, ...spawnEnv };
+
+  for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] as const) {
+    if (key in spawnEnv && spawnEnv[key] === "") {
+      delete env[key];
+    }
+  }
+
+  return env;
 }
