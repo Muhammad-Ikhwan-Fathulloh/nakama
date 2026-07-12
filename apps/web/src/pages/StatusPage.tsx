@@ -832,7 +832,7 @@ export function deriveSummary(status: SystemStatusResponse): {
     return {
       tone: "warn",
       title: "Discord bridge offline",
-      description: "Start the Discord worker (bun run dev:discord) to receive messages.",
+      description: "Start the bridge worker from Integrations → Discord to receive messages.",
     };
   }
 

@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { UpdateDiscordSettingsRequest } from "@nakama/core/contract";
-import { CopyIcon, EyeIcon, EyeOffIcon, RefreshCwIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, EyeIcon, EyeOffIcon, RefreshCwIcon } from "lucide-react";
 import {
   DiscordAllowedUsersDialog,
   type AllowedDiscordUser,
@@ -87,6 +87,8 @@ export function DiscordSettingsCard({
   const [allowedUsersOpen, setAllowedUsersOpen] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!settings) {
@@ -104,11 +106,24 @@ export function DiscordSettingsCard({
     });
   }, [settings]);
 
+  const pairingCode = settings?.handshakeCode ?? null;
+
+  useEffect(() => {
+    setCopied(false);
+  }, [pairingCode]);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const configured = settings?.configured === true;
   const isPaired = (settings?.pairedUserIds.length ?? 0) > 0;
   const hasAllowedUsers = (settings?.allowedUserIds.length ?? 0) > 0;
   const hasLinkedUsers = isPaired || hasAllowedUsers;
-  const pairingCode = settings?.handshakeCode ?? null;
   const worker = status?.discordWorker;
   const running = worker?.running === true;
   const canSave = configured || botToken.trim().length > 0;
@@ -145,7 +160,14 @@ export function DiscordSettingsCard({
 
     try {
       await navigator.clipboard.writeText(pairingCode);
-      setHint("Code copied — paste it in Discord.");
+      setCopied(true);
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = setTimeout(() => {
+        setCopied(false);
+        copyTimeoutRef.current = null;
+      }, 2000);
     } catch {
       setHint("Copy the code manually.");
     }
@@ -342,10 +364,18 @@ export function DiscordSettingsCard({
                   type="button"
                   size="sm"
                   variant="outline"
+                  className="min-w-[5.25rem] justify-center"
                   onClick={() => void copyHandshakeCode()}
                 >
-                  <CopyIcon className="size-4" />
-                  Copy
+                  {copied ? (
+                    <CheckIcon
+                      className="size-3.5 text-emerald-600 dark:text-emerald-400"
+                      aria-hidden
+                    />
+                  ) : (
+                    <CopyIcon className="size-3.5" aria-hidden />
+                  )}
+                  {copied ? "Copied" : "Copy"}
                 </Button>
                 <Button
                   type="button"

@@ -20,70 +20,46 @@ With Discord enabled, users can:
 
 Discord currently supports **text messages only**. Attachments and voice are not forwarded to the agent.
 
-## Step 1: Create a Discord bot
+## Step 1: Get a bot token
 
-Every Discord setup starts with a bot token from the [Discord Developer Portal](https://discord.com/developers/applications).
+In the [Discord Developer Portal](https://discord.com/developers/applications), create an application, then:
 
-1. Open the portal and create a new application
-2. Open **Bot** in the sidebar
-3. Click **Reset Token** or **Add Bot**, then copy the bot token
-4. Under **Privileged Gateway Intents**, enable **Message Content Intent**
-5. Open **OAuth2 → URL Generator**
-6. Select scopes `bot` and `applications.commands`
-7. Select permissions your server needs (at minimum: Send Messages, Read Message History)
-8. Open the generated invite URL and add the bot to your server
+| Value | Portal location | For Nakama? |
+| --- | --- | --- |
+| **Bot token** | **Bot** | Yes — paste in **Integrations → Discord** |
+| Application ID, Public Key | General Information | No |
 
-Keep the token secret. Anyone with the token can control your Discord bot.
+1. Open **Bot** (not General Information) → **Add Bot** if needed → **Reset Token** → **Copy**
+2. Enable **Message Content Intent** under Privileged Gateway Intents
+3. Open **OAuth2 → URL Generator** — scopes: `bot`, `applications.commands`; permissions: at least Send Messages and Read Message History
+4. Open the invite URL and add the bot to your server
 
-**Message Content Intent** is required for guild messages. If you change intents after inviting the bot, re-invite it so Discord applies the new setting.
+Keep the token secret. If you change intents later, re-invite the bot.
 
-## Step 2: Save Discord settings in Nakama
+## Step 2: Save in Nakama
 
-Open **Integrations → Discord** in the Nakama web app, then:
+Open **Integrations → Discord**, then:
 
 1. Paste the bot token
 2. Choose the default Nakama profile for Discord replies
-3. Save
-
-When you save for the first time, Nakama generates a pairing code for linking your Discord account.
+3. Save — Nakama generates a pairing code on the same page
 
 ## Step 3: Pair your Discord account
 
-Pairing is required so random Discord users cannot talk to your internal Nakama bot.
+Pairing links your Discord user to Nakama so unlinked users cannot use the bot.
 
-1. Copy the pairing code from **Integrations → Discord**
-2. Open a private DM with your bot
-3. Send the pairing code as a normal text message
+1. Copy the pairing code from **Integrations → Discord** (click **Regenerate** if needed)
+2. Open a private DM with your bot and send the code as a plain text message
 
-After a successful match, that Discord user is linked and the pairing code is cleared.
-
-### Why pairing exists
-
-The bot token only connects Nakama to Discord.
-
-Pairing connects **your Discord user account** to Nakama permissions.
-
-That means Nakama can:
-
-- identify which Discord user is talking
-- allow private chat safely
-- apply the right org and profile access
-
-Server channels require DM pairing first. If an unlinked user tries to use the bot in a server, Nakama asks them to link in a private DM.
+After a successful match, that user is linked and the code is cleared. Server channels require DM pairing first.
 
 ## Step 4: Start the Discord bridge
 
-For local development, start it from the repo root:
-
-```bash
-bun run dev:discord
-```
+On **Integrations → Discord**, use the **Bridge worker** controls to start the worker.
 
 The bridge connects to Discord and forwards messages to your Nakama server.
 
-If the Nakama server is not already running, the bridge will try to start it.
-
-For production, start the Discord bridge worker from the **Integrations** page in the Nakama web app instead of using the dev command.
+For local development only, you can instead run `bun run dev:discord` from the repo root.
 
 ## Optional: Direct allowlist instead of pairing
 
@@ -194,7 +170,7 @@ Override the config root with `NAKAMA_CONFIG_DIR` when needed.
 Check these first:
 
 1. The bot token is saved correctly
-2. `bun run dev:discord` is running (or the bridge worker is started from Integrations)
+2. The Discord bridge worker is running (start it from **Integrations → Discord**; use `bun run dev:discord` only in development)
 3. The Nakama server is running
 4. The Discord user is paired or allowlisted
 
@@ -209,12 +185,9 @@ Usually one of these is true:
 
 ### Mentions do not work in servers
 
-Check these:
-
-1. Enable **Message Content Intent** in the Discord Developer Portal
-2. Re-invite the bot after changing intents
-3. Make sure only one Discord bridge worker is running
-4. `@mention` the bot or reply to one of its messages
+1. Re-invite the bot after enabling **Message Content Intent** (see Step 1)
+2. Make sure only one Discord bridge worker is running
+3. `@mention` the bot or reply to one of its messages
 
 ### Discord says to link in a private DM
 
