@@ -66,7 +66,7 @@ export interface AutomationUnreadSummary {
   byAutomationId: Record<string, number>;
 }
 
-export type AgentChannel = "web" | "cli" | "telegram" | "whatsapp" | "automation" | "task";
+export type AgentChannel = "web" | "cli" | "telegram" | "whatsapp" | "discord" | "automation" | "task";
 
 export const NAKAMA_API_VERSION = 1;
 
@@ -123,6 +123,15 @@ export interface TelegramWorkerStatus {
   process?: WorkerProcessInfo;
 }
 
+export interface DiscordWorkerStatus {
+  ok: boolean;
+  configured: boolean;
+  paired: boolean;
+  running: boolean;
+  connected: boolean;
+  process?: WorkerProcessInfo;
+}
+
 export interface WhatsAppWorkerStatus {
   ok: boolean;
   configured: boolean;
@@ -172,6 +181,7 @@ export interface SystemStatusResponse {
   taskWorker: TaskWorkerStatus;
   telegramWorker: TelegramWorkerStatus;
   whatsappWorker: WhatsAppWorkerStatus;
+  discordWorker: DiscordWorkerStatus;
   llmUsage: LlmUsageStatus;
   mcp: McpStatus;
   checkedAt: string;
@@ -255,7 +265,7 @@ export interface AuthUserResponse {
 }
 
 export type OrgRole = "admin" | "member" | "viewer";
-export type ChannelType = "telegram" | "whatsapp";
+export type ChannelType = "telegram" | "whatsapp" | "discord";
 
 export interface OrganizationSummary {
   id: string;
@@ -749,6 +759,22 @@ export interface TelegramSettingsResponse {
 }
 
 export interface UpdateTelegramSettingsRequest {
+  botToken?: string;
+  allowedUserIds?: string;
+  profileId?: string;
+}
+
+export interface DiscordSettingsResponse {
+  configured: boolean;
+  botTokenMasked: string | null;
+  handshakeCode: string | null;
+  pairedUserIds: string[];
+  allowedUserIds: string[];
+  profileId: string;
+  inviteUrl: string | null;
+}
+
+export interface UpdateDiscordSettingsRequest {
   botToken?: string;
   allowedUserIds?: string;
   profileId?: string;

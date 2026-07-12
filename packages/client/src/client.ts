@@ -70,6 +70,7 @@ import type {
   SystemStatusResponse,
   WebPublicUrlSettingsResponse,
   TelegramSettingsResponse,
+  DiscordSettingsResponse,
   ComposioSettingsResponse,
   CodingHarnessSettingsResponse,
   CodingHarnessInstallRequest,
@@ -91,6 +92,7 @@ import type {
   TranscriptionSettings,
   TranscriptionSettingsResponse,
   UpdateTelegramSettingsRequest,
+  UpdateDiscordSettingsRequest,
   UpdateComposioSettingsRequest,
   UpdateEmailSettingsRequest,
   UpdateCodingHarnessSettingsRequest,
@@ -1054,6 +1056,25 @@ export class NakamaClient {
     });
   }
 
+  async getDiscordSettings(): Promise<DiscordSettingsResponse> {
+    return this.request<DiscordSettingsResponse>("/v1/settings/discord");
+  }
+
+  async setDiscordSettings(
+    request: UpdateDiscordSettingsRequest,
+  ): Promise<DiscordSettingsResponse> {
+    return this.request<DiscordSettingsResponse>("/v1/settings/discord", {
+      method: "PUT",
+      body: JSON.stringify(request),
+    });
+  }
+
+  async regenerateDiscordHandshake(): Promise<DiscordSettingsResponse> {
+    return this.request<DiscordSettingsResponse>("/v1/settings/discord/handshake", {
+      method: "POST",
+    });
+  }
+
   async getComposioSettings(): Promise<ComposioSettingsResponse> {
     return this.request<ComposioSettingsResponse>("/v1/settings/composio");
   }
@@ -1066,7 +1087,6 @@ export class NakamaClient {
       body: JSON.stringify(request),
     });
   }
-
   async listNotificationDestinations(): Promise<ListNotificationDestinationsResponse> {
     return this.request<ListNotificationDestinationsResponse>("/v1/notification-destinations");
   }

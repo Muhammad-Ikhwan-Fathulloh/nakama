@@ -54,6 +54,7 @@ import type {
   CodingAgentLaunchPlanResponse,
   PrepareCodingAgentLaunchRequest,
   TelegramSettingsResponse,
+  DiscordSettingsResponse,
   ComposioSettingsResponse,
   EmailSettingsResponse,
   SendEmailTestRequest,
@@ -64,6 +65,7 @@ import type {
   UpdateProfileRequest,
   UpdateSoulFileRequest,
   UpdateTelegramSettingsRequest,
+  UpdateDiscordSettingsRequest,
   UpdateComposioSettingsRequest,
   UpdateEmailSettingsRequest,
   UpdateWhatsAppSettingsRequest,
@@ -112,6 +114,7 @@ import {
   isWritableSoulFileKey,
   loadSoulStack,
   loadTelegramSettingsPublic,
+  loadDiscordSettingsPublic,
   loadComposioSettingsPublic,
   loadEmailSettingsPublic,
   loadEmailConfig,
@@ -128,10 +131,12 @@ import {
   rehydrateAttachmentRefsInContent,
   rehydrateMessagesForProvider as rehydrateAttachmentMessages,
   regenerateTelegramHandshake,
+  regenerateDiscordHandshake,
   regenerateWhatsAppPairingCode,
   replaceImagePartsWithDescriptions,
   resolveSoulStackForProfile,
   saveTelegramConfig,
+  saveDiscordConfig,
   saveComposioConfig,
   saveWhatsAppConfig,
   createSmtpSender,
@@ -711,6 +716,38 @@ export class AgentService {
 
   async regenerateTelegramHandshake(): Promise<TelegramSettingsResponse> {
     return regenerateTelegramHandshake();
+  }
+
+  async getDiscordSettings(): Promise<DiscordSettingsResponse> {
+    return loadDiscordSettingsPublic();
+  }
+
+  async setDiscordSettings(
+    input: UpdateDiscordSettingsRequest,
+  ): Promise<DiscordSettingsResponse> {
+    const existing = await loadDiscordSettingsPublic();
+    const botToken =
+      input.botToken !== undefined && input.botToken.trim()
+        ? input.botToken.trim()
+        : undefined;
+
+    if (!botToken && !existing.configured) {
+      throw new Error("Bot token is required.");
+    }
+
+    return saveDiscordConfig({
+      ...(botToken ? { botToken } : {}),
+      ...(input.allowedUserIds !== undefined
+        ? { allowedUserIds: input.allowedUserIds }
+        : existing.allowedUserIds.length > 0
+          ? { allowedUserIds: existing.allowedUserIds.join(",") }
+          : {}),
+      ...(input.profileId !== undefined ? { profileId: input.profileId } : {}),
+    });
+  }
+
+  async regenerateDiscordHandshake(): Promise<DiscordSettingsResponse> {
+    return regenerateDiscordHandshake();
   }
 
   async getComposioSettings(): Promise<ComposioSettingsResponse> {
@@ -2566,7 +2603,15 @@ export class AgentService {
 }
 
 function parseAgentChannel(value: string): AgentChannel | null {
-  if (value === "cli" || value === "web" || value === "telegram" || value === "whatsapp" || value === "automation") {
+  if (
+    value === "cli" ||
+    value === "web" ||
+    value === "telegram" ||
+    value === "whatsapp" ||
+    value === "discord" ||
+    value === "automation" ||
+    value === "task"
+  ) {
     return value;
   }
 

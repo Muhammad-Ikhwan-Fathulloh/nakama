@@ -67,7 +67,7 @@ For each backend:
 3. **Verify** readiness — Nakama checks that the binary runs and is authenticated
 4. **Save** workspace settings
 
-Until at least one harness is installed and verified, coding-agent workflows are unavailable. When exactly one harness is ready and none is selected yet, Nakama auto-selects it at runtime.
+Until at least one harness is installed, verified, and **saved as the active selection**, coding-agent workflows are unavailable.
 
 ### Model routing (inference gateway)
 

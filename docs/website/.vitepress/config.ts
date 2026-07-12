@@ -24,6 +24,7 @@ const pageDescriptions: Record<string, string> = {
   'coding-agent.md': 'Launch Codex, Claude Code, or OpenCode from Nakama chat or the CLI, with optional inference gateway routing through your Nakama provider.',
   'telegram.md': 'Set up Nakama as a Telegram bot with pairing, commands, and group behavior.',
   'whatsapp.md': 'Set up Nakama on WhatsApp with linking, commands, and troubleshooting.',
+  'discord.md': 'Set up Nakama as a Discord bot with pairing, slash commands, and server behavior.',
 }
 
 const pageTitles: Record<string, string> = {
@@ -40,6 +41,7 @@ const pageTitles: Record<string, string> = {
   'coding-agent.md': 'Coding Agent',
   'telegram.md': 'Telegram',
   'whatsapp.md': 'WhatsApp',
+  'discord.md': 'Discord',
 }
 
 function getPageDescription(relativePath: string) {
@@ -158,7 +160,7 @@ function buildLlmsTxt(pages: string[]) {
     '',
     `> ${SITE_DESCRIPTION} ${SITE_TAGLINE}`,
     '',
-    `${SITE_NAME} is AI agents that work with your team. Each profile is an agent with its own role, soul, tools, and memory. Organizations, skills, MCP servers, and channels like web, CLI, Telegram, and WhatsApp let you run your nakama from one deployment.`,
+    `${SITE_NAME} is AI agents that work with your team. Each profile is an agent with its own role, soul, tools, and memory. Organizations, skills, MCP servers, and channels like web, CLI, Telegram, WhatsApp, and Discord let you run your nakama from one deployment.`,
     '',
     `Maintainer: ${AUTHOR_NAME} (${AUTHOR_ROLE})`,
     `Website: ${SITE_URL}/`,
@@ -265,6 +267,7 @@ export default defineConfig({
           { text: 'Getting Started', link: '/getting-started' },
           { text: 'Telegram', link: '/telegram' },
           { text: 'WhatsApp', link: '/whatsapp' },
+          { text: 'Discord', link: '/discord' },
         ],
       },
       {

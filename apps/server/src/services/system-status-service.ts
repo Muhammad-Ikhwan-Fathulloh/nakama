@@ -3,6 +3,7 @@ import {
   getAutomationWorkerHeartbeatStatus,
   getTelegramWorkerStatus,
   getWhatsAppWorkerStatus,
+  getDiscordWorkerStatus,
   isComposioConfiguredAsync,
   NAKAMA_API_VERSION,
 } from "@nakama/core";
@@ -37,9 +38,10 @@ export class SystemStatusService {
     const automationManagedOnline =
       automationProcess?.managed === true && automationProcess.status === "online";
 
-    const [telegramStatus, whatsappStatus] = await Promise.all([
+    const [telegramStatus, whatsappStatus, discordStatus] = await Promise.all([
       this.resolveWorkerStatus("telegram", statuses.telegram),
       this.resolveWorkerStatus("whatsapp", statuses.whatsapp),
+      this.resolveWorkerStatus("discord", statuses.discord),
     ]);
 
     return {
@@ -59,6 +61,7 @@ export class SystemStatusService {
       },
       telegramWorker: telegramStatus,
       whatsappWorker: whatsappStatus,
+      discordWorker: discordStatus,
       llmUsage: this.getLlmUsage(
         models.provider,
         usageFields.currentModel,
@@ -74,7 +77,7 @@ export class SystemStatusService {
   }
 
   private async resolveWorkerStatus(
-    name: "telegram" | "whatsapp",
+    name: "telegram" | "whatsapp" | "discord",
     pm2Status: WorkerProcessInfo | null,
   ) {
     if (pm2Status?.managed) {
@@ -82,6 +85,15 @@ export class SystemStatusService {
 
       if (name === "telegram") {
         const heartbeat = await getTelegramWorkerStatus();
+        return {
+          ...heartbeat,
+          running,
+          process: pm2Status,
+        };
+      }
+
+      if (name === "discord") {
+        const heartbeat = await getDiscordWorkerStatus();
         return {
           ...heartbeat,
           running,
@@ -98,12 +110,14 @@ export class SystemStatusService {
     }
 
     if (name === "telegram") {
-      const heartbeat = await getTelegramWorkerStatus();
-      return heartbeat;
+      return getTelegramWorkerStatus();
     }
 
-    const heartbeat = await getWhatsAppWorkerStatus();
-    return heartbeat;
+    if (name === "discord") {
+      return getDiscordWorkerStatus();
+    }
+
+    return getWhatsAppWorkerStatus();
   }
 
   private getLlmUsage(

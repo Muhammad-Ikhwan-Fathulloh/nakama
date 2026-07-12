@@ -53,6 +53,7 @@ The chat runtime then wraps the profile prompt with general chat instructions:
 - Artifact guidance when `write_file` is available (bundled `save-artifact` skill)
 - Coding-agent harness context when `coding-delegation` matches ([Coding agent](/coding-agent))
 - Telegram or WhatsApp behavior when the message comes from those channels
+- Discord behavior when the message comes from a server channel (public replies)
 
 When soul is active, Nakama tells the agent to use tools while staying in character.
 

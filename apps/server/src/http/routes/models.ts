@@ -11,6 +11,7 @@ import {
   type ListTimezonesResponse,
   type ModelsResponse,
   type TelegramSettingsResponse,
+  type DiscordSettingsResponse,
   type ComposioSettingsResponse,
   type CodingHarnessSettingsResponse,
   type CodingHarnessInstallRequest,
@@ -24,6 +25,7 @@ import {
   type UpdateProviderRequest,
   type UpdateProviderResponse,
   type UpdateTelegramSettingsRequest,
+  type UpdateDiscordSettingsRequest,
   type UpdateComposioSettingsRequest,
   type UpdateEmailSettingsRequest,
   type UpdateCodingHarnessSettingsRequest,
@@ -76,6 +78,7 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
     .passthrough()
     .openapi("TranscribeAudioResponse");
   const telegramSettingsSchema = z.object({}).passthrough().openapi("TelegramSettingsResponse");
+  const discordSettingsSchema = z.object({}).passthrough().openapi("DiscordSettingsResponse");
   const composioSettingsSchema = z.object({}).passthrough().openapi("ComposioSettingsResponse");
   const emailSettingsSchema = z.object({}).passthrough().openapi("EmailSettingsResponse");
   const codingHarnessSettingsSchema = z
@@ -119,6 +122,7 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
   const updateThinkingRequestSchema = z.object({}).passthrough().openapi("UpdateThinkingRequest");
   const updateVisionRequestSchema = z.object({ model: z.string().nullable() }).openapi("UpdateVisionRequest");
   const updateTelegramRequestSchema = z.object({}).passthrough().openapi("UpdateTelegramSettingsRequest");
+  const updateDiscordRequestSchema = z.object({}).passthrough().openapi("UpdateDiscordSettingsRequest");
   const updateComposioRequestSchema = z.object({}).passthrough().openapi("UpdateComposioSettingsRequest");
   const updateWhatsappRequestSchema = z.object({}).passthrough().openapi("UpdateWhatsAppSettingsRequest");
   const modelQuerySchema = z.object({ source: z.enum(["catalog", "remote"]).optional() });
@@ -328,6 +332,31 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
     summary: "Regenerate Telegram handshake",
     operationId: "regenerateTelegramHandshake",
     responses: { 200: { description: "Telegram settings", content: { "application/json": { schema: telegramSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
+  }));
+  app.openAPIRegistry.registerPath(createRoute({
+    method: "get",
+    path: "/v1/settings/discord",
+    tags: ["Models"],
+    summary: "Get Discord settings",
+    operationId: "getDiscordSettings",
+    responses: { 200: { description: "Discord settings", content: { "application/json": { schema: discordSettingsSchema } } } },
+  }));
+  app.openAPIRegistry.registerPath(createRoute({
+    method: "put",
+    path: "/v1/settings/discord",
+    tags: ["Models"],
+    summary: "Update Discord settings",
+    operationId: "setDiscordSettings",
+    request: { body: { required: true, content: { "application/json": { schema: updateDiscordRequestSchema } } } },
+    responses: { 200: { description: "Discord settings", content: { "application/json": { schema: discordSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
+  }));
+  app.openAPIRegistry.registerPath(createRoute({
+    method: "post",
+    path: "/v1/settings/discord/handshake",
+    tags: ["Models"],
+    summary: "Regenerate Discord handshake",
+    operationId: "regenerateDiscordHandshake",
+    responses: { 200: { description: "Discord settings", content: { "application/json": { schema: discordSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
   }));
   app.openAPIRegistry.registerPath(createRoute({
     method: "get",
@@ -691,6 +720,33 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
     }
   });
 
+  app.get("/v1/settings/discord", async () => {
+    return json<DiscordSettingsResponse>(await agent.getDiscordSettings());
+  });
+
+  app.put("/v1/settings/discord", async (c) => {
+    const body = await readJson<UpdateDiscordSettingsRequest>(c.req.raw);
+
+    try {
+      return json<DiscordSettingsResponse>(await agent.setDiscordSettings(body));
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.post("/v1/settings/discord/handshake", async () => {
+    try {
+      return json<DiscordSettingsResponse>(await agent.regenerateDiscordHandshake());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return errorResponse(message, 400);
+    }
+  });
+
   app.get("/v1/settings/composio", async () => {
     return json<ComposioSettingsResponse>(await agent.getComposioSettings());
   });
@@ -708,7 +764,6 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
       return errorResponse(message, 400);
     }
   });
-
   app.get("/v1/settings/whatsapp", async () => {
     return json<WhatsAppSettingsResponse>(await agent.getWhatsAppSettings());
   });

@@ -1,13 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import {
-  BotIcon,
-  CheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   CopyIcon,
   DownloadIcon,
-  KeyRoundIcon,
-  LaptopMinimalCheckIcon,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
@@ -61,51 +57,6 @@ export function CodingHarnessSettingsPanel({
     setHint(null);
     setFormError(null);
   }, [settings]);
-
-  const selectedHarness =
-    settings?.harnesses.find((harness) => harness.id === selectedHarnessId) ?? null;
-
-  const summary = useMemo(() => {
-    if (!selectedHarness) {
-      return {
-        tone: "warn" as const,
-        label: "Pick an agent",
-      };
-    }
-
-    if (!selectedHarness.installed) {
-      return {
-        tone: "warn" as const,
-        label: `Install ${selectedHarness.name}`,
-      };
-    }
-
-    if (verifyMutation.isPending) {
-      return {
-        tone: "neutral" as const,
-        label: "Checking readiness",
-      };
-    }
-
-    if (selectedHarness.ready) {
-      return {
-        tone: "ok" as const,
-        label: `${selectedHarness.name} is ready`,
-      };
-    }
-
-    if (selectedHarness.nextStep === "login") {
-      return {
-        tone: "warn" as const,
-        label: `Login required for ${selectedHarness.name}`,
-      };
-    }
-
-    return {
-      tone: "warn" as const,
-      label: "Run readiness check",
-    };
-  }, [selectedHarness, verifyMutation.isPending]);
 
   function selectHarness(harnessId: string) {
     setSelectedHarnessId(harnessId);
@@ -251,30 +202,16 @@ export function CodingHarnessSettingsPanel({
               Nakama can hand off coding tasks to a CLI agent on this server.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={cn(
-                "rounded-full border px-2.5 py-1 text-xs font-medium",
-                summary.tone === "ok"
-                  ? "border-primary/25 bg-primary/10 text-primary"
-                  : summary.tone === "neutral"
-                    ? "border-border bg-muted text-muted-foreground"
-                    : "border-accent-500/25 bg-accent-500/10 text-accent-500",
-              )}
+          {!embedded ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              render={<Link to="/integrations?section=coding-agents" />}
             >
-              {summary.label}
-            </span>
-            {!embedded ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                render={<Link to="/integrations?section=coding-agents" />}
-              >
-                Open in Integrations
-              </Button>
-            ) : null}
-          </div>
+              Open in Integrations
+            </Button>
+          ) : null}
         </div>
 
         {formError ? (
@@ -298,26 +235,21 @@ export function CodingHarnessSettingsPanel({
                 key={harness.id}
                 className={cn(
                   "overflow-hidden rounded-lg border transition-colors",
+                  expanded && "divide-y",
                   selected
-                    ? "border-primary/20 bg-primary/[0.06]"
-                    : "border-border bg-background",
+                    ? cn(
+                        "border-primary/35 bg-primary/[0.06]",
+                        expanded && "divide-primary/25",
+                      )
+                    : cn("border-border bg-background", expanded && "divide-border"),
                 )}
               >
                 <div className="flex items-start gap-3 px-4 py-3.5">
                   <button
                     type="button"
-                    className="flex min-w-0 flex-1 items-start gap-3 text-left"
+                    className="min-w-0 flex-1 text-left"
                     onClick={() => selectHarness(harness.id)}
                   >
-                    <BotIcon
-                      className={cn(
-                        "mt-0.5 size-4 shrink-0",
-                        selected ? "text-primary" : "text-muted-foreground",
-                      )}
-                      strokeWidth={1.75}
-                      aria-hidden
-                    />
-
                     <span className="min-w-0 flex-1 space-y-2">
                       <span className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-medium text-foreground">{harness.name}</span>
@@ -330,12 +262,10 @@ export function CodingHarnessSettingsPanel({
 
                       <span className="flex flex-wrap gap-1.5 text-xs">
                         <StatusChip
-                          icon={<LaptopMinimalCheckIcon className="size-3.5" />}
                           variant={harness.installed ? "solid-ok" : "solid-warn"}
                           label={harness.installed ? "Installed" : "Not installed"}
                         />
                         <StatusChip
-                          icon={<KeyRoundIcon className="size-3.5" />}
                           variant={
                             !harness.installed
                               ? "muted"
@@ -356,7 +286,6 @@ export function CodingHarnessSettingsPanel({
                           }
                         />
                         <StatusChip
-                          icon={<CheckIcon className="size-3.5" />}
                           variant={harness.ready ? "ok" : "muted"}
                           label={harness.ready ? "Ready" : "Not ready yet"}
                         />
@@ -366,8 +295,7 @@ export function CodingHarnessSettingsPanel({
 
                   <div className="flex shrink-0 items-center gap-2 pt-0.5">
                     {selected ? (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
-                        <CheckIcon className="size-3.5" aria-hidden />
+                      <span className="inline-flex items-center rounded-full border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
                         Selected
                       </span>
                     ) : null}
@@ -388,7 +316,9 @@ export function CodingHarnessSettingsPanel({
                 </div>
 
                 {expanded ? (
-                  <div className="border-t border-border/60 px-4 py-3 pl-11">
+                  <div
+                    className={cn("px-4 py-3", selected ? "bg-primary/[0.04]" : "bg-muted/20")}
+                  >
                     <p className="text-sm text-muted-foreground">
                       {!harness.installed
                         ? harness.installHint
@@ -483,14 +413,12 @@ function CodingHarnessSettingsSkeleton({ embedded = false }: { embedded?: boolea
             <div className="skeleton-shimmer h-5 w-28 rounded" />
             <div className="skeleton-shimmer h-4 w-full max-w-sm rounded" />
           </div>
-          <div className="skeleton-shimmer h-7 w-32 rounded-full" />
         </div>
 
         <div className="space-y-3">
           {Array.from({ length: 3 }).map((_, index) => (
             <div key={index} className="rounded-lg border border-border px-4 py-3.5">
               <div className="flex items-start gap-3">
-                <div className="skeleton-shimmer mt-0.5 size-4 shrink-0 rounded" />
                 <div className="min-w-0 flex-1 space-y-2.5">
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="skeleton-shimmer h-4 w-24 rounded" />
@@ -521,25 +449,22 @@ function CodingHarnessSettingsSkeleton({ embedded = false }: { embedded?: boolea
 }
 
 function StatusChip({
-  icon,
   variant,
   label,
 }: {
-  icon: ReactNode;
   variant: "solid-ok" | "ok" | "solid-warn" | "muted";
   label: string;
 }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5",
+        "inline-flex items-center rounded-full px-2 py-0.5",
         variant === "solid-ok" && "bg-primary text-primary-foreground",
         variant === "ok" && "border border-primary/20 bg-primary/5 text-primary",
         variant === "solid-warn" && "bg-accent-500/15 text-accent-600 dark:text-accent-400",
         variant === "muted" && "bg-muted/80 text-muted-foreground",
       )}
     >
-      {icon}
       {label}
     </span>
   );
