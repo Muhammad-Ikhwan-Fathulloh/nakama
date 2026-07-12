@@ -68,8 +68,10 @@ import type {
   RunAutomationResponse,
   StoredAutomation,
   SystemStatusResponse,
+  WebPublicUrlSettingsResponse,
   TelegramSettingsResponse,
   DiscordSettingsResponse,
+  ComposioSettingsResponse,
   CodingHarnessSettingsResponse,
   CodingHarnessInstallRequest,
   CodingHarnessStatus,
@@ -91,10 +93,17 @@ import type {
   TranscriptionSettingsResponse,
   UpdateTelegramSettingsRequest,
   UpdateDiscordSettingsRequest,
+  UpdateComposioSettingsRequest,
   UpdateEmailSettingsRequest,
   UpdateCodingHarnessSettingsRequest,
   PrepareCodingAgentLaunchRequest,
   CodingAgentLaunchPlanResponse,
+  ComposioConnectRequest,
+  ComposioConnectResponse,
+  ComposioToolkitSummary,
+  ListComposioToolkitsResponse,
+  ListProfileComposioToolkitsResponse,
+  UpdateProfileComposioToolkitsRequest,
   UpdateWhatsAppSettingsRequest,
   UpdateTimezoneRequest,
   VisionSettings,
@@ -112,6 +121,7 @@ import type {
   TaskMessagesResponse,
   AuthUserResponse,
   SetupAuthRequest,
+  UpdateWebPublicUrlRequest,
   CreateOrganizationRequest,
   CreateOrganizationResponse,
   CreateNotificationDestinationRequest,
@@ -163,6 +173,7 @@ export class NakamaClient {
   readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly credentials: RequestCredentials;
+  private readonly clientOrigin: string | null;
   private authToken: string | null;
   private orgId: string | null;
 
@@ -171,6 +182,7 @@ export class NakamaClient {
     const fetchFn = options.fetch ?? fetch;
     this.fetchImpl = ((input, init) => fetchFn(input, init)) as typeof fetch;
     this.credentials = options.credentials ?? "include";
+    this.clientOrigin = options.clientOrigin?.trim().replace(/\/$/, "") || null;
     this.authToken = options.authToken ?? null;
     this.orgId = options.orgId ?? null;
   }
@@ -194,6 +206,17 @@ export class NakamaClient {
 
   async getSystemStatus(): Promise<SystemStatusResponse> {
     return this.request<SystemStatusResponse>("/v1/system/status");
+  }
+
+  async getWebPublicUrl(): Promise<WebPublicUrlSettingsResponse> {
+    return this.request<WebPublicUrlSettingsResponse>("/v1/system/web-public-url");
+  }
+
+  async updateWebPublicUrl(webPublicUrl: string): Promise<{ webPublicUrl: string }> {
+    return this.request<{ webPublicUrl: string }>("/v1/system/web-public-url", {
+      method: "PUT",
+      body: JSON.stringify({ webPublicUrl } satisfies UpdateWebPublicUrlRequest),
+    });
   }
 
   async exportData(): Promise<{
@@ -708,7 +731,7 @@ export class NakamaClient {
     return {
       id: sessionId,
       send: async (input: SendMessageArg) => {
-        const body = resolveSendMessageBody(input);
+        const body = resolveSendMessageBody(input, this.clientOrigin ?? undefined);
         const response = await this.request<SendMessageResponse>(
           `/v1/sessions/${sessionId}/messages`,
           {
@@ -725,7 +748,7 @@ export class NakamaClient {
         options?: SendStreamOptions,
       ) => {
         const handlers = normalizeStreamHandlers(handler);
-        const body = { ...resolveSendMessageBody(input), stream: true };
+        const body = { ...resolveSendMessageBody(input, this.clientOrigin ?? undefined), stream: true };
         const headers = this.buildHeaders("POST", {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
@@ -1052,6 +1075,18 @@ export class NakamaClient {
     });
   }
 
+  async getComposioSettings(): Promise<ComposioSettingsResponse> {
+    return this.request<ComposioSettingsResponse>("/v1/settings/composio");
+  }
+
+  async setComposioSettings(
+    request: UpdateComposioSettingsRequest,
+  ): Promise<ComposioSettingsResponse> {
+    return this.request<ComposioSettingsResponse>("/v1/settings/composio", {
+      method: "PUT",
+      body: JSON.stringify(request),
+    });
+  }
   async listNotificationDestinations(): Promise<ListNotificationDestinationsResponse> {
     return this.request<ListNotificationDestinationsResponse>("/v1/notification-destinations");
   }
@@ -1094,6 +1129,75 @@ export class NakamaClient {
       `/v1/notification-destinations/${encodeURIComponent(destinationId)}`,
       {
         method: "DELETE",
+      },
+    );
+  }
+
+  async listComposioToolkits(): Promise<ListComposioToolkitsResponse> {
+    return this.request<ListComposioToolkitsResponse>("/v1/composio/toolkits");
+  }
+
+  async enableComposioToolkit(toolkitSlug: string): Promise<ComposioToolkitSummary> {
+    return this.request<ComposioToolkitSummary>(
+      `/v1/composio/toolkits/${encodeURIComponent(toolkitSlug)}/enable`,
+      { method: "POST", body: JSON.stringify({ toolkitSlug }) },
+    );
+  }
+
+  async disableComposioToolkit(toolkitSlug: string): Promise<ComposioToolkitSummary> {
+    return this.request<ComposioToolkitSummary>(
+      `/v1/composio/toolkits/${encodeURIComponent(toolkitSlug)}/disable`,
+      { method: "POST" },
+    );
+  }
+
+  async connectComposioToolkit(toolkitSlug: string): Promise<ComposioConnectResponse> {
+    const body: ComposioConnectRequest = {};
+
+    if (typeof window !== "undefined" && window.location?.origin) {
+      body.callbackOrigin = window.location.origin;
+    }
+
+    return this.request<ComposioConnectResponse>(
+      `/v1/composio/toolkits/${encodeURIComponent(toolkitSlug)}/connect`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
+  }
+
+  async disconnectComposioToolkit(toolkitSlug: string): Promise<ComposioToolkitSummary> {
+    return this.request<ComposioToolkitSummary>(
+      `/v1/composio/toolkits/${encodeURIComponent(toolkitSlug)}/disconnect`,
+      { method: "POST" },
+    );
+  }
+
+  async syncComposioToolkit(toolkitSlug: string): Promise<ComposioToolkitSummary> {
+    return this.request<ComposioToolkitSummary>(
+      `/v1/composio/toolkits/${encodeURIComponent(toolkitSlug)}/sync`,
+      { method: "POST" },
+    );
+  }
+
+  async listProfileComposioToolkits(
+    profileId: string,
+  ): Promise<ListProfileComposioToolkitsResponse> {
+    return this.request<ListProfileComposioToolkitsResponse>(
+      `/v1/profiles/${encodeURIComponent(profileId)}/composio-toolkits`,
+    );
+  }
+
+  async updateProfileComposioToolkits(
+    profileId: string,
+    request: UpdateProfileComposioToolkitsRequest,
+  ): Promise<ListProfileComposioToolkitsResponse> {
+    return this.request<ListProfileComposioToolkitsResponse>(
+      `/v1/profiles/${encodeURIComponent(profileId)}/composio-toolkits`,
+      {
+        method: "PUT",
+        body: JSON.stringify(request),
       },
     );
   }

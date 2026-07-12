@@ -75,6 +75,10 @@ export interface HealthResponse {
   apiVersion: typeof NAKAMA_API_VERSION;
   providerConfigured: boolean;
   userConfigured: boolean;
+  /** A Composio project API key is saved on this server. */
+  composioConfigured: boolean;
+  /** Nakama can reach the Composio API with the saved key. */
+  composioAvailable: boolean;
 }
 
 export interface AutomationSchedule {
@@ -239,6 +243,18 @@ export interface SetupAuthRequest {
     phone?: string;
     password: string;
   };
+  /** Public web app origin (e.g. window.location.origin) for OAuth callbacks. */
+  webPublicUrl?: string;
+}
+
+export interface UpdateWebPublicUrlRequest {
+  webPublicUrl: string;
+}
+
+export interface WebPublicUrlSettingsResponse {
+  webPublicUrl: string | null;
+  /** Set when NAKAMA_WEB_PUBLIC_URL / NAKAMA_PUBLIC_URL overrides the saved value. */
+  envOverride: string | null;
 }
 
 export interface AuthUserResponse {
@@ -504,6 +520,8 @@ export interface SendMessageInput {
   message: string;
   images?: ImageAttachment[];
   documents?: DocumentAttachment[];
+  /** Browser origin for OAuth callbacks (e.g. window.location.origin). */
+  clientOrigin?: string;
 }
 
 export interface SendMessageRequest {
@@ -511,6 +529,7 @@ export interface SendMessageRequest {
   images?: ImageAttachment[];
   documents?: DocumentAttachment[];
   stream?: boolean;
+  clientOrigin?: string;
 }
 
 export interface SendMessageResponse {
@@ -758,6 +777,16 @@ export interface UpdateDiscordSettingsRequest {
   botToken?: string;
   allowedUserIds?: string;
   profileId?: string;
+}
+
+export interface ComposioSettingsResponse {
+  configured: boolean;
+  apiKeyMasked: string | null;
+  composioReachable: boolean;
+}
+
+export interface UpdateComposioSettingsRequest {
+  apiKey?: string;
 }
 
 export type NotificationDestinationChannel = "telegram";
@@ -1541,6 +1570,8 @@ export interface ToolContext {
   orgId?: string;
   profileId?: string;
   sessionId?: string;
+  /** Browser origin for OAuth callbacks during this tool run. */
+  clientOrigin?: string;
   /** Profile workspace root (~/.nakama/orgs/{orgId}/profiles/{profileId}/). */
   workspaceRoot?: string;
 }
@@ -1550,4 +1581,99 @@ export interface ToolDefinition<Input = unknown, Output = unknown> {
   description: string;
   parameters?: JsonSchema;
   run(input: Input, context: ToolContext): Promise<Output>;
+}
+
+export const COMPOSIO_TOOLKIT_SLUG_PATTERN = /^[a-z0-9_-]+$/;
+
+export type ComposioOrgToolkitStatus = "disabled" | "enabled";
+
+export type ComposioUserConnectionStatus = "oauth_in_progress" | "connected" | "error";
+
+/** @deprecated Org catalog uses ComposioOrgToolkitStatus; user rows use ComposioUserConnectionStatus. */
+export type ComposioToolkitStatus =
+  | ComposioOrgToolkitStatus
+  | ComposioUserConnectionStatus;
+
+export type ComposioToolErrorCode = "COMPOSIO_NOT_CONNECTED" | "COMPOSIO_TRANSIENT" | "COMPOSIO_POLICY";
+
+export interface ComposioCachedToolSummary {
+  slug: string;
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface ComposioToolkitSummary {
+  id: string;
+  toolkitSlug: string;
+  displayName: string;
+  status: ComposioOrgToolkitStatus;
+  cachedTools: ComposioCachedToolSummary[];
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export interface ComposioUserConnectionSummary {
+  id: string;
+  toolkitId: string;
+  toolkitSlug: string;
+  status: ComposioUserConnectionStatus;
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export interface ComposioCatalogToolkitSummary {
+  slug: string;
+  name: string;
+  description: string | null;
+  logoUrl: string | null;
+}
+
+export interface ListComposioToolkitsResponse {
+  /** A Composio project API key is saved on this server. */
+  configured: boolean;
+  /** Nakama can reach the Composio API with the saved key. */
+  composioReachable: boolean;
+  /** @deprecated Use composioReachable. */
+  composioAvailable: boolean;
+  catalog: ComposioCatalogToolkitSummary[];
+  orgToolkits: ComposioToolkitSummary[];
+  userConnections: ComposioUserConnectionSummary[];
+  catalogError: string | null;
+}
+
+export interface EnableComposioToolkitRequest {
+  toolkitSlug: string;
+}
+
+export interface ComposioConnectRequest {
+  /** Browser origin for OAuth callback (e.g. http://localhost:3003). */
+  callbackOrigin?: string;
+}
+
+export interface ComposioConnectResponse {
+  redirectUrl: string;
+}
+
+export interface ProfileComposioToolkitAssignment {
+  toolkitId: string;
+  toolkitSlug: string;
+  allowedActions: string[] | null;
+}
+
+export interface ListProfileComposioToolkitsResponse {
+  assignments: ProfileComposioToolkitAssignment[];
+}
+
+export interface UpdateProfileComposioToolkitsRequest {
+  assignments: Array<{
+    toolkitId: string;
+    allowedActions?: string[] | null;
+  }>;
+}
+
+export interface ComposioToolErrorResult {
+  error: string;
+  code: ComposioToolErrorCode;
+  toolkitSlug?: string;
 }

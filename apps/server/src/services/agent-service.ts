@@ -55,6 +55,7 @@ import type {
   PrepareCodingAgentLaunchRequest,
   TelegramSettingsResponse,
   DiscordSettingsResponse,
+  ComposioSettingsResponse,
   EmailSettingsResponse,
   SendEmailTestRequest,
   SendEmailTestResponse,
@@ -65,6 +66,7 @@ import type {
   UpdateSoulFileRequest,
   UpdateTelegramSettingsRequest,
   UpdateDiscordSettingsRequest,
+  UpdateComposioSettingsRequest,
   UpdateEmailSettingsRequest,
   UpdateWhatsAppSettingsRequest,
   UpdateUserContextRequest,
@@ -113,6 +115,7 @@ import {
   loadSoulStack,
   loadTelegramSettingsPublic,
   loadDiscordSettingsPublic,
+  loadComposioSettingsPublic,
   loadEmailSettingsPublic,
   loadEmailConfig,
   isEmailConfigComplete,
@@ -134,6 +137,7 @@ import {
   resolveSoulStackForProfile,
   saveTelegramConfig,
   saveDiscordConfig,
+  saveComposioConfig,
   saveWhatsAppConfig,
   createSmtpSender,
   loadUserThinkingSettings,
@@ -208,6 +212,11 @@ import {
 } from "./session-persistence";
 import type { TaskRunner } from "./task-runner";
 import { buildMcpToolDefinitions } from "./mcp-tool-bridge";
+import {
+  buildComposioConnectTools,
+  buildComposioToolDefinitions,
+} from "./composio-tool-bridge";
+import type { ComposioService } from "./composio-service";
 import type { McpClientManager } from "./mcp-client-manager";
 import type { McpService } from "./mcp-service";
 import { ProfileService } from "./profile-service";
@@ -268,6 +277,7 @@ export class AgentService {
   private taskRunner: TaskRunner | null = null;
   private mcpClientManager: McpClientManager | null = null;
   private mcpService: McpService | null = null;
+  private composioService: ComposioService | null = null;
   private skillsService: SkillsService | null = null;
   private readonly sessions = new Map<string, StoredSession>();
   private readonly sessionTitleService: SessionTitleService;
@@ -328,6 +338,10 @@ export class AgentService {
 
   setMcpService(service: McpService): void {
     this.mcpService = service;
+  }
+
+  setComposioService(service: ComposioService): void {
+    this.composioService = service;
   }
 
   setSkillsService(service: SkillsService): void {
@@ -734,6 +748,38 @@ export class AgentService {
 
   async regenerateDiscordHandshake(): Promise<DiscordSettingsResponse> {
     return regenerateDiscordHandshake();
+  }
+
+  async getComposioSettings(): Promise<ComposioSettingsResponse> {
+    const settings = await loadComposioSettingsPublic();
+    return {
+      ...settings,
+      composioReachable: settings.configured
+        ? await (this.composioService?.isReachable() ?? false)
+        : false,
+    };
+  }
+
+  async setComposioSettings(
+    input: UpdateComposioSettingsRequest,
+  ): Promise<ComposioSettingsResponse> {
+    const existing = await loadComposioSettingsPublic();
+    const apiKey =
+      input.apiKey !== undefined && input.apiKey.trim()
+        ? input.apiKey.trim()
+        : undefined;
+
+    if (!apiKey && !existing.configured) {
+      throw new Error("Composio API key is required.");
+    }
+
+    if (apiKey) {
+      await this.composioService?.validateConfiguration(apiKey);
+      await saveComposioConfig({ apiKey });
+      this.composioService?.reloadConfiguration();
+    }
+
+    return this.getComposioSettings();
   }
 
   async getEmailSettings(): Promise<EmailSettingsResponse> {
@@ -2132,7 +2178,7 @@ export class AgentService {
 
   private async resolveProfileTools(
     profile: StoredProfileRecord,
-    options: { includeAutomationTools?: boolean; includeTodoTools?: boolean } = {},
+    options: { includeAutomationTools?: boolean; includeTodoTools?: boolean; userId?: string | null } = {},
   ): Promise<ToolDefinition[]> {
     const storedTools = await this.db.listToolsForProfile(profile.id);
     const tools = await resolveProfileStoredTools(storedTools, this.db);
@@ -2152,6 +2198,31 @@ export class AgentService {
       resolved = [
         ...resolved,
         ...buildMcpToolDefinitions(mcpServers, this.mcpClientManager, orgId, profile.id),
+      ];
+    }
+
+    if (this.composioService && this.mcpClientManager && options.userId) {
+      const orgId = profile.orgId;
+
+      if (!orgId) {
+        throw new Error("Profile organization is missing.");
+      }
+
+      resolved = [
+        ...resolved,
+        ...(await buildComposioConnectTools(
+          orgId,
+          options.userId,
+          profile.id,
+          this.composioService,
+        )),
+        ...(await buildComposioToolDefinitions(
+          orgId,
+          options.userId,
+          profile.id,
+          this.composioService,
+          this.mcpClientManager,
+        )),
       ];
     }
 
@@ -2194,7 +2265,7 @@ export class AgentService {
   ): Promise<AgentChatSession> {
     await this.ensureVisionSettingsLoaded();
     const profile = await this.requireProfile(orgId, profileId);
-    const tools = await this.resolveProfileTools(profile);
+    const tools = await this.resolveProfileTools(profile, { userId });
     const { systemPrompt, soulActive } = await this.resolveProfileSystemPrompt(
       orgId,
       profileId,
@@ -2238,6 +2309,18 @@ export class AgentService {
 
         if (todoContext.trim()) {
           parts.push(todoContext.trim());
+        }
+
+        if (this.composioService && userId) {
+          const composioContext = await this.composioService.formatProfileConnectionsContext(
+            orgId,
+            userId,
+            profileId,
+          );
+
+          if (composioContext.trim()) {
+            parts.push(composioContext.trim());
+          }
         }
 
         if (this.skillsService && context?.userMessage?.trim()) {
