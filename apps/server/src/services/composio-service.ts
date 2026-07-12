@@ -321,7 +321,10 @@ export class ComposioService {
     return { redirectUrl: link.redirectUrl };
   }
 
-  async completeOAuth(state: string): Promise<{ orgId: string; toolkitSlug: string }> {
+  async completeOAuth(
+    state: string,
+    options: { connectedAccountId?: string | null } = {},
+  ): Promise<{ orgId: string; toolkitSlug: string }> {
     await this.requireAvailable();
 
     let payload: ComposioOAuthStatePayload;
@@ -351,9 +354,13 @@ export class ComposioService {
       throw new NakamaApiError("Invalid OAuth state.", 400);
     }
 
+    const connectedAccountId =
+      options.connectedAccountId?.trim() || connection.connectedAccountId || null;
+
     const updatedConnection: StoredComposioUserConnectionRecord = {
       ...connection,
       status: "connected",
+      connectedAccountId,
       oauthStateHash: null,
       lastError: null,
       updatedAt: new Date().toISOString(),

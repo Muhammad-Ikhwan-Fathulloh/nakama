@@ -183,6 +183,43 @@ export async function resolveAuthConfigId(
   return created.id;
 }
 
+export function parseSessionToolItems(
+  items: Array<{
+    slug?: unknown;
+    name?: unknown;
+    description?: unknown;
+    inputParameters?: unknown;
+    input_parameters?: unknown;
+  }>,
+): ComposioCachedToolSummary[] {
+  return items
+    .map((tool) => {
+      const slug = typeof tool.slug === "string" ? tool.slug : typeof tool.name === "string" ? tool.name : null;
+
+      if (!slug) {
+        return null;
+      }
+
+      const inputSchema =
+        typeof tool.inputParameters === "object" && tool.inputParameters !== null
+          ? (tool.inputParameters as Record<string, unknown>)
+          : typeof tool.input_parameters === "object" && tool.input_parameters !== null
+            ? (tool.input_parameters as Record<string, unknown>)
+            : {};
+
+      return {
+        slug,
+        name: typeof tool.name === "string" ? tool.name : slug,
+        description:
+          typeof tool.description === "string" && tool.description.trim()
+            ? tool.description
+            : slug,
+        inputSchema,
+      };
+    })
+    .filter((tool): tool is ComposioCachedToolSummary => tool !== null);
+}
+
 export class SdkComposioApiClient implements ComposioApiClient {
   private readonly composio: Composio;
 
@@ -251,39 +288,8 @@ export class SdkComposioApiClient implements ComposioApiClient {
   }
 
   async listSessionTools(session: ComposioSessionMcpEndpoint): Promise<ComposioCachedToolSummary[]> {
-    const tools = await this.composio.tools.list({
-      sessionId: session.sessionId,
-      limit: 500,
-    });
-
-    const items = extractComposioListItems(tools);
-
-    return items
-      .map((tool) => {
-        const slug = typeof tool.slug === "string" ? tool.slug : typeof tool.name === "string" ? tool.name : null;
-
-        if (!slug) {
-          return null;
-        }
-
-        const inputSchema =
-          typeof tool.inputParameters === "object" && tool.inputParameters !== null
-            ? (tool.inputParameters as Record<string, unknown>)
-            : typeof tool.input_parameters === "object" && tool.input_parameters !== null
-              ? (tool.input_parameters as Record<string, unknown>)
-              : {};
-
-        return {
-          slug,
-          name: typeof tool.name === "string" ? tool.name : slug,
-          description:
-            typeof tool.description === "string" && tool.description.trim()
-              ? tool.description
-              : slug,
-          inputSchema,
-        };
-      })
-      .filter((tool): tool is ComposioCachedToolSummary => tool !== null);
+    const tools = await this.composio.tools.getRawToolRouterSessionTools(session.sessionId);
+    return parseSessionToolItems(extractComposioListItems(tools));
   }
 
   private sessionConfig(

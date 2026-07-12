@@ -28,7 +28,8 @@ export function registerComposioOAuthRoutes(app: HonoApp, options: ServerOptions
     }
 
     try {
-      const result = await service.completeOAuth(state);
+      const connectedAccountId = c.req.query("connected_account_id");
+      const result = await service.completeOAuth(state, { connectedAccountId });
       return c.redirect(`/integrations?section=composio&connected=${encodeURIComponent(result.toolkitSlug)}`);
     } catch (error) {
       if (error instanceof NakamaApiError) {

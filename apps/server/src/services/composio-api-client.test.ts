@@ -3,6 +3,7 @@ import {
   extractComposioListItems,
   parseCatalogToolkitItem,
   parseLinkRedirectUrl,
+  parseSessionToolItems,
   resolveAuthConfigId,
   unwrapComposioError,
 } from "./composio-api-client";
@@ -118,5 +119,27 @@ describe("unwrapComposioError", () => {
     expect(unwrapComposioError(error).message).toBe(
       "Failed to create connected account link: auth_config_id is invalid",
     );
+  });
+});
+
+describe("parseSessionToolItems", () => {
+  test("maps composio tool list items to cached tool summaries", () => {
+    expect(
+      parseSessionToolItems([
+        {
+          slug: "GMAIL_SEND_EMAIL",
+          name: "Send Email",
+          description: "Send an email",
+          inputParameters: { type: "object", properties: {} },
+        },
+      ]),
+    ).toEqual([
+      {
+        slug: "GMAIL_SEND_EMAIL",
+        name: "Send Email",
+        description: "Send an email",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
   });
 });
