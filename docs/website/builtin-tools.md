@@ -39,17 +39,19 @@ Nakama includes these builtins:
 | `web_fetch` | Yes | No | |
 | `email` | Yes | No | Omitted at runtime when mailbox is unconfigured |
 | `bash` | Super Bot only | No | Run shell commands in the profile workspace |
+| `sub_agent` | No | No | Opt-in: delegate to a same-profile sub-agent (see below) |
 
-**New custom profiles** receive `read_file`, `write_file`, `edit_file`, `search_files`, and `knowledge_base_search` until a platform admin assigns additional tools. Memory writes, archives, and artifact saves use bundled skills with those file tools — see [Skills](/skills#bundled-system-skills). Coding-agent workflows use `bash` with the `coding-delegation` skill — see [Coding agent](/coding-agent). System profiles (`default`, `super_bot`) get the full seeded set; Super Bot also receives `bash`.
+**New custom profiles** receive `read_file`, `write_file`, `edit_file`, `search_files`, and `knowledge_base_search` until a platform admin assigns additional tools. Memory writes, archives, and artifact saves use bundled skills with those file tools — see [Skills](/skills#bundled-system-skills). Coding-agent workflows use `bash` with the `coding-delegation` skill — see [Coding agent](/coding-agent). The `sub_agent` tool is seeded but **not** auto-assigned — platform admins opt in per profile. System profiles (`default`, `super_bot`) get the full seeded builtin set; Super Bot also receives `bash`.
 
 ## Choosing tools for a profile
 
 Good starting patterns:
 
 - **Simple chat bot**: no extra tools
-- **Research bot**: `web_search`, `web_fetch`, `knowledge_base_search`
+- **Research bot**: `web_search`, `web_fetch`, `knowledge_base_search`, optionally `sub_agent` for parallel deep dives
 - **Knowledge bot**: `knowledge_base_search`, file tools, bundled system skills
 - **Ops bot**: file tools, bundled `save-artifact` skill, `email`
+- **Delegation bot**: `sub_agent` for in-process research/review/planning subtasks
 - **Coding agent (Super Bot or custom)**: `bash`, `coding-delegation` skill, plus a configured harness in Integrations
 
 ## Memory workflows
@@ -240,6 +242,28 @@ Run a one-off shell command in the profile workspace and return stdout, stderr, 
 **Scope:** Profile workspace only. Do not use `bash` to create persistent tools or `.sh` wrappers — register JavaScript tools under `~/.nakama/tools/` instead.
 
 **Availability:** When assigned to the profile. Super Bot receives `bash` by default. Required for the [coding agent](/coding-agent) workflow.
+
+### `sub_agent`
+
+Run a focused **same-profile** sub-agent for delegated work (research, review, planning, debugging). The parent receives a structured result to summarize for the user. This is a Nakama-native in-process agent loop — **not** the external coding-agent path (`bash` + `coding-delegation`).
+
+| Parameter | Type | Required | Notes |
+|-----------|------|----------|-------|
+| `task` | string | Yes | Clear instruction for the sub-agent |
+| `context` | string | No | Optional scoped background (not full parent chat history) |
+| `timeoutMs` | number | No | Default 60000, max 90000 |
+
+**Returns:** `{ status, summary, output, error? }` where `status` is `success`, `fail`, or `timeout`.
+
+**Limits (v1):**
+
+- Same profile only — no cross-profile targeting
+- One level of nesting — sub-agents cannot call `sub_agent` again
+- No persisted child chat session — audit via parent tool result + server logs
+- Child runs share the profile workspace; side effects persist even if the parent times out
+- Default timeout counts toward the parent web stream budget (120s total turn limit)
+
+**Availability:** When assigned to the profile (opt-in; not part of default custom profile assignments).
 
 ## Configuration prerequisites
 
