@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -35,6 +35,7 @@ import { cn } from "@/lib/utils";
 
 interface ArtifactAttachmentPreviewProps {
   profileId: string;
+  id: string;
   artifact: ChatArtifactRef;
   className?: string;
 }
@@ -74,12 +75,12 @@ function downloadActionLabel(mimeType: string): string {
 
 export function ArtifactAttachmentPreview({
   profileId,
+  id,
   artifact,
   className,
 }: ArtifactAttachmentPreviewProps) {
-  const panelId = useId();
   const { show, update, hide, activeId } = useChatAttachmentPanel();
-  const open = activeId === panelId;
+  const open = activeId === id;
   const [fullscreen, setFullscreen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -184,16 +185,17 @@ export function ArtifactAttachmentPreview({
 
   useEffect(() => {
     return () => {
-      hide(panelId);
+      hide(id);
     };
-  }, [hide, panelId]);
+  }, [hide, id]);
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    update(panelId, {
+  /**
+   * The panel's title, actions, and body are built here and nowhere else. `show()`
+   * replaces the whole config rather than merging, so building it in two places let
+   * a re-open drop the header actions (the Copy button) until some state changed.
+   */
+  function buildPanelConfig() {
+    return {
       title: artifact.filename,
       headerActions: (
         <>
@@ -278,11 +280,22 @@ export function ArtifactAttachmentPreview({
         canPreview,
         artifact,
       }),
-    });
+    };
+  }
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    update(id, buildPanelConfig());
+    // buildPanelConfig is re-created every render, so the primitives it reads are the
+    // dependencies here; listing the function itself would loop on every update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     open,
     update,
-    panelId,
+    id,
     artifact,
     fullscreen,
     isHtml,
@@ -322,28 +335,27 @@ export function ArtifactAttachmentPreview({
     setFullscreen(false);
     setCopied(false);
     show({
-      id: panelId,
-      title: artifact.filename,
+      ...buildPanelConfig(),
+      id,
       defaultWidth: isHtml || isMarkdown || language ? 768 : 448,
       resizable: true,
       fullscreen: false,
-      bodyClassName: isHtml ? "flex flex-col overflow-hidden p-0" : undefined,
-      onClose: () => {
-        setFullscreen(false);
-        setCopied(false);
-      },
+      // Already-fetched content reopens instantly; only a cold open spins.
       content: renderPanelBody({
         isHtml,
         isMarkdown,
         language,
         mimeType,
-        // Already-fetched content reopens instantly; only a cold open spins.
         loading: canPreview && content === null && error === null,
         error,
         content,
         canPreview,
         artifact,
       }),
+      onClose: () => {
+        setFullscreen(false);
+        setCopied(false);
+      },
     });
   }
 

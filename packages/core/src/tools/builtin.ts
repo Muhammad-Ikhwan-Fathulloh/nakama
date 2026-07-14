@@ -5,6 +5,7 @@ import type { ToolContext, ToolDefinition } from "../contract";
 import { isDocxFile, isLegacyDocFile } from "../artifact-mime";
 import { convertDocxToMarkdown } from "../docx-text";
 import { markdownToDocx } from "../docx-write";
+import { pathExists } from "../fs";
 import { getProfileSoulDir } from "../soul/resolve";
 import { getCustomToolsDir, guardFilePath, PathGuardError, type PathGuardOptions } from "./paths";
 import { searchFilesTool } from "./search-files";
@@ -110,6 +111,42 @@ interface FileToolRunOptions {
 let defaultGuardOptions: PathGuardOptions = {};
 
 const BLOCKED_READ_BASENAMES = ["config.ini"];
+const ARTIFACT_META_SUFFIX = ".nakama-meta.json";
+const artifactRemap = new Map<string, string>();
+
+function normalizeArtifactPath(relativePath: string): string {
+  return relativePath.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function isArtifactPath(relativePath: string): boolean {
+  const normalized = normalizeArtifactPath(relativePath);
+  return normalized.startsWith("artifacts/") && !normalized.endsWith(ARTIFACT_META_SUFFIX);
+}
+
+function artifactRemapKey(context: ToolContext, relativePath: string): string {
+  return `${context.sessionId ?? "default"}:${normalizeArtifactPath(relativePath)}`;
+}
+
+async function uniqueArtifactPath(filePath: string): Promise<string> {
+  if (!(await pathExists(filePath))) {
+    return filePath;
+  }
+
+  const date = new Date().toISOString().slice(0, 10);
+  const directory = path.dirname(filePath);
+  const extension = path.extname(filePath);
+  const baseName = path.basename(filePath, extension);
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const suffix = attempt === 0 ? date : `${date}-${attempt + 1}`;
+    const candidate = path.join(directory, `${baseName}-${suffix}${extension}`);
+    if (!(await pathExists(candidate))) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`Unable to find available artifact filename for ${filePath}`);
+}
 
 export function setDefaultFileGuardOptions(options: PathGuardOptions): void {
   defaultGuardOptions = { ...options };
@@ -187,7 +224,28 @@ export async function runWriteFile(
     contentBytes,
     guardOptions,
   );
-  const filePath = guarded.resolved;
+  const { orgId, profileId } = requireProfileScope(context);
+  const workspaceRoot = options.workspaceRoot ?? getProfileSoulDir(orgId, profileId);
+  let filePath = guarded.resolved;
+  const normalizedPath = normalizeArtifactPath(parsed.path);
+
+  if (normalizedPath.endsWith(ARTIFACT_META_SUFFIX) && normalizedPath.startsWith("artifacts/")) {
+    const remapped = artifactRemap.get(
+      artifactRemapKey(context, normalizedPath.slice(0, -ARTIFACT_META_SUFFIX.length)),
+    );
+    if (remapped) {
+      filePath = path.resolve(workspaceRoot, `${remapped}${ARTIFACT_META_SUFFIX}`);
+    }
+  } else if (isArtifactPath(parsed.path)) {
+    const uniquePath = await uniqueArtifactPath(filePath);
+    if (uniquePath !== filePath) {
+      artifactRemap.set(
+        artifactRemapKey(context, parsed.path),
+        normalizeArtifactPath(path.relative(workspaceRoot, uniquePath)),
+      );
+      filePath = uniquePath;
+    }
+  }
 
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, parsed.content, "utf8");
@@ -219,7 +277,10 @@ export async function runWriteDocx(
   const bytes = await markdownToDocx(parsed.markdown);
   const guardOptions = buildFileGuardOptions(context, options);
   const guarded = await guardFilePath(parsed.path, parsed.cwd ?? null, bytes.length, guardOptions);
-  const filePath = guarded.resolved;
+  // Same rule as write_file: never silently overwrite an existing artifact.
+  const filePath = isArtifactPath(parsed.path)
+    ? await uniqueArtifactPath(guarded.resolved)
+    : guarded.resolved;
 
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, bytes);

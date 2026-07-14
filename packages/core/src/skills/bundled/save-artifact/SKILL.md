@@ -36,8 +36,8 @@ Example for `artifacts/report.md`:
 ## Workflow
 
 1. Choose a short, descriptive filename under `artifacts/` (use subdirectories when grouping related files, e.g. `artifacts/weekly/report.md`).
-2. `write_file` the artifact content to `artifacts/{filename}`.
-3. `write_file` the metadata sidecar to `artifacts/{filename}.nakama-meta.json` with the JSON shape above.
+2. `write_file` the artifact content to `artifacts/{filename}`. If that name already exists, a date suffix is added automatically (e.g. `report-2026-07-14.md`).
+3. `write_file` the metadata sidecar to `artifacts/{filename}.nakama-meta.json` using the same base filename from step 2.
 4. Confirm both paths in your reply so the user knows where to find the file. On web chat, saved artifacts also appear as attachment chips on the assistant message (with preview) in addition to the profile **Artifacts** tab.
 
 ## MIME type guidance

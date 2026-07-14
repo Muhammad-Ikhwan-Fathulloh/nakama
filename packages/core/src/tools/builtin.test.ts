@@ -64,6 +64,60 @@ describe("file builtin tools", () => {
     expect(await readFile(result.path, "utf8")).toBe("relative");
   });
 
+  test("write_file adds a date suffix when an artifact filename already exists", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "nakama-write-"));
+    const artifactsDir = path.join(tempDir, "artifacts");
+    await mkdir(artifactsDir, { recursive: true });
+    const existingPath = path.join(artifactsDir, "report.md");
+    await writeFile(existingPath, "existing", "utf8");
+    const dateSuffix = new Date().toISOString().slice(0, 10);
+
+    const result = await runWriteFile(
+      { path: "artifacts/report.md", content: "new report" },
+      { ...PROFILE_CONTEXT, sessionId: "session_suffix" },
+      { workspaceRoot: tempDir },
+    );
+
+    expect(result.path).toBe(path.join(await realpath(artifactsDir), `report-${dateSuffix}.md`));
+    expect(await readFile(existingPath, "utf8")).toBe("existing");
+    expect(await readFile(result.path, "utf8")).toBe("new report");
+  });
+
+  test("write_file remaps artifact metadata sidecar after suffixing content", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "nakama-write-"));
+    const artifactsDir = path.join(tempDir, "artifacts");
+    await mkdir(artifactsDir, { recursive: true });
+    const existingPath = path.join(artifactsDir, "report.md");
+    await writeFile(existingPath, "existing", "utf8");
+    const dateSuffix = new Date().toISOString().slice(0, 10);
+
+    const context = { ...PROFILE_CONTEXT, sessionId: "session_meta_suffix" };
+
+    const contentResult = await runWriteFile(
+      { path: "artifacts/report.md", content: "new report" },
+      context,
+      { workspaceRoot: tempDir },
+    );
+
+    const metaResult = await runWriteFile(
+      {
+        path: "artifacts/report.md.nakama-meta.json",
+        content: JSON.stringify({
+          mimeType: "text/markdown",
+          savedAt: "2026-07-14T12:00:00.000Z",
+          sizeBytes: 10,
+        }),
+      },
+      context,
+      { workspaceRoot: tempDir },
+    );
+
+    expect(contentResult.path).toBe(path.join(await realpath(artifactsDir), `report-${dateSuffix}.md`));
+    expect(metaResult.path).toBe(
+      path.join(await realpath(artifactsDir), `report-${dateSuffix}.md.nakama-meta.json`),
+    );
+  });
+
   test("write_file allows custom tool modules outside profile workspace", async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "nakama-write-"));
     configDir = await mkdtemp(path.join(os.tmpdir(), "nakama-config-"));
@@ -331,6 +385,27 @@ describe("file builtin tools", () => {
     expect(markdown).toContain("# Laporan");
     expect(markdown).toContain("**79**");
     expect(markdown).toContain("| 1");
+  });
+
+  test("write_docx does not overwrite an existing artifact", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "nakama-docx-"));
+    await mkdir(path.join(tempDir, "artifacts"), { recursive: true });
+
+    const first = await runWriteDocx(
+      { path: "artifacts/laporan.docx", markdown: "# Pertama" },
+      PROFILE_CONTEXT,
+      { workspaceRoot: tempDir },
+    );
+    const second = await runWriteDocx(
+      { path: "artifacts/laporan.docx", markdown: "# Kedua" },
+      PROFILE_CONTEXT,
+      { workspaceRoot: tempDir },
+    );
+
+    expect(second.path).not.toBe(first.path);
+    expect(path.basename(second.path)).toMatch(/^laporan-\d{4}-\d{2}-\d{2}\.docx$/);
+    expect(await convertDocxToMarkdown(await readFile(first.path))).toContain("# Pertama");
+    expect(await convertDocxToMarkdown(await readFile(second.path))).toContain("# Kedua");
   });
 
   test("write_docx rejects a non-.docx path", async () => {
