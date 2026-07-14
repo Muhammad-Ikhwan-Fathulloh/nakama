@@ -22,7 +22,6 @@ export default defineConfig({
   },
   server: {
     port: 3003,
-    host: true,
     proxy: {
       "/health": serverUrl,
       "/v1": serverUrl,
@@ -30,6 +29,5 @@ export default defineConfig({
   },
   preview: {
     port: 3003,
-    host: true,
   },
 });

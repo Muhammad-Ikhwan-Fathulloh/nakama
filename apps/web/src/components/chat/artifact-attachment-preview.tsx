@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 
 interface ArtifactAttachmentPreviewProps {
   profileId: string;
+  id: string;
   artifact: ChatArtifactRef;
   className?: string;
 }
@@ -53,12 +54,12 @@ function downloadActionLabel(mimeType: string, filename: string): string {
 
 export function ArtifactAttachmentPreview({
   profileId,
+  id,
   artifact,
   className,
 }: ArtifactAttachmentPreviewProps) {
-  const panelId = useId();
   const { show, update, hide, activeId } = useChatAttachmentPanel();
-  const open = activeId === panelId;
+  const open = activeId === id;
   const [fullscreen, setFullscreen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -132,16 +133,16 @@ export function ArtifactAttachmentPreview({
 
   useEffect(() => {
     return () => {
-      hide(panelId);
+      hide(id);
     };
-  }, [hide, panelId]);
+  }, [hide, id]);
 
   useEffect(() => {
     if (!open) {
       return;
     }
 
-    update(panelId, {
+    update(id, {
       title: artifact.filename,
       headerActions: (
         <>
@@ -227,7 +228,7 @@ export function ArtifactAttachmentPreview({
   }, [
     open,
     update,
-    panelId,
+    id,
     artifact,
     fullscreen,
     isHtml,
@@ -262,7 +263,7 @@ export function ArtifactAttachmentPreview({
     setFullscreen(false);
     setCopied(false);
     show({
-      id: panelId,
+      id,
       title: artifact.filename,
       defaultWidth: isHtml ? 768 : 448,
       resizable: true,

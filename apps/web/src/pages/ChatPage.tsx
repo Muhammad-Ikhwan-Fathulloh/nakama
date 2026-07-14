@@ -716,7 +716,7 @@ export function ChatPage() {
 
   if (isEmptyState) {
     return (
-      <ChatAttachmentPanelProvider>
+      <ChatAttachmentPanelProvider key={session?.id ?? "new"}>
         <ChatPageColumn centered>
           <div className="mx-auto flex w-full max-w-3xl flex-col mb-12">
             <ChatWelcome profile={activeProfile} />
@@ -728,7 +728,7 @@ export function ChatPage() {
   }
 
   return (
-    <ChatAttachmentPanelProvider>
+    <ChatAttachmentPanelProvider key={session?.id ?? "new"}>
       <ChatPageColumn>
         <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">

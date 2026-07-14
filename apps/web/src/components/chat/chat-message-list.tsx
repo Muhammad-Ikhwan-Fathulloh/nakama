@@ -146,6 +146,7 @@ function AssistantTurn({
   const turnMessages = messages.map(({ message }) => message);
   const segments = segmentAssistantTurn(turnMessages);
   const artifacts = extractTurnArtifacts(turnMessages);
+  const turnKey = messages.map(({ message }) => message.id).join(":");
   const anchorMessage = findAssistantTurnAnchor(turnMessages);
   const showActions = isAssistantTurnComplete(turnMessages) && anchorMessage != null;
 
@@ -165,13 +166,18 @@ function AssistantTurn({
       ))}
       {profileId && artifacts.length > 0 ? (
         <div className="flex flex-wrap gap-2">
-          {artifacts.map((artifact) => (
-            <ArtifactAttachmentPreview
-              key={artifact.path}
-              profileId={profileId}
-              artifact={artifact}
-            />
-          ))}
+          {artifacts.map((artifact) => {
+            const chipId = `${turnKey}:${artifact.path}`;
+
+            return (
+              <ArtifactAttachmentPreview
+                key={chipId}
+                id={chipId}
+                profileId={profileId}
+                artifact={artifact}
+              />
+            );
+          })}
         </div>
       ) : null}
       {showActions && anchorMessage ? (
