@@ -6,13 +6,7 @@ import type {
   McpStdioConfig,
   McpTransport,
 } from "@nakama/core/contract";
-import { BracesIcon } from "lucide-react";
 import { useEffect, useState, type ClipboardEvent, type FormEvent } from "react";
-import {
-  McpArgsEditor,
-  McpFormField,
-  McpHeadersEditor,
-} from "@/components/soul-tools/mcp-tab/McpFormEditors";
 import {
   argsToArray,
   emptyHeaderRow,
@@ -21,7 +15,8 @@ import {
   resolveFormTransport,
   type McpHeaderRow,
 } from "@/components/soul-tools/mcp-tab/shared";
-import { McpToolList } from "@/components/soul-tools/McpToolList";
+import { McpImportConfigDialog } from "@/components/soul-tools/mcp-tab/mcp-import-config-dialog";
+import { McpServerDialogForm } from "@/components/soul-tools/mcp-tab/mcp-server-dialog-form";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -31,16 +26,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
 import { useMcpServerDetailQuery } from "@/hooks/use-app-queries";
 import { client, formatError } from "@/lib/client";
 import {
   parseMcpConfigJson,
   type ParsedMcpServerImport,
 } from "@/lib/mcp-config-import";
-import { cn } from "@/lib/utils";
 
 export function McpServerDialog({
   open,
@@ -303,306 +295,117 @@ export function McpServerDialog({
     }
   }
 
+  function clearTestResult() {
+    setTestResult(null);
+  }
+
   return (
     <>
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-6 p-6 sm:max-w-lg">
-        <form className="space-y-6" onSubmit={handleSubmit} onPaste={handlePaste}>
-          <DialogHeader className="gap-2">
-            <DialogTitle>{isEdit ? "Edit MCP server" : "Add MCP server"}</DialogTitle>
-            <DialogDescription>
-              {isEdit
-                ? transport === "stdio"
-                  ? "Update the command, args, or environment. Leave values blank to keep the current ones."
-                  : "Update the server URL or headers. Leave values blank to keep the current ones."
-                : "Register an HTTP or command-based server, then assign it to profiles on the Profiles page."}
-            </DialogDescription>
-          </DialogHeader>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="gap-6 p-6 sm:max-w-lg">
+          <form className="space-y-6" onSubmit={handleSubmit} onPaste={handlePaste}>
+            <DialogHeader className="gap-2">
+              <DialogTitle>{isEdit ? "Edit MCP server" : "Add MCP server"}</DialogTitle>
+              <DialogDescription>
+                {isEdit
+                  ? transport === "stdio"
+                    ? "Update the command, args, or environment. Leave values blank to keep the current ones."
+                    : "Update the server URL or headers. Leave values blank to keep the current ones."
+                  : "Register an HTTP or command-based server, then assign it to profiles on the Profiles page."}
+              </DialogDescription>
+            </DialogHeader>
 
-          {loadingForm ? (
-            <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-              <Spinner className="size-4" />
-              Loading server…
-            </div>
-          ) : (
-          <div className="space-y-5">
-            <McpFormField
-              label="Transport"
-              action={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  disabled={formDisabled}
-                  className="text-muted-foreground hover:text-foreground"
-                  onClick={openImportDialog}
-                >
-                  <BracesIcon aria-hidden />
-                  Import JSON
-                </Button>
-              }
-            >
-              <div
-                role="tablist"
-                aria-label="MCP transport"
-                className="segmented-control w-full"
-              >
-                {(
-                  [
-                    { id: "http" as const, label: "HTTP" },
-                    { id: "stdio" as const, label: "Command" },
-                  ] as const
-                ).map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    id={`${idPrefix}-transport-${item.id}`}
-                    role="tab"
-                    aria-selected={transport === item.id}
-                    aria-controls={`${idPrefix}-transport-panel-${item.id}`}
-                    data-active={transport === item.id || undefined}
-                    disabled={formDisabled || isEdit}
-                    className="segmented-control-item"
-                    onClick={() => {
-                      setTransport(item.id);
-                      setTestResult(null);
-                    }}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            </McpFormField>
+            <McpServerDialogForm
+              idPrefix={idPrefix}
+              isEdit={isEdit}
+              transport={transport}
+              name={name}
+              url={url}
+              headers={headers}
+              command={command}
+              args={args}
+              env={env}
+              formDisabled={formDisabled}
+              loadingForm={loadingForm}
+              canSubmit={canSubmit}
+              testing={testing}
+              testResult={testResult}
+              submitError={submitError}
+              onTransportChange={(nextTransport) => {
+                setTransport(nextTransport);
+                clearTestResult();
+              }}
+              onOpenImport={openImportDialog}
+              onNameChange={(value) => {
+                setName(value);
+                clearTestResult();
+              }}
+              onUrlChange={(value) => {
+                setUrl(value);
+                if (value.trim()) {
+                  setTransport("http");
+                }
+                clearTestResult();
+              }}
+              onHeadersChange={(nextHeaders) => {
+                setHeaders(nextHeaders);
+                clearTestResult();
+              }}
+              onCommandChange={(value) => {
+                setCommand(value);
+                if (value.trim()) {
+                  setTransport("stdio");
+                }
+                clearTestResult();
+              }}
+              onArgsChange={(nextArgs) => {
+                setArgs(nextArgs);
+                clearTestResult();
+              }}
+              onEnvChange={(nextEnv) => {
+                setEnv(nextEnv);
+                clearTestResult();
+              }}
+              onTestConnection={() => void handleTestConnection()}
+            />
 
-            <McpFormField label="Name" htmlFor={`${idPrefix}-name`}>
-              <Input
-                id={`${idPrefix}-name`}
-                value={name}
+            <DialogFooter className="gap-3 border-t-0 bg-transparent p-3 sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
                 disabled={formDisabled}
-                autoFocus
-                onChange={(event) => {
-                  setName(event.target.value);
-                  setTestResult(null);
-                }}
-                placeholder="server name"
-              />
-            </McpFormField>
-
-            <div
-              id={`${idPrefix}-transport-panel-${transport}`}
-              role="tabpanel"
-              aria-labelledby={`${idPrefix}-transport-${transport}`}
-              className="space-y-5"
-            >
-            {transport === "http" ? (
-              <>
-                <McpFormField label="URL" htmlFor={`${idPrefix}-url`}>
-                  <Input
-                    id={`${idPrefix}-url`}
-                    value={url}
-                    disabled={formDisabled}
-                    className="font-mono text-sm"
-                    onChange={(event) => {
-                      const nextUrl = event.target.value;
-                      setUrl(nextUrl);
-                      if (nextUrl.trim()) {
-                        setTransport("http");
-                      }
-                      setTestResult(null);
-                    }}
-                    placeholder="https://example.com/mcp"
-                  />
-                </McpFormField>
-
-                <McpFormField label="Headers" hint="Optional">
-                  <McpHeadersEditor
-                    headers={headers}
-                    isEdit={isEdit}
-                    disabled={formDisabled}
-                    onChange={(nextHeaders) => {
-                      setHeaders(nextHeaders);
-                      setTestResult(null);
-                    }}
-                  />
-                </McpFormField>
-              </>
-            ) : (
-              <>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <McpFormField label="Command" htmlFor={`${idPrefix}-command`}>
-                    <Input
-                      id={`${idPrefix}-command`}
-                      value={command}
-                      disabled={formDisabled}
-                      className="font-mono text-sm"
-                      onChange={(event) => {
-                        const nextCommand = event.target.value;
-                        setCommand(nextCommand);
-                        if (nextCommand.trim()) {
-                          setTransport("stdio");
-                        }
-                        setTestResult(null);
-                      }}
-                      placeholder="npx"
-                    />
-                  </McpFormField>
-
-                  <McpFormField label="Arguments" hint="Optional">
-                    <McpArgsEditor
-                      args={args}
-                      disabled={formDisabled}
-                      inputId={`${idPrefix}-args`}
-                      onChange={(nextArgs) => {
-                        setArgs(nextArgs);
-                        setTestResult(null);
-                      }}
-                    />
-                  </McpFormField>
-                </div>
-
-                <McpFormField label="Environment" hint="Optional">
-                  <McpHeadersEditor
-                    headers={env}
-                    isEdit={isEdit}
-                    disabled={formDisabled}
-                    keyLabel="Variable"
-                    valueLabel="Value"
-                    valuePlaceholder={isEdit ? "Leave blank to keep" : "secret-value"}
-                    onChange={(nextEnv) => {
-                      setEnv(nextEnv);
-                      setTestResult(null);
-                    }}
-                  />
-                </McpFormField>
-
-              </>
-            )}
-            </div>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="self-start"
-              disabled={formDisabled || !canSubmit}
-              onClick={() => void handleTestConnection()}
-            >
-              {testing ? <Spinner className="size-4" /> : "Test connection"}
-            </Button>
-
-            {testResult ? (
-              <div className="space-y-3">
-                <p
-                  className={cn(
-                    "rounded-md px-3 py-2.5 text-sm",
-                    testResult.ok
-                      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                      : "bg-destructive/10 text-destructive",
-                  )}
-                  role="status"
-                >
-                  {testResult.message}
-                </p>
-
-                {testResult.ok && testResult.tools.length > 0 ? (
-                  <div className="rounded-md border border-border bg-muted/20 p-3">
-                    <p className="mb-3 text-xs font-medium text-foreground">
-                      Discovered tools ({testResult.tools.length})
-                    </p>
-                    <McpToolList tools={testResult.tools} />
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            {submitError ? (
-              <p
-                className="rounded-md bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
-                role="alert"
+                onClick={() => onOpenChange(false)}
               >
-                {submitError}
-              </p>
-            ) : null}
-          </div>
-          )}
+                Cancel
+              </Button>
+              <Button type="submit" disabled={formDisabled || !canSubmit}>
+                {busy ? (
+                  <Spinner className="size-4" />
+                ) : isEdit ? (
+                  "Save changes"
+                ) : (
+                  "Add server"
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
-          <DialogFooter className="gap-3 border-t-0 bg-transparent p-3 sm:justify-end">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={formDisabled}
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={formDisabled || !canSubmit}>
-              {busy ? (
-                <Spinner className="size-4" />
-              ) : isEdit ? (
-                "Save changes"
-              ) : (
-                "Add server"
-              )}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-
-    <Dialog open={importOpen} onOpenChange={setImportOpen}>
-      <DialogContent className="gap-5 p-6 sm:max-w-lg">
-        <DialogHeader className="gap-2">
-          <DialogTitle>Import MCP config</DialogTitle>
-          <DialogDescription>
-            Paste JSON from your MCP client config. The first server entry will fill this form.
-          </DialogDescription>
-        </DialogHeader>
-
-        <Textarea
-          value={importDraft}
-          disabled={formDisabled}
-          autoFocus
-          rows={10}
-          className="min-h-48 font-mono text-sm"
-          placeholder={`{
-  "mcpServers": {
-    "my-server": {
-      "command": "npx",
-      "args": ["-y", "some-mcp-package"]
-    }
-  }
-}`}
-          onChange={(event) => {
-            setImportDraft(event.target.value);
-            if (importError) {
-              setImportError(null);
-            }
-          }}
-        />
-
-        {importError ? (
-          <p
-            className="rounded-md bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
-            role="alert"
-          >
-            {importError}
-          </p>
-        ) : null}
-
-        <DialogFooter className="gap-3 border-t-0 bg-transparent p-0 sm:justify-end">
-          <Button type="button" variant="outline" onClick={() => setImportOpen(false)}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            disabled={formDisabled || !importDraft.trim()}
-            onClick={handleImportApply}
-          >
-            Apply to form
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      <McpImportConfigDialog
+        open={importOpen}
+        importDraft={importDraft}
+        importError={importError}
+        formDisabled={formDisabled}
+        onOpenChange={setImportOpen}
+        onImportDraftChange={(value) => {
+          setImportDraft(value);
+          if (importError) {
+            setImportError(null);
+          }
+        }}
+        onApply={handleImportApply}
+      />
     </>
   );
 }
