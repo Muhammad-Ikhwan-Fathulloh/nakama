@@ -55,7 +55,11 @@ const initialEmailSettingsState: EmailSettingsState = {
 
 type EmailSettingsAction =
   | { type: "clear-on-close" }
-  | { type: "sync-from-settings"; settings: EmailSettingsResponse }
+  | {
+      type: "sync-from-settings";
+      settings: EmailSettingsResponse;
+      userEmail?: string | null;
+    }
   | { type: "patch"; values: Partial<EmailSettingsState> }
   | { type: "toggle-show-password" };
 
@@ -72,7 +76,9 @@ function emailSettingsReducer(
         showPassword: false,
       };
     case "sync-from-settings": {
-      const { settings } = action;
+      const { settings, userEmail } = action;
+      const fallbackEmail = userEmail?.trim() || "";
+      const username = settings.username ?? fallbackEmail;
       return {
         ...state,
         imapHost: settings.imapHost ?? "",
@@ -81,8 +87,8 @@ function emailSettingsReducer(
         smtpHost: settings.smtpHost ?? "",
         smtpPort: String(settings.smtpPort ?? 587),
         smtpSecure: settings.smtpSecure ?? false,
-        username: settings.username ?? "",
-        from: settings.from ?? settings.username ?? "",
+        username,
+        from: settings.from ?? username,
         fromName: settings.fromName ?? "",
         password: "",
       };
@@ -126,14 +132,12 @@ export function EmailSettingsDialog({
       return;
     }
 
-    dispatch({ type: "sync-from-settings", settings });
-  }, [open, settings]);
-
-  useEffect(() => {
-    if (user?.email && !state.testRecipient) {
-      dispatch({ type: "patch", values: { testRecipient: user.email } });
-    }
-  }, [user?.email, state.testRecipient]);
+    dispatch({
+      type: "sync-from-settings",
+      settings,
+      userEmail: user?.email,
+    });
+  }, [open, settings, user?.email]);
 
   const handleSave = () => {
     dispatch({ type: "patch", values: { formError: null, hint: null } });
@@ -263,7 +267,6 @@ export function EmailSettingsDialog({
               hint={state.hint}
               formError={state.formError}
               testRecipient={state.testRecipient}
-              userEmail={user?.email}
               testPending={testMutation.isPending}
               savePending={saveMutation.isPending}
               configured={settings?.configured ?? false}

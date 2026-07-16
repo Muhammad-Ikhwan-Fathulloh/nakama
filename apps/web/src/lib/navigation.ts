@@ -141,8 +141,37 @@ export function toolsTabPath(): string {
   return `${PAGE_PATHS.soul}?tab=tools`;
 }
 
-export function toolPlaygroundPath(toolId: string): string {
-  return `${PAGE_PATHS.soul}/playground/${encodeURIComponent(toolId)}`;
+export function profilePath(profileId: string): string {
+  return `${PAGE_PATHS.profiles}?profile=${encodeURIComponent(profileId)}`;
+}
+
+export function toolPlaygroundPath(
+  toolId: string,
+  options?: { fromProfileId?: string },
+): string {
+  const path = `${PAGE_PATHS.soul}/playground/${encodeURIComponent(toolId)}`;
+  if (!options?.fromProfileId) {
+    return path;
+  }
+
+  const params = new URLSearchParams({
+    from: "profiles",
+    profile: options.fromProfileId,
+  });
+  return `${path}?${params.toString()}`;
+}
+
+/** Resolve playground back-navigation from search params set by toolPlaygroundPath. */
+export function toolPlaygroundBackTarget(searchParams: URLSearchParams): {
+  href: string;
+  label: string;
+} {
+  const fromProfileId =
+    searchParams.get("from") === "profiles" ? searchParams.get("profile") : null;
+  if (fromProfileId) {
+    return { href: profilePath(fromProfileId), label: "Profile" };
+  }
+  return { href: toolsTabPath(), label: "Tools" };
 }
 
 export const PAGE_PATHS: Record<PageId, string> = {
