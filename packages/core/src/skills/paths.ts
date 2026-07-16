@@ -1,6 +1,4 @@
-import { readdir } from "node:fs/promises";
 import path from "node:path";
-import { pathExists } from "../fs";
 import { getUserConfigDir } from "../user-config";
 
 export const SKILL_FILE_NAME = "SKILL.md";
