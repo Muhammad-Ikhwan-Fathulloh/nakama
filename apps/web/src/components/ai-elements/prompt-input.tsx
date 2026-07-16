@@ -83,10 +83,7 @@ export type {
   TextInputContext,
 } from "@/components/ai-elements/prompt-input-context";
 
-export {
-  usePromptInputController,
-  useProviderAttachments,
-} from "@/components/ai-elements/prompt-input-context";
+export { usePromptInputController } from "@/components/ai-elements/prompt-input-context";
 
 export type PromptInputProviderProps = PropsWithChildren<{
   initialInput?: string;
