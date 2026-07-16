@@ -52,6 +52,7 @@ export function ArtifactAttachmentPanelBody({
   content,
   canPreview,
   artifact,
+  streaming = false,
 }: {
   isHtml: boolean;
   isMarkdown: boolean;
@@ -62,6 +63,7 @@ export function ArtifactAttachmentPanelBody({
   content: string | null;
   canPreview: boolean;
   artifact: ChatArtifactRef;
+  streaming?: boolean;
 }) {
   if (isHtml) {
     return (
@@ -97,6 +99,12 @@ export function ArtifactAttachmentPanelBody({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>{mimeType}</span>
+        {streaming ? (
+          <>
+            <span>·</span>
+            <span>Writing…</span>
+          </>
+        ) : null}
         {artifact.sizeBytes > 0 ? (
           <>
             <span>·</span>
@@ -114,7 +122,15 @@ export function ArtifactAttachmentPanelBody({
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
-      {!loading && !error && content ? renderTextContent({ content, isMarkdown, language }) : null}
+      {!loading && !error && content
+        ? streaming && isMarkdown
+          ? (
+            <pre className="max-h-[min(50vh,28rem)] overflow-auto rounded-lg border border-border bg-muted/40 p-3 text-sm whitespace-pre-wrap text-foreground">
+              {content}
+            </pre>
+          )
+          : renderTextContent({ content, isMarkdown, language })
+        : null}
 
       {!loading && !error && !canPreview ? (
         <p className="text-sm text-muted-foreground">
