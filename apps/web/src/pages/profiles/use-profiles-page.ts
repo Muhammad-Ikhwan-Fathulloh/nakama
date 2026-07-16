@@ -1,7 +1,6 @@
 import type {
   CreateMcpServerRequest,
   CreateSkillRequest,
-  ProfileSummary,
 } from "@nakama/core/contract";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -35,7 +34,6 @@ import {
 import { fileToImageAttachment } from "@/lib/profile-images";
 import { formatError } from "@/lib/client";
 import {
-  encodeModelSelection,
   extractModelId,
   groupModelsByProvider,
   profileModelSelectionValue,
@@ -64,6 +62,9 @@ export function useProfilesPage() {
   const { data: composioToolkitsData } = useComposioToolkits();
   const [selectedId, setSelectedIdState] = useState<string | null>(null);
   const profileInitializedRef = useRef(false);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const [loadedDetailId, setLoadedDetailId] = useState<string | null>(null);
   const { data: profileComposioData } = useProfileComposioToolkits(selectedId);
   const { data: allSkills = [] } = useSkillsQuery();
   const { data: modelsResponse } = useModelsQuery();
@@ -397,53 +398,68 @@ export function useProfilesPage() {
 
   useEffect(() => {
     if (profiles.length === 0) {
-      setSelectedIdState(null);
-      return;
-    }
-
-    if (profileInitializedRef.current) {
-      if (selectedId && !profiles.some((profile) => profile.id === selectedId)) {
-        setSelectedId(profiles[0]!.id);
+      if (selectedIdRef.current !== null) {
+        setSelectedId(null);
       }
       return;
     }
 
-    profileInitializedRef.current = true;
-    const fromUrl = searchParams.get("profile");
-    const matchedProfile = fromUrl ? profiles.find((profile) => profile.id === fromUrl) : null;
-    const defaultProfile =
-      matchedProfile ??
-      profiles.find((profile) => profile.id === "default") ??
-      profiles[0]!;
+    const urlProfileId = searchParams.get("profile");
 
-    setSelectedId(defaultProfile.id);
-  }, [profiles, searchParams, selectedId, setSelectedId]);
+    if (!profileInitializedRef.current) {
+      profileInitializedRef.current = true;
+      const matchedProfile = urlProfileId
+        ? profiles.find((profile) => profile.id === urlProfileId)
+        : null;
+      const defaultProfile =
+        matchedProfile ??
+        profiles.find((profile) => profile.id === "default") ??
+        profiles[0]!;
 
-  useEffect(() => {
-    if (!detail) {
+      setSelectedId(defaultProfile.id);
       return;
     }
 
-    clearScheduledSave();
-    pendingSaveRef.current = false;
-    setEditName(detail.name);
-    setEditPrompt(detail.systemPrompt);
-    setEditModel(detail.model);
-    setSavedName(detail.name);
-    setSavedPrompt(detail.systemPrompt);
-    setSavedModel(detail.model);
-    editStateRef.current = {
-      ...editStateRef.current,
-      editName: detail.name,
-      editPrompt: detail.systemPrompt,
-      editModel: detail.model,
-      savedName: detail.name,
-      savedPrompt: detail.systemPrompt,
-      savedModel: detail.model,
-      detail,
-    };
-    setSaveStatus("idle");
-  }, [clearScheduledSave, detail?.id]);
+    if (
+      urlProfileId &&
+      profiles.some((profile) => profile.id === urlProfileId) &&
+      urlProfileId !== selectedIdRef.current
+    ) {
+      setSelectedId(urlProfileId);
+      return;
+    }
+
+    const current = selectedIdRef.current;
+    if (current && !profiles.some((profile) => profile.id === current)) {
+      setSelectedId(profiles[0]!.id);
+    }
+  }, [profiles, searchParams, setSelectedId]);
+
+  if (detail?.id !== loadedDetailId) {
+    setLoadedDetailId(detail?.id ?? null);
+
+    if (detail) {
+      clearScheduledSave();
+      pendingSaveRef.current = false;
+      setEditName(detail.name);
+      setEditPrompt(detail.systemPrompt);
+      setEditModel(detail.model);
+      setSavedName(detail.name);
+      setSavedPrompt(detail.systemPrompt);
+      setSavedModel(detail.model);
+      editStateRef.current = {
+        ...editStateRef.current,
+        editName: detail.name,
+        editPrompt: detail.systemPrompt,
+        editModel: detail.model,
+        savedName: detail.name,
+        savedPrompt: detail.systemPrompt,
+        savedModel: detail.model,
+        detail,
+      };
+      setSaveStatus("idle");
+    }
+  }
 
   useEffect(() => {
     return () => {

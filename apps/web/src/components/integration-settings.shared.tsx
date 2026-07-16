@@ -1,4 +1,8 @@
 import type { ReactNode } from "react";
+
+export const SETTINGS_CARD_LOADING_SKELETON = (
+  <div className="h-16 animate-pulse rounded-lg bg-muted px-4" aria-hidden="true" />
+);
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";

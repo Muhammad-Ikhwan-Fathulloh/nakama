@@ -1,4 +1,3 @@
-import { formatAgentQuestionnaireAnswersMessage } from "@nakama/core/agent-questionnaire";
 import type {
   AgentChannel,
   AgentQuestionAnswer,
@@ -24,7 +23,6 @@ import {
   buildChatBasePath,
   buildChatPath,
   chatMessagesToListItems,
-  formatSessionChannelLabel,
   isReadOnlySessionChannel,
   parseChatRouteParams,
   readRequestedDraftFromNewChatSearch,
@@ -45,7 +43,6 @@ import { client, formatError } from "@/lib/client";
 import {
   decodeModelSelection,
   effectiveProfileModelSelection,
-  extractModelId,
   groupModelsByProvider,
   resolveModelThinkingSupport,
   resolveModelVisionSupport,
@@ -94,6 +91,8 @@ export function useChatPage() {
   const skipNextProfileSessionRef = useRef(false);
   const loadedRouteRef = useRef<string | null>(null);
   const profileSwitchInFlightRef = useRef(false);
+  const profileIdRef = useRef(profileId);
+  profileIdRef.current = profileId;
 
   const syncChatUrl = useCallback(
     (nextProfileId: string, sessionId: string) => {
@@ -313,19 +312,23 @@ export function useChatPage() {
     const storedDraft = draftKey ? consumeStoredChatDraft(draftKey) : null;
     const requestedDraft = inlineDraft ?? storedDraft;
     setSearchParams({}, { replace: true });
-    const targetProfileId = requestedProfile || profileId;
+    const targetProfileId = requestedProfile || profileIdRef.current;
     if (!targetProfileId) {
       return;
     }
+
     skipNextProfileSessionRef.current = true;
-    if (requestedProfile && requestedProfile !== profileId) {
+
+    if (requestedProfile && requestedProfile !== profileIdRef.current) {
       setProfileId(requestedProfile);
     }
+
     if (requestedDraft) {
       setComposerDraft(requestedDraft);
     }
+
     enterDraftChat(targetProfileId);
-  }, [searchParams, setSearchParams, profileId, enterDraftChat, location.search]);
+  }, [searchParams, setSearchParams, enterDraftChat, location.search]);
 
   useEffect(() => {
     if (!profileId || routeSession) {
@@ -623,13 +626,6 @@ export function useChatPage() {
   const isEmptyState = messages.length === 0 && !busy;
   const composerDisabled = !profileId || readOnlySession;
 
-  const readOnlyBanner = readOnlySession ? (
-    <p className="mb-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-      View-only {formatSessionChannelLabel(sessionChannel)} conversation. Reply from{" "}
-      {formatSessionChannelLabel(sessionChannel)}.
-    </p>
-  ) : null;
-
   return {
     session,
     messages,
@@ -654,7 +650,7 @@ export function useChatPage() {
     readOnlySession,
     isEmptyState,
     composerDisabled,
-    readOnlyBanner,
+    sessionChannel,
     handleProfileSwitch,
     handleModelChange,
     renderModelLabel,

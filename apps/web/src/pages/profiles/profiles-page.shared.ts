@@ -1,3 +1,5 @@
+import type { ProfileSummary } from "@nakama/core/contract";
+
 export const sectionClass = "rounded-md border border-border bg-card";
 export const profilesTagline = "Separate prompt, tools, and knowledge for each bot.";
 export const profileTextSaveDelayMs = 1000;
@@ -47,13 +49,7 @@ export type RemoveAssignmentTarget =
   | { kind: "skill"; id: string; name: string }
   | { kind: "composio"; id: string; name: string };
 
-export function profileSidebarDescription(profile: {
-  isSuper: boolean;
-  toolCount: number;
-  mcpServerCount: number;
-  isDefault: boolean;
-  id: string;
-}): string {
+export function profileSidebarDescription(profile: ProfileSummary): string {
   if (profile.isSuper) {
     return "Super bot";
   }

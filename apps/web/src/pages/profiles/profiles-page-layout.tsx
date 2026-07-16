@@ -284,5 +284,5 @@ export function ProfilesPageLayout(state: ProfilesPageState) {
           </div>
         </section>
       </div>
-
+  );
 }

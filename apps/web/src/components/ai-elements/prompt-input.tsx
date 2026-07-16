@@ -38,7 +38,6 @@ import {
 import { nanoid } from "nanoid";
 import type {
   ChangeEvent,
-  ChangeEventHandler,
   ClipboardEventHandler,
   ComponentProps,
   FormEvent,
@@ -68,11 +67,8 @@ import {
   PromptInputController,
   type AttachmentsContext,
   type PromptInputControllerProps,
-  type TextInputContext,
   useOptionalPromptInputController,
   useOptionalProviderAttachments,
-  usePromptInputController,
-  useProviderAttachments,
 } from "@/components/ai-elements/prompt-input-context";
 import { PromptInputForm } from "@/components/ai-elements/prompt-input-form";
 import {

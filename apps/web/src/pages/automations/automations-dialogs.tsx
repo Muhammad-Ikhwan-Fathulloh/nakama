@@ -1,4 +1,3 @@
-import type { AutomationRunRecord, StoredAutomation } from "@nakama/core/contract";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,

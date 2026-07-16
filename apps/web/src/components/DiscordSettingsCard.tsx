@@ -5,6 +5,7 @@ import {
   type AllowedDiscordUser,
 } from "@/components/DiscordAllowedUsersDialog";
 import { DiscordSettingsCardContent } from "@/components/discord-settings-card-content";
+import { SETTINGS_CARD_LOADING_SKELETON } from "@/components/integration-settings.shared";
 import { Card, CardContent } from "@/components/ui/card";
 import { useProfilesQuery } from "@/hooks/use-app-queries";
 import { useSystemStatusQuery } from "@/hooks/use-system-status";
@@ -175,17 +176,13 @@ export function DiscordSettingsCard({
   }
 
   if (isLoading) {
-    const skeleton = (
-      <div className="h-16 animate-pulse rounded-lg bg-muted px-4" aria-hidden="true" />
-    );
-
     if (embedded) {
-      return skeleton;
+      return SETTINGS_CARD_LOADING_SKELETON;
     }
 
     return (
       <Card className="w-full shadow-none">
-        <CardContent className="py-3">{skeleton}</CardContent>
+        <CardContent className="py-3">{SETTINGS_CARD_LOADING_SKELETON}</CardContent>
       </Card>
     );
   }

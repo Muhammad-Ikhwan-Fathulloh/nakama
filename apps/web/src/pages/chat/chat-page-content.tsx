@@ -3,6 +3,7 @@ import { ChatMessageList } from "@/components/chat/chat-message-list";
 import { PromptInputProvider } from "@/components/ai-elements/prompt-input";
 import { ChatAttachmentPanelProvider } from "@/context/chat-attachment-panel-context";
 import { formatAgentQuestionnaireAnswersMessage } from "@nakama/core/agent-questionnaire";
+import { formatSessionChannelLabel } from "@/lib/chat-history";
 import { extractModelId } from "@/lib/models";
 import { ChatPageColumn, ChatWelcome } from "@/pages/chat/chat-page-layout";
 import type { ChatPageState } from "@/pages/chat/use-chat-page";
@@ -32,7 +33,7 @@ export function ChatPageContent(state: ChatPageState) {
     readOnlySession,
     isEmptyState,
     composerDisabled,
-    readOnlyBanner,
+    sessionChannel,
     handleProfileSwitch,
     handleModelChange,
     renderModelLabel,
@@ -44,6 +45,13 @@ export function ChatPageContent(state: ChatPageState) {
     agentTodos,
     agentQuestionnaire,
   } = state;
+
+  const readOnlyBanner = readOnlySession ? (
+    <p className="mb-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+      View-only {formatSessionChannelLabel(sessionChannel)} conversation. Reply from{" "}
+      {formatSessionChannelLabel(sessionChannel)}.
+    </p>
+  ) : null;
 
   const composer = (
     <PromptInputProvider key={composerDraft || "empty"} initialInput={composerDraft}>

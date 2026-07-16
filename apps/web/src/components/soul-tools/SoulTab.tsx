@@ -46,6 +46,8 @@ export function SoulTab({ profileId: controlledProfileId }: { profileId?: string
   } = useProfilesQuery();
   const [internalProfileId, setProfileIdState] = useState<string | null>(null);
   const profileInitializedRef = useRef(false);
+  const internalProfileIdRef = useRef(internalProfileId);
+  internalProfileIdRef.current = internalProfileId;
   const profileId = embedded ? controlledProfileId : internalProfileId;
   const {
     data: status = null,
@@ -109,7 +111,12 @@ export function SoulTab({ profileId: controlledProfileId }: { profileId?: string
       return;
     }
 
-    const nextProfileId = resolveDefaultProfileId(profiles, searchParams.get("profile"));
+    if (profiles.length === 0) {
+      return;
+    }
+
+    const urlProfile = searchParams.get("profile");
+    const nextProfileId = resolveDefaultProfileId(profiles, urlProfile);
 
     if (!profileInitializedRef.current) {
       profileInitializedRef.current = true;
@@ -117,12 +124,22 @@ export function SoulTab({ profileId: controlledProfileId }: { profileId?: string
       return;
     }
 
-    if (internalProfileId && profiles.some((profile) => profile.id === internalProfileId)) {
+    if (
+      urlProfile &&
+      profiles.some((profile) => profile.id === urlProfile) &&
+      urlProfile !== internalProfileIdRef.current
+    ) {
+      setProfileIdState(urlProfile);
+      return;
+    }
+
+    const current = internalProfileIdRef.current;
+    if (current && profiles.some((profile) => profile.id === current)) {
       return;
     }
 
     setProfileIdState(nextProfileId);
-  }, [embedded, profiles, internalProfileId, searchParams]);
+  }, [embedded, profiles, searchParams]);
 
   useEffect(() => {
     const queryError = profilesError ?? statusError;
