@@ -505,13 +505,26 @@ export function useProfilesPage() {
       composioToolkitsData.userConnections.map((connection) => [connection.toolkitId, connection]),
     );
 
-    return profileComposioData.assignments
-      .map((assignment) => {
-        const toolkit = toolkitById.get(assignment.toolkitId);
-        const userConnection = userByToolkitId.get(assignment.toolkitId);
-        return toolkit ? { assignment, toolkit, userConnection } : null;
-      })
-      .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    const assigned: Array<{
+      assignment: (typeof profileComposioData.assignments)[number];
+      toolkit: NonNullable<ReturnType<typeof toolkitById.get>>;
+      userConnection: ReturnType<typeof userByToolkitId.get>;
+    }> = [];
+
+    for (const assignment of profileComposioData.assignments) {
+      const toolkit = toolkitById.get(assignment.toolkitId);
+      if (!toolkit) {
+        continue;
+      }
+
+      assigned.push({
+        assignment,
+        toolkit,
+        userConnection: userByToolkitId.get(assignment.toolkitId),
+      });
+    }
+
+    return assigned;
   }, [composioToolkitsData, profileComposioData]);
 
   const availableComposioToolkits = useMemo(() => {
@@ -750,14 +763,22 @@ export function useProfilesPage() {
           return;
         }
 
+        const assignments = [];
+
+        for (const assignment of profileComposioData.assignments) {
+          if (assignment.toolkitId === removeConfirm.id) {
+            continue;
+          }
+
+          assignments.push({
+            toolkitId: assignment.toolkitId,
+            allowedActions: assignment.allowedActions,
+          });
+        }
+
         await updateComposioMutation.mutateAsync({
           profileId: selectedId,
-          assignments: profileComposioData.assignments
-            .filter((assignment) => assignment.toolkitId !== removeConfirm.id)
-            .map((assignment) => ({
-              toolkitId: assignment.toolkitId,
-              allowedActions: assignment.allowedActions,
-            })),
+          assignments,
         });
       } else {
         await unassignSkillMutation.mutateAsync({ profileId: selectedId, skillId: removeConfirm.id });
