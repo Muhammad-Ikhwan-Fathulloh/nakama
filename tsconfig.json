@@ -11,13 +11,12 @@
     "verbatimModuleSyntax": true,
     "allowSyntheticDefaultImports": true,
     "types": ["bun"],
-    "baseUrl": ".",
     "paths": {
-      "@nakama/agent": ["packages/agent/src/index.ts"],
-      "@nakama/client": ["packages/client/src/index.ts"],
-      "@nakama/core": ["packages/core/src/index.ts"],
-      "@nakama/core/*": ["packages/core/src/*"],
-      "@nakama/db": ["packages/db/src/index.ts"]
+      "@nakama/agent": ["./packages/agent/src/index.ts"],
+      "@nakama/client": ["./packages/client/src/index.ts"],
+      "@nakama/core": ["./packages/core/src/index.ts"],
+      "@nakama/core/*": ["./packages/core/src/*"],
+      "@nakama/db": ["./packages/db/src/index.ts"]
     }
   }
 }
