@@ -93,6 +93,57 @@ describe("parseStreamingArtifactToolInput", () => {
       filename: null,
       content: null,
     });
+
+    expect(
+      parseStreamingArtifactToolInput(
+        "write_file",
+        '{"path":"artifacts/tldr.md.nakama-m","content":"',
+      ),
+    ).toEqual({
+      eligible: false,
+      relativePath: null,
+      filename: null,
+      content: null,
+    });
+
+    expect(
+      parseStreamingArtifactToolInput(
+        "write_file",
+        '{"path":"artifacts/report.md.nak","content":"{}"}',
+      ),
+    ).toEqual({
+      eligible: false,
+      relativePath: null,
+      filename: null,
+      content: null,
+    });
+
+    expect(
+      parseStreamingArtifactToolInput(
+        "write_file",
+        '{"path":"artifacts/report.md.nakama","content":"{}"}',
+      ),
+    ).toEqual({
+      eligible: false,
+      relativePath: null,
+      filename: null,
+      content: null,
+    });
+  });
+
+  test("rejects incomplete paths so sidecar writes cannot look like content files", () => {
+    // Sidecar path streams as `…md` before `.nakama-meta.json` is appended.
+    expect(
+      parseStreamingArtifactToolInput(
+        "write_file",
+        '{"path":"artifacts/tldr-llm-networking-mikrotik.md',
+      ),
+    ).toEqual({
+      eligible: false,
+      relativePath: null,
+      filename: null,
+      content: null,
+    });
   });
 
   test("rejects non-artifact paths", () => {

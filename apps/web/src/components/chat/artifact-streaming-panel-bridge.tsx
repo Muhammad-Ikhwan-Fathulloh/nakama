@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { ArtifactAttachmentPanelBody } from "@/components/chat/artifact-attachment-panel-body";
+import { artifactPanelDefaultWidth, artifactPanelSubtitle } from "@/components/chat/artifact-attachment-panel-body.shared";
 import { useChatAttachmentPanel } from "@/context/use-chat-attachment-panel";
 import {
   findCompletedContentArtifact,
@@ -61,7 +62,6 @@ function buildStreamingPanelBody({
       isHtml={false}
       isMarkdown={isMarkdown && !isHtml}
       language={language}
-      mimeType={mimeType}
       loading={false}
       error={null}
       content={content || null}
@@ -91,7 +91,6 @@ function buildStablePanelBody({
       isHtml={isHtmlArtifactMimeType(mimeType)}
       isMarkdown={isMarkdown}
       language={artifactCodeLanguage(artifact.filename)}
-      mimeType={mimeType}
       loading={false}
       error={null}
       content={content}
@@ -113,6 +112,7 @@ export function ArtifactStreamingPanelBridge({
   const openedRef = useRef<string | null>(null);
   const lastEligibleRef = useRef<EligibleStreamTarget | null>(null);
   const handedOffRef = useRef(new Set<string>());
+  const autoWidthAppliedRef = useRef(new Set<string>());
   const streaming = useMemo(() => findLatestStreamingArtifact(messages), [messages]);
 
   useEffect(() => {
@@ -147,13 +147,26 @@ export function ArtifactStreamingPanelBridge({
       content: streaming.parsed.content ?? "",
       tool: streaming.tool,
     });
-    const isMarkdown = isMarkdownArtifactMimeType(artifact.mimeType);
-    const language = artifactCodeLanguage(artifact.filename);
+    const defaultWidth = artifactPanelDefaultWidth(artifact.filename, artifact.mimeType);
+    const subtitle = artifactPanelSubtitle({
+      mimeType: artifact.mimeType,
+      streaming: true,
+    });
+    const widthPatch =
+      defaultWidth === 768 && !autoWidthAppliedRef.current.has(panelId)
+        ? { defaultWidth }
+        : {};
+
+    if (defaultWidth === 768) {
+      autoWidthAppliedRef.current.add(panelId);
+    }
 
     if (activeId === panelId) {
       update(panelId, {
         title: filename,
+        subtitle,
         content: body,
+        ...widthPatch,
       });
       return;
     }
@@ -163,10 +176,14 @@ export function ArtifactStreamingPanelBridge({
     }
 
     openedRef.current = panelId;
+    if (defaultWidth === 768) {
+      autoWidthAppliedRef.current.add(panelId);
+    }
     show({
       id: panelId,
       title: filename,
-      defaultWidth: isMarkdown || language ? 768 : 448,
+      subtitle,
+      defaultWidth,
       resizable: true,
       fullscreen: false,
       content: body,
@@ -224,6 +241,11 @@ export function ArtifactStreamingPanelBridge({
 
         update(handoffTarget.toolCallId, {
           title: filename,
+          subtitle: artifactPanelSubtitle({
+            mimeType: artifact.mimeType,
+            sizeBytes: new TextEncoder().encode(text).byteLength,
+          }),
+          defaultWidth: artifactPanelDefaultWidth(artifact.filename, artifact.mimeType),
           content: buildStablePanelBody({
             artifact,
             content: text,

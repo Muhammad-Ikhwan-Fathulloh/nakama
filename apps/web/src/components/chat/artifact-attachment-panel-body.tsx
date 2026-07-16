@@ -1,13 +1,6 @@
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Spinner } from "@/components/ui/spinner";
-import {
-  isDocxFile,
-  isHtmlArtifactMimeType,
-  isLegacyDocFile,
-  isMarkdownArtifactMimeType,
-  type ChatArtifactRef,
-} from "@/lib/chat-artifacts";
-import { formatBytes } from "@/lib/knowledge-base-files";
+import type { ChatArtifactRef } from "@/lib/chat-artifacts";
 
 /** Highlighting a very large file blocks the main thread, so show it as plain text. */
 const MAX_HIGHLIGHTED_CHARS = 200_000;
@@ -22,17 +15,27 @@ function renderTextContent({
   content,
   isMarkdown,
   language,
+  streaming = false,
 }: {
   content: string;
   isMarkdown: boolean;
   language: string | null;
+  streaming?: boolean;
 }) {
   if (isMarkdown) {
-    return <MessageResponse className="text-sm">{content}</MessageResponse>;
+    return (
+      <MessageResponse className="text-sm" isAnimating={streaming}>
+        {content}
+      </MessageResponse>
+    );
   }
 
   if (language && content.length <= MAX_HIGHLIGHTED_CHARS) {
-    return <MessageResponse className="text-sm">{toCodeFence(content, language)}</MessageResponse>;
+    return (
+      <MessageResponse className="text-sm" isAnimating={streaming}>
+        {toCodeFence(content, language)}
+      </MessageResponse>
+    );
   }
 
   return (
@@ -46,7 +49,6 @@ export function ArtifactAttachmentPanelBody({
   isHtml,
   isMarkdown,
   language,
-  mimeType,
   loading,
   error,
   content,
@@ -57,7 +59,6 @@ export function ArtifactAttachmentPanelBody({
   isHtml: boolean;
   isMarkdown: boolean;
   language: string | null;
-  mimeType: string;
   loading: boolean;
   error: string | null;
   content: string | null;
@@ -97,22 +98,6 @@ export function ArtifactAttachmentPanelBody({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span>{mimeType}</span>
-        {streaming ? (
-          <>
-            <span>·</span>
-            <span>Writing…</span>
-          </>
-        ) : null}
-        {artifact.sizeBytes > 0 ? (
-          <>
-            <span>·</span>
-            <span>{formatBytes(artifact.sizeBytes)}</span>
-          </>
-        ) : null}
-      </div>
-
       {loading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Spinner className="size-4" />
@@ -123,13 +108,12 @@ export function ArtifactAttachmentPanelBody({
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
       {!loading && !error && content
-        ? streaming && isMarkdown
-          ? (
-            <pre className="max-h-[min(50vh,28rem)] overflow-auto rounded-lg border border-border bg-muted/40 p-3 text-sm whitespace-pre-wrap text-foreground">
-              {content}
-            </pre>
-          )
-          : renderTextContent({ content, isMarkdown, language })
+        ? renderTextContent({
+            content,
+            isMarkdown,
+            language,
+            streaming,
+          })
         : null}
 
       {!loading && !error && !canPreview ? (
