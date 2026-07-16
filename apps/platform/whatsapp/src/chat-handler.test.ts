@@ -34,12 +34,12 @@ function createMockSocket() {
   return { socket, sent };
 }
 
-describe("createChatHandler", () => {
-  beforeEach(() => {
-    resetActiveStreamsForTests();
-    resetChatLocksForTests();
-  });
+beforeEach(() => {
+  resetActiveStreamsForTests();
+  resetChatLocksForTests();
+});
 
+describe("createChatHandler", () => {
   test("blocks unauthorized JID from chatting", async () => {
     await withTempHome(async (homeDir) => {
       await writeWhatsAppConfigIni(homeDir, {
