@@ -89,11 +89,7 @@ export function ArtifactAttachmentPanelBody({
             title={artifact.filename}
             srcDoc={htmlForArtifactPreview(content)}
             sandbox={htmlSandbox}
-            tabIndex={0}
             className="min-h-0 w-full flex-1 border-0 bg-background"
-            onLoad={(event) => {
-              event.currentTarget.focus();
-            }}
           />
         ) : null}
 

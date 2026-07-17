@@ -1,11 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 import { XIcon } from "lucide-react";
 import type { LinkSafetyModalProps } from "streamdown";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { splitExternalUrl } from "@/lib/external-link-url";
 
 const LEARN_MORE_HREF =
@@ -18,35 +23,11 @@ export function ExternalLinkSafetyModal({
   onConfirm,
 }: LinkSafetyModalProps) {
   const [copied, setCopied] = useState(false);
-  const [mounted, setMounted] = useState(false);
   const { prefix, host, suffix } = splitExternalUrl(url);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [isOpen, onClose]);
 
   useEffect(() => {
     if (!isOpen) setCopied(false);
   }, [isOpen]);
-
-  if (!isOpen || !mounted) return null;
 
   async function handleCopy() {
     try {
@@ -63,32 +44,22 @@ export function ExternalLinkSafetyModal({
     onClose();
   }
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-background/50 backdrop-blur-sm"
-      data-streamdown="link-safety-modal"
-      onClick={onClose}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") onClose();
+  return (
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onClose();
       }}
-      role="presentation"
     >
-      <div
-        aria-describedby="external-link-safety-description"
-        aria-labelledby="external-link-safety-title"
-        aria-modal="true"
-        className="relative mx-4 flex w-full max-w-md flex-col gap-3 rounded-3xl border bg-background p-6 shadow-lg"
-        onClick={(event) => event.stopPropagation()}
-        onKeyDown={(event) => event.stopPropagation()}
-        role="dialog"
+      <DialogContent
+        className="flex w-full max-w-md flex-col gap-3 rounded-3xl border bg-background p-6 shadow-lg sm:max-w-md"
+        data-streamdown="link-safety-modal"
+        showCloseButton={false}
       >
         <div className="flex items-center justify-between gap-3">
-          <p
-            className="m-0 text-lg leading-none font-semibold text-foreground"
-            id="external-link-safety-title"
-          >
+          <DialogTitle className="m-0 text-lg leading-none font-semibold text-foreground">
             External site
-          </p>
+          </DialogTitle>
           <button
             className="-m-1.5 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             onClick={onClose}
@@ -101,10 +72,7 @@ export function ExternalLinkSafetyModal({
         </div>
 
         <div className="flex flex-col gap-2 py-4">
-          <p
-            className="m-0 text-sm leading-snug text-muted-foreground"
-            id="external-link-safety-description"
-          >
+          <DialogDescription className="m-0 text-sm leading-snug text-muted-foreground">
             Verify this link is where you&apos;d like to go.{" "}
             <a
               className="underline underline-offset-2 hover:text-foreground"
@@ -112,11 +80,11 @@ export function ExternalLinkSafetyModal({
               rel="noreferrer"
               target="_blank"
             >
-              Learn more
+              How to recognize phishing (CISA)
             </a>
-          </p>
+          </DialogDescription>
 
-          <p className="m-0 break-all text-sm leading-snug pt-2">
+          <p className="m-0 break-all pt-2 text-sm leading-snug">
             <span className="text-muted-foreground">{prefix}</span>
             <span className="font-semibold text-foreground">{host}</span>
             <span className="text-muted-foreground">{suffix}</span>
@@ -140,8 +108,7 @@ export function ExternalLinkSafetyModal({
             Open link
           </Button>
         </div>
-      </div>
-    </div>,
-    document.body,
+      </DialogContent>
+    </Dialog>
   );
 }
