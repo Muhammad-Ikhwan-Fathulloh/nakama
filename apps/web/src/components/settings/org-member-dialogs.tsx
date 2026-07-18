@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { OrgMemberRoleSelect } from "@/components/settings/org-member-role-select";
 
 export type OrgMemberAddCredentials = {
@@ -319,6 +320,67 @@ export function OrgMemberEditDialog({
             </Button>
           </DialogFooter>
         </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function OrgMemberRemoveDialog({
+  member,
+  orgName,
+  pending,
+  formError,
+  onOpenChange,
+  onConfirm,
+}: {
+  member: OrgMemberSummary | null;
+  orgName: string;
+  pending: boolean;
+  formError?: string | null;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  const displayName = member?.name?.trim() || member?.email || "this member";
+
+  return (
+    <Dialog
+      open={member !== null}
+      onOpenChange={(open) => {
+        if (!open && !pending) {
+          onOpenChange(false);
+        }
+      }}
+    >
+      <DialogContent className="gap-6 p-6 sm:max-w-md">
+        <DialogHeader className="gap-3">
+          <DialogTitle>Remove member?</DialogTitle>
+          <DialogDescription>
+            Remove {displayName} from {orgName}? They will lose access to this organization.
+          </DialogDescription>
+          {member?.name ? (
+            <p className="text-sm text-muted-foreground">{member.email}</p>
+          ) : null}
+        </DialogHeader>
+
+        {formError ? (
+          <p className="text-sm text-destructive" role="alert">
+            {formError}
+          </p>
+        ) : null}
+
+        <DialogFooter className="mx-0 mb-0 gap-2 border-0 bg-transparent p-0 sm:flex-row sm:justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button type="button" variant="destructive" disabled={pending} onClick={onConfirm}>
+            {pending ? <Spinner className="size-4" /> : "Remove"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

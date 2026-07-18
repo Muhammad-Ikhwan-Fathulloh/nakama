@@ -6,6 +6,7 @@ import {
   OrgMemberAddDialog,
   OrgMemberEditDialog,
   OrgMemberInviteDialog,
+  OrgMemberRemoveDialog,
   type OrgMemberAddCredentials,
 } from "@/components/settings/org-member-dialogs";
 import {
@@ -27,6 +28,7 @@ type OrgMembersState = {
   addOpen: boolean;
   editOpen: boolean;
   editingMember: OrgMemberSummary | null;
+  removingMember: OrgMemberSummary | null;
   inviteEmail: string;
   inviteRole: OrgRole;
   addName: string;
@@ -48,6 +50,7 @@ const initialOrgMembersState: OrgMembersState = {
   addOpen: false,
   editOpen: false,
   editingMember: null,
+  removingMember: null,
   inviteEmail: "",
   inviteRole: "member",
   addName: "",
@@ -270,14 +273,23 @@ export function OrgMembersCard() {
     );
   }
 
-  function handleRemove(userId: string, email: string) {
-    if (!window.confirm(`Remove ${email} from ${activeOrg!.name}?`)) {
+  function handleRemove(member: OrgMemberSummary) {
+    dispatch({
+      type: "patch",
+      values: { removingMember: member, formError: null },
+    });
+  }
+
+  function handleRemoveConfirm() {
+    if (!state.removingMember) {
       return;
     }
 
     dispatch({ type: "patch", values: { formError: null } });
-    removeMutation.mutate(userId, {
-      onError: (err) => dispatch({ type: "patch", values: { formError: formatError(err) } }),
+    removeMutation.mutate(state.removingMember.userId, {
+      onSuccess: () => dispatch({ type: "patch", values: { removingMember: null } }),
+      onError: (err) =>
+        dispatch({ type: "patch", values: { formError: formatError(err) } }),
     });
   }
 
@@ -393,6 +405,19 @@ export function OrgMembersCard() {
         onEditPhoneChange={(value) => dispatch({ type: "patch", values: { editPhone: value } })}
         onEditRoleChange={(value) => dispatch({ type: "patch", values: { editRole: value } })}
         onSubmit={handleEditSubmit}
+      />
+
+      <OrgMemberRemoveDialog
+        member={state.removingMember}
+        orgName={activeOrg.name}
+        pending={removeMutation.isPending}
+        formError={state.removingMember ? state.formError : null}
+        onOpenChange={(open) => {
+          if (!open) {
+            dispatch({ type: "patch", values: { removingMember: null, formError: null } });
+          }
+        }}
+        onConfirm={handleRemoveConfirm}
       />
     </>
   );

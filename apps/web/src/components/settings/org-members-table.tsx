@@ -21,7 +21,7 @@ export function OrgMembersTable({
   removePending: boolean;
   onRoleChange: (userId: string, role: OrgRole) => void;
   onEdit: (member: OrgMemberSummary) => void;
-  onRemove: (userId: string, email: string) => void;
+  onRemove: (member: OrgMemberSummary) => void;
 }) {
   if (isLoading) {
     return (
@@ -97,7 +97,7 @@ export function OrgMembersTable({
                       className="text-muted-foreground hover:text-destructive"
                       aria-label={`Remove ${displayName}`}
                       disabled={removePending}
-                      onClick={() => onRemove(member.userId, member.email)}
+                      onClick={() => onRemove(member)}
                     >
                       <Trash2Icon className="size-3.5" />
                     </Button>

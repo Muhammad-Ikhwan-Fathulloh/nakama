@@ -4,12 +4,14 @@ import {
   rotateLocalAuthToken,
   type AcceptOrgInviteResponse,
   type AuthUserResponse,
+  type ChangePasswordRequest,
   type CreateOrganizationRequest,
   type CreateOrganizationResponse,
   type ListUserOrgsResponse,
   type RotateLocalAuthTokenResponse,
   type SetActiveOrgRequest,
   type SetupAuthRequest,
+  type UpdateAuthProfileRequest,
 } from "@nakama/core";
 import {
   persistWebPublicUrl,
@@ -37,10 +39,19 @@ export function registerAuthRoutes(app: HonoApp, options: ServerOptions): void {
   }).openapi("AuthCredentialsRequest");
   const authUserSchema = z.object({
     email: z.string(),
+    name: z.string().nullable().optional(),
+    phone: z.string().nullable().optional(),
     isPlatformAdmin: z.boolean().optional(),
     activeOrgId: z.string().nullable().optional(),
     orgId: z.string().nullable().optional(),
   }).openapi("AuthUserResponse");
+  const updateAuthProfileSchema = z
+    .object({
+      name: z.string().nullable().optional(),
+      email: z.string().optional(),
+      phone: z.string().nullable().optional(),
+    })
+    .openapi("UpdateAuthProfileRequest");
   const loggedOutSchema = z.object({
     ok: z.boolean(),
   });
@@ -112,6 +123,28 @@ export function registerAuthRoutes(app: HonoApp, options: ServerOptions): void {
     responses: {
       200: { description: "Authenticated user", content: { "application/json": { schema: authUserSchema } } },
       401: { description: "Error", content: { "application/json": { schema: errorSchema } } },
+      500: { description: "Error", content: { "application/json": { schema: errorSchema } } },
+    },
+  });
+
+  const updateMeRoute = createRoute({
+    method: "patch",
+    path: "/v1/auth/me",
+    tags: ["Auth"],
+    summary: "Update the current user's profile",
+    operationId: "updateAuthMe",
+    request: {
+      body: {
+        required: true,
+        content: { "application/json": { schema: updateAuthProfileSchema } },
+      },
+    },
+    responses: {
+      200: { description: "Updated user", content: { "application/json": { schema: authUserSchema } } },
+      400: { description: "Error", content: { "application/json": { schema: errorSchema } } },
+      401: { description: "Error", content: { "application/json": { schema: errorSchema } } },
+      403: { description: "Error", content: { "application/json": { schema: errorSchema } } },
+      409: { description: "Error", content: { "application/json": { schema: errorSchema } } },
       500: { description: "Error", content: { "application/json": { schema: errorSchema } } },
     },
   });
@@ -327,6 +360,20 @@ export function registerAuthRoutes(app: HonoApp, options: ServerOptions): void {
     return c.json(authBody, 200);
   });
 
+  app.openAPIRegistry.registerPath(updateMeRoute);
+  app.patch("/v1/auth/me", async (c) => {
+    if (!authService || !orgService) {
+      return errorResponse("Authentication not configured", 500);
+    }
+
+    const auth = getRequestAuth(c);
+    assertBrowserCsrf(c.req.raw, auth, authService);
+
+    const body = await readJson<UpdateAuthProfileRequest>(c.req.raw);
+    const updated = await orgService.updateOwnProfile(auth.user.id, body);
+    return json<AuthUserResponse>(updated);
+  });
+
   app.openapi(logoutRoute, async (c) => {
     if (!authService || !databaseAdapter) {
       return c.json({ error: "Authentication not configured" }, 500);
@@ -361,7 +408,7 @@ export function registerAuthRoutes(app: HonoApp, options: ServerOptions): void {
     const auth = getRequestAuth(c);
     assertBrowserCsrf(c.req.raw, auth, authService);
 
-    const body = await readJson<{ currentPassword: string; newPassword: string }>(c.req.raw);
+    const body = await readJson<ChangePasswordRequest>(c.req.raw);
     await orgService.changePassword({
       userId: auth.user.id,
       currentPassword: body.currentPassword,

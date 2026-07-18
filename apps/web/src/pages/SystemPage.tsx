@@ -7,6 +7,7 @@ import { DataPortabilityPanel } from "@/components/system/DataPortabilityPanel";
 import { Spinner } from "@/components/ui/spinner";
 import { useAuth } from "@/context/use-auth";
 import { canAccessSystemPage } from "@/lib/navigation";
+import { StatusPage } from "@/pages/StatusPage";
 import { resolveSystemTab, visibleSystemTabs, type SystemTabId } from "@/pages/system-page.shared";
 import { cn } from "@/lib/utils";
 
@@ -52,7 +53,7 @@ export function SystemPage() {
     <section className="overflow-hidden rounded-md border border-border bg-card">
       <div
         role="tablist"
-        aria-label="System tools"
+        aria-label="System"
         className="flex shrink-0 border-b border-border px-4 sm:px-5"
       >
         {visibleTabs.map((item) => (
@@ -73,7 +74,9 @@ export function SystemPage() {
         role="tabpanel"
         aria-labelledby={`system-tab-${tab}`}
       >
-        {tab === "tools" ? (
+        {tab === "status" ? (
+          <StatusPage embedded />
+        ) : tab === "tools" ? (
           <ToolsTab embedded />
         ) : tab === "mcp" ? (
           <McpTab embedded />

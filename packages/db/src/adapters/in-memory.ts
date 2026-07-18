@@ -93,8 +93,14 @@ export function createInMemoryDatabaseAdapter(): DatabaseAdapter {
         return;
       }
 
+      const nextEmail = profile.email ?? user.email;
+      if (nextEmail !== user.email) {
+        usersByEmail.delete(user.email);
+      }
+
       const updated = {
         ...user,
+        email: nextEmail,
         name: profile.name,
         phone: profile.phone,
         updatedAt,

@@ -237,6 +237,30 @@ describe("OrgService", () => {
     });
   });
 
+  test("updates own profile email phone and name", async () => {
+    const { orgService } = createOrgService();
+    const created = await orgService.createOrganization({
+      name: "Acme",
+      slug: "acme-profile",
+      admin: {
+        name: "Acme Admin",
+        email: "admin@acme.com",
+        phone: "+628123456789",
+      },
+    });
+
+    const userId = created.adminMember!.member.userId;
+    const updated = await orgService.updateOwnProfile(userId, {
+      name: "Updated Admin",
+      email: "updated@acme.com",
+      phone: "",
+    });
+
+    expect(updated.name).toBe("Updated Admin");
+    expect(updated.email).toBe("updated@acme.com");
+    expect(updated.phone).toBeNull();
+  });
+
   test("rejects duplicate slugs", async () => {
     const { orgService } = createOrgService();
 

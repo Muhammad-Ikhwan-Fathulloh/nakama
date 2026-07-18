@@ -125,6 +125,8 @@ import type {
   TaskMessagesResponse,
   AuthUserResponse,
   SetupAuthRequest,
+  UpdateAuthProfileRequest,
+  ChangePasswordRequest,
   UpdateWebPublicUrlRequest,
   CreateOrganizationRequest,
   CreateOrganizationResponse,
@@ -1402,6 +1404,22 @@ export class NakamaClient {
     const response = await this.request<AuthUserResponse>("/v1/auth/me");
     this.applyAuthUserResponse(response);
     return response;
+  }
+
+  async updateAuthProfile(request: UpdateAuthProfileRequest): Promise<AuthUserResponse> {
+    const response = await this.request<AuthUserResponse>("/v1/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify(request),
+    });
+    this.applyAuthUserResponse(response);
+    return response;
+  }
+
+  async changePassword(request: ChangePasswordRequest): Promise<void> {
+    await this.request("/v1/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
   }
 
   async listUserOrgs(): Promise<ListUserOrgsResponse> {

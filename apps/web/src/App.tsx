@@ -20,8 +20,8 @@ import { SetupWizardPage } from "@/pages/SetupWizardPage";
 import { SystemPage } from "@/pages/SystemPage";
 import { ToolPlaygroundPage } from "@/pages/ToolPlaygroundPage";
 import { PublicArtifactSharePage } from "@/pages/PublicArtifactSharePage";
-import { StatusPage } from "@/pages/StatusPage";
 import { TasksPage } from "@/pages/TasksPage";
+import { statusTabPath } from "@/lib/navigation";
 
 function QueryCacheListener() {
   useEffect(() => {
@@ -46,7 +46,7 @@ function AppShell() {
               <Route element={<SetupGuard />}>
                 <Route element={<Layout />}>
                   <Route index element={<Navigate to="/chat" replace />} />
-                  <Route path="/status" element={<StatusPage />} />
+                  <Route path="/status" element={<Navigate to={statusTabPath()} replace />} />
                   <Route path="/chat" element={<ChatPage />} />
                   <Route path="/chat/:profileId/:sessionId" element={<ChatPage />} />
                   <Route path="/history" element={<HistoryPage />} />
