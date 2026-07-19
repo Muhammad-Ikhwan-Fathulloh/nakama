@@ -127,8 +127,8 @@ export function registerWorkerRoutes(app: HonoApp, options: ServerOptions): void
   });
 
   app.post("/v1/workers/:name/clear-logs", async (c) => {
-    requireNotViewerFromContext(c);
     const name = decodeURIComponent(c.req.param("name"));
+    requireWorkerAuthorization(c, name);
 
     if (!workerManager.isValidWorker(name)) {
       return errorResponse(`Unknown worker: ${name}`, 400);
