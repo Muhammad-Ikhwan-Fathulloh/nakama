@@ -2,7 +2,6 @@ import type { LucideIcon } from "lucide-react";
 import {
   ChevronsLeftIcon,
   ChevronsRightIcon,
-  LogOutIcon,
 } from "lucide-react";
 import type { SVGProps } from "react";
 import { useMemo } from "react";
@@ -17,6 +16,7 @@ import {
 import { useAppContext } from "@/context/use-app-context";
 import { useAuth } from "@/context/use-auth";
 import { OrgSwitcher } from "@/components/OrgSwitcher";
+import { SidebarUserMenu } from "@/components/SidebarUserMenu";
 import { usePrefetchAppData } from "@/hooks/use-app-queries";
 import { useAutomationUnreadTotal } from "@/hooks/use-automations";
 import { useSidebarCollapsed } from "@/hooks/use-sidebar-collapsed";
@@ -32,7 +32,6 @@ import {
   PAGE_PATHS,
   PLATFORM_ADMIN_PAGE_IDS,
   pageIdFromPath,
-  SETTINGS_NAV_ITEM,
   type NavItem,
 } from "@/lib/navigation";
 
@@ -43,7 +42,7 @@ export function Layout() {
   const page = pageIdFromPath(location.pathname) ?? "chat";
   const chatProfileId = chatProfileIdFromPath(location.pathname);
   const { error } = useAppContext();
-  const { logout, user, activeOrg } = useAuth();
+  const { user, activeOrg } = useAuth();
   const prefetchAppData = usePrefetchAppData();
   const { data: automationUnreadTotal = 0 } = useAutomationUnreadTotal();
   const { collapsed, toggle } = useSidebarCollapsed();
@@ -153,37 +152,11 @@ export function Layout() {
 
           <div
             className={cn(
-              "sidebar-nav-footer flex shrink-0 border-t border-border/50",
-              collapsed ? "flex-col justify-center gap-1 px-2 py-2.5" : "items-center gap-2 px-3 py-3",
+              "sidebar-nav-footer flex shrink-0 flex-col border-t border-border/50",
+              collapsed ? "justify-center px-2 py-2.5" : "px-3 py-3",
             )}
           >
-            <SidebarNavButton
-              item={SETTINGS_NAV_ITEM}
-              icon={NAV_ITEM_ICONS.settings}
-              active={page === "settings"}
-              collapsed={collapsed}
-              to={navHrefForPage("settings")}
-              onPrefetch={prefetchAppData}
-            />
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="shrink-0 text-muted-foreground/70 hover:text-foreground"
-                    onClick={() => {
-                      void logout();
-                    }}
-                  >
-                    <LogOutIcon className="sidebar-nav-icon" strokeWidth={1.75} />
-                  </Button>
-                }
-              />
-              <TooltipContent side="right">
-                {user?.email ?? "Log out"}
-              </TooltipContent>
-            </Tooltip>
+            <SidebarUserMenu collapsed={collapsed} />
           </div>
         </aside>
 

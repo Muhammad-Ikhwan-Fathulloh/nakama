@@ -2,7 +2,6 @@ import type { LucideIcon } from "lucide-react";
 import {
   CircleFadingPlusIcon,
   CircleUserRoundIcon,
-  CircleGaugeIcon,
   BrainIcon,
   KanbanIcon,
   ClockIcon,
@@ -12,7 +11,6 @@ import {
 } from "lucide-react";
 
 export type PageId =
-  | "status"
   | "chat"
   | "history"
   | "profiles"
@@ -77,11 +75,6 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "System",
     items: [
       {
-        id: "status",
-        label: "Status",
-        description: "Server and automation worker health",
-      },
-      {
         id: "integrations",
         label: "Integrations",
         description: "Bridges, Composio, and coding agents",
@@ -91,20 +84,18 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "System",
         description: "Identity stack files and registered agent tools",
       },
+      {
+        id: "settings",
+        label: "Settings",
+        description: "Provider API key and model",
+      },
     ],
   },
 ];
 
 export const NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
-export const SETTINGS_NAV_ITEM: NavItem = {
-  id: "settings",
-  label: "Settings",
-  description: "Provider API key and model",
-};
-
 export const NAV_ITEM_ICONS: Record<PageId, LucideIcon> = {
-  status: CircleGaugeIcon,
   chat: CircleFadingPlusIcon,
   history: ClockIcon,
   profiles: CircleUserRoundIcon,
@@ -141,6 +132,10 @@ export function toolsTabPath(): string {
   return `${PAGE_PATHS.soul}?tab=tools`;
 }
 
+export function statusTabPath(): string {
+  return `${PAGE_PATHS.soul}?tab=status`;
+}
+
 export function profilePath(profileId: string): string {
   return `${PAGE_PATHS.profiles}?profile=${encodeURIComponent(profileId)}`;
 }
@@ -175,7 +170,6 @@ export function toolPlaygroundBackTarget(searchParams: URLSearchParams): {
 }
 
 export const PAGE_PATHS: Record<PageId, string> = {
-  status: "/status",
   chat: "/chat",
   history: "/history",
   profiles: "/profiles",
@@ -206,10 +200,6 @@ export function navHrefForPage(
 }
 
 export function findNavItem(pageId: PageId): NavItem | undefined {
-  if (pageId === "settings") {
-    return SETTINGS_NAV_ITEM;
-  }
-
   return NAV_ITEMS.find((item) => item.id === pageId);
 }
 

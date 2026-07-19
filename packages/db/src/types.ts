@@ -377,7 +377,7 @@ export interface DatabaseAdapter {
   createUser(record: StoredUserRecord): Promise<void>;
   updateUserProfile(
     id: string,
-    profile: { name: string | null; phone: string | null },
+    profile: { name: string | null; phone: string | null; email?: string },
     updatedAt: string,
   ): Promise<void>;
   updateUserPassword(id: string, passwordHash: string, updatedAt: string): Promise<void>;

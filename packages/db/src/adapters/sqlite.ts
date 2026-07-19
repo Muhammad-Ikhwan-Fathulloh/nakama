@@ -962,7 +962,7 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
   `);
   const updateUserProfileStmt = db.prepare(`
     UPDATE users
-    SET name = ?, phone = ?, updated_at = ?
+    SET name = ?, phone = ?, email = COALESCE(?, email), updated_at = ?
     WHERE id = ?
   `);
   const updateUserPasswordStmt = db.prepare(`
@@ -1174,7 +1174,13 @@ function createSqliteDatabaseAdapter(db: Database): DatabaseAdapter {
     },
 
     async updateUserProfile(id, profile, updatedAt) {
-      updateUserProfileStmt.run(profile.name, profile.phone, updatedAt, id);
+      updateUserProfileStmt.run(
+        profile.name,
+        profile.phone,
+        profile.email ?? null,
+        updatedAt,
+        id,
+      );
     },
 
     async updateUserPassword(id, passwordHash, updatedAt) {

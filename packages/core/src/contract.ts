@@ -259,9 +259,17 @@ export interface WebPublicUrlSettingsResponse {
 
 export interface AuthUserResponse {
   email: string;
+  name?: string | null;
+  phone?: string | null;
   isPlatformAdmin?: boolean;
   activeOrgId?: string | null;
   orgId?: string | null;
+}
+
+export interface UpdateAuthProfileRequest {
+  name?: string | null;
+  email?: string;
+  phone?: string | null;
 }
 
 export type OrgRole = "admin" | "member" | "viewer";
@@ -340,7 +348,7 @@ export interface ListOrgMembersResponse {
 export interface AddOrgMemberRequest {
   name: string;
   email: string;
-  phone: string;
+  phone?: string;
   role: OrgRole;
 }
 

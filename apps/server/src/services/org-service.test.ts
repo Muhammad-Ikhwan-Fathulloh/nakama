@@ -179,6 +179,26 @@ describe("OrgService", () => {
     expect(added.temporaryPassword).toHaveLength(12);
   });
 
+  test("adds a member without phone", async () => {
+    const { orgService } = createOrgService();
+    const created = await orgService.createOrganization({
+      name: "Acme",
+      slug: "acme-no-member-phone",
+    });
+
+    const added = await orgService.addMember({
+      orgId: created.organization.id,
+      name: "Member Two",
+      email: "member-no-phone@acme.com",
+      phone: "",
+      role: "member",
+    });
+
+    expect(added.member.email).toBe("member-no-phone@acme.com");
+    expect(added.member.phone).toBeNull();
+    expect(added.temporaryPassword).toHaveLength(12);
+  });
+
   test("allows changing password after provisioning", async () => {
     const { orgService } = createOrgService();
     const created = await orgService.createOrganization({
@@ -210,6 +230,30 @@ describe("OrgService", () => {
       status: 401,
       message: "Current password is incorrect.",
     });
+  });
+
+  test("updates own profile email phone and name", async () => {
+    const { orgService } = createOrgService();
+    const created = await orgService.createOrganization({
+      name: "Acme",
+      slug: "acme-profile",
+      admin: {
+        name: "Acme Admin",
+        email: "admin@acme.com",
+        phone: "+628123456789",
+      },
+    });
+
+    const userId = created.adminMember!.member.userId;
+    const updated = await orgService.updateOwnProfile(userId, {
+      name: "Updated Admin",
+      email: "updated@acme.com",
+      phone: "",
+    });
+
+    expect(updated.name).toBe("Updated Admin");
+    expect(updated.email).toBe("updated@acme.com");
+    expect(updated.phone).toBeNull();
   });
 
   test("rejects duplicate slugs", async () => {
