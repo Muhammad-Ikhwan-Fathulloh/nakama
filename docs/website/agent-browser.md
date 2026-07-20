@@ -30,7 +30,8 @@ Use agent-browser when the site has no usable API and the agent must act like a 
 |-------|------|
 | **`agent-browser` skill** | Opt-in bundled skill that teaches when and how to drive the CLI |
 | **`bash` tool** | Runs `agent-browser` commands in the profile workspace |
-| **Host CLI + Chrome** | Installed on the machine running the Nakama server (`agent-browser` binary and Chrome for Testing) |
+| **Profile Config → Skills** | Assign the skill; **Install** CLI/Chrome on the server and **Add bash** when needed |
+| **Host CLI + Chrome** | Installed via the dashboard **Install** button or manually on the Nakama server |
 
 ```text
 User message (interactive / login-walled task)
@@ -43,9 +44,22 @@ User message (interactive / login-walled task)
 
 ## Setup
 
-### 1. Install the CLI on the server
+### 1. Assign the skill from the profile Config tab
 
-On the host where Nakama’s `bash` tool runs:
+Platform admins:
+
+1. Open **Agent → Profiles**, select the profile, and go to the **Config** tab
+2. In **Skills**, open the skill picker and find **`agent-browser`**
+3. If the skill is blocked, use the buttons in that row / banner:
+   - **Install** — installs the `agent-browser` CLI and Chrome on this Nakama server
+   - **Add bash** — assigns the `bash` tool to the profile (required; Super Bot usually already has it)
+4. Assign the **`agent-browser`** skill once install and bash are ready
+
+The skill is opt-in — it is not auto-assigned to Super Bot or default profiles. Both **bash** and the skill are required; the skill alone cannot open a browser.
+
+### 2. Manual CLI install (optional)
+
+If the dashboard **Install** button is unavailable or fails, install on the host where Nakama’s `bash` tool runs:
 
 ```bash
 npm install -g agent-browser
@@ -58,17 +72,7 @@ On Linux, if Chrome libraries are missing:
 agent-browser install --with-deps
 ```
 
-Nakama does **not** auto-install the CLI. If the agent reports `command not found` / `ENOENT`, the operator should run the commands above and retry.
-
-### 2. Assign bash and the skill
-
-Platform admins:
-
-1. Open **Agent → Profiles** and select the profile
-2. Ensure **`bash`** is assigned (Super Bot has it by default; other profiles need it added)
-3. Assign the **`agent-browser`** skill (opt-in — not auto-assigned to Super Bot or default profiles)
-
-Both are required. The skill alone cannot open a browser without `bash`.
+Then return to the profile **Config** tab and assign the skill (and **Add bash** if needed).
 
 ### 3. Try it in chat
 
@@ -108,8 +112,8 @@ Across runs, sessions are **fresh** by default: no sticky cookies or restored lo
 | Symptom | What to check |
 |---------|----------------|
 | Agent never opens a browser | Is `agent-browser` assigned? Does the message look like interactive/login-walled work? Try `/skill agent-browser …` |
-| `command not found` / `ENOENT` | Install the CLI on the server (`npm install -g agent-browser && agent-browser install`) |
-| Skill assigned but nothing runs | Profile also needs **`bash`** |
+| `command not found` / `ENOENT` | Use **Install** on the profile Config → Skills picker, or install manually (`npm install -g agent-browser && agent-browser install`) |
+| Skill assigned but nothing runs | Profile also needs **`bash`** — use **Add bash** in the skill picker if prompted |
 | Clicks miss or fail after navigation | Agent should take a **fresh snapshot** before using refs again |
 | Daemon seems stuck | Ask the agent to run `agent-browser close` or `agent-browser close --all` (or `agent-browser doctor`) |
 
