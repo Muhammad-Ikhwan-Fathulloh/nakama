@@ -80,7 +80,6 @@ import type {
   CodingHarnessInstallRequest,
   CodingHarnessStatus,
   AgentBrowserStatusResponse,
-  AgentBrowserInstallEvent,
   EmailSettingsResponse,
   SendEmailTestRequest,
   SendEmailTestResponse,
