@@ -159,8 +159,9 @@ Profiles receive bundled skills for common workflows:
 - `archive-profile-memory` — move facts from active `MEMORY.md` into `memory-archive/` without deleting them
 - `save-artifact` — save persistent text outputs under `artifacts/` via `write_file`
 - `coding-delegation` — invoke a coding agent for repo work via `bash` (Super Bot by default; see [Coding agent](/coding-agent))
+- `agent-browser` — interactive browser automation via `bash` (opt-in; see [Agent browser](/agent-browser))
 
-New custom profiles receive the file tools and `knowledge_base_search` by default when those builtins are available. Default and super-bot profiles also receive the bundled skills above when they are installed and synced on the server. Super Bot also receives `bash` for one-off host commands and coding-agent workflows.
+New custom profiles receive the file tools and `knowledge_base_search` by default when those builtins are available. Default and super-bot profiles also receive the bundled skills above when they are installed and synced on the server (except opt-in skills such as `agent-browser`). Super Bot also receives `bash` for one-off host commands and coding-agent workflows.
 
 ### Bundled system skills
 
@@ -177,6 +178,10 @@ They are hidden from the `/skill` slash picker (like `create-automation` and `ma
 ### Coding agent
 
 The `coding-delegation` bundled skill teaches when to invoke a coding agent and how to summarize CLI results. Super Bot receives it by default. You can also launch a coding agent directly from the CLI (`nakama launch`). Setup, harness configuration, gateway routing, and runtime flow are in [Coding agent](/coding-agent).
+
+### Agent browser
+
+The `agent-browser` bundled skill teaches agents to drive interactive browsers through `bash` for login walls, forms, and client-rendered pages. Setup, usage, session policy, and troubleshooting are in [Agent browser](/agent-browser).
 
 ## Sync behavior
 
@@ -211,11 +216,13 @@ Viewers cannot invoke agents, so they cannot trigger skills either.
 - Use a **builtin tool** for a native capability like web search or file access
 - Use **`save-artifact`** with **`write_file`** or **`write_docx`** for persistent reports, summaries, generated text, and Word documents under `artifacts/`
 - Use **`coding-delegation`** with **`bash`** when repo work is better handled by a dedicated coding agent ([setup](/coding-agent))
+- Use **`agent-browser`** with **`bash`** for login walls, forms, and interactive browsing ([setup](/agent-browser))
 - Use an **MCP server** for external tool integrations
 
 ## Next steps
 
 - [Profiles](/profiles) — how skills attach to a bot
 - [Coding agent](/coding-agent) — harness setup and the `coding-delegation` skill
+- [Agent browser](/agent-browser) — interactive browsing via `bash` and the `agent-browser` skill
 - [Builtin tools](/builtin-tools) — the actions a profile can take
 - [MCP servers](/mcp) — external tools assigned to a profile
