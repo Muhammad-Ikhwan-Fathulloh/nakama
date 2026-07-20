@@ -9,6 +9,8 @@ import { AuthService } from "../services/auth-service";
 import { OrgService } from "../services/org-service";
 import { AgentService } from "../services/agent-service";
 
+const isWindows = process.platform === "win32";
+
 describe("coding harness settings routes", () => {
   const originalPath = process.env.PATH ?? "";
   const originalDisableFixPath = process.env.NAKAMA_DISABLE_FIX_PATH;
@@ -42,7 +44,8 @@ describe("coding harness settings routes", () => {
     }
   });
 
-  test("org admin can read and update coding harness settings", async () => {
+  test(isWindows ? "skipped on Windows (uses shell scripts as fake binaries)" : "org admin can read and update coding harness settings", async () => {
+    if (isWindows) return;
     await installFakeBinary(tempBinDir, "codex", "ready");
 
     const databaseAdapter = createInMemoryDatabaseAdapter();
@@ -196,7 +199,8 @@ describe("coding harness settings routes", () => {
     }
   }, 15_000);
 
-  test("verify reports login required when codex is installed but not authenticated", async () => {
+  test(isWindows ? "skipped on Windows (uses shell scripts as fake binaries)" : "verify reports login required when codex is installed but not authenticated", async () => {
+    if (isWindows) return;
     await installFakeBinary(tempBinDir, "codex", "login-required");
 
     const databaseAdapter = createInMemoryDatabaseAdapter();

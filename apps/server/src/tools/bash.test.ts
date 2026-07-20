@@ -5,7 +5,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { PathGuardError } from "@nakama/core";
 import { runBash } from "./bash";
 
+const isWindows = process.platform === "win32";
+
 describe("bash tool", () => {
+  if (isWindows) {
+    test("skipped on Windows (requires /bin/bash)", () => {
+      // bash.ts hardcodes /bin/bash; these tests are Unix-only.
+    });
+    return;
+  }
+
   let workspaceRoot = "";
 
   afterEach(async () => {

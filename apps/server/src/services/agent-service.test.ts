@@ -10,6 +10,8 @@ import {
 import type { StoredProfileRecord } from "@nakama/db";
 import { AgentService } from "./agent-service";
 
+const isWindows = process.platform === "win32";
+
 const ORG_ID = "org_test";
 
 function createDefaultProfile(): StoredProfileRecord {
@@ -298,7 +300,8 @@ describe("AgentService coding delegation context", () => {
     }
   });
 
-  test("includes harness command template and backend guidance for bash delegation", async () => {
+  test(isWindows ? "skipped on Windows (uses shell script as fake binary)" : "includes harness command template and backend guidance for bash delegation", async () => {
+    if (isWindows) return;
     const db = createInMemoryDatabaseAdapter();
     await installFakeOpenCode(tempBinDir);
     await db.upsertWorkspaceSettings({

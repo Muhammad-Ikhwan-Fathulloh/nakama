@@ -930,7 +930,10 @@ describe("createChatHandler security", () => {
 
       const chatPromise = handleMessage(chatAttempt.ctx);
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await waitForCondition(
+        () => getStreamControl()?.signal !== undefined,
+        "Stream control signal was not registered in time",
+      );
       expect(getStreamControl()?.signal).toBeDefined();
 
       await handleMessage(stopAttempt.ctx);
@@ -1134,7 +1137,10 @@ describe("createChatHandler security", () => {
 
       const chatPromise = handleMessage(chatAttempt.ctx);
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await waitForCondition(
+        () => chatAttempt.replies.length > 0,
+        "Todo status message was not sent in time",
+      );
       await handleMessage(stopAttempt.ctx);
       await chatPromise;
 
