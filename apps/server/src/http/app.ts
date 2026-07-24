@@ -55,7 +55,10 @@ export function createHonoApp(options: ServerOptions) {
       headers.set("X-Content-Type-Options", "nosniff");
       headers.set("X-Frame-Options", "DENY");
       headers.set("X-XSS-Protection", "1; mode=block");
-      headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+      // Only set Referrer-Policy if it's not already set
+      if (!headers.has("Referrer-Policy")) {
+        headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+      }
       headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self';");
       // Only enable HSTS if the request is secure (HTTPS)
       if (new URL(c.req.url).protocol === "https:") {
