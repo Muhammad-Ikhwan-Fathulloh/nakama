@@ -1,60 +1,60 @@
-import { nanoid, type AgentQuestionnaire, type ToolDefinition } from "@nakama/core";
+import {
+  type AgentQuestionnaire,
+  nanoid,
+  type ToolDefinition,
+} from "@nakama/core";
+import { z } from "zod";
 import type { AgentQuestionnaireState } from "../services/agent-questionnaire-state";
 
+const QuestionnaireChoiceSchema = z.union([
+  z.string().transform((label) => ({ label })),
+  z.object({
+    id: z.string().optional().catch(undefined),
+    label: z.string(),
+  }),
+]);
+
+const QuestionnaireInputSchema = z.object({
+  questions: z.array(
+    z.object({
+      allowCustomAnswer: z.boolean().optional().catch(undefined),
+      choices: z.array(QuestionnaireChoiceSchema),
+      id: z.string().optional().catch(undefined),
+      placeholder: z.string().optional().catch(undefined),
+      prompt: z.string(),
+    })
+  ),
+  title: z.string(),
+});
+
 export function createAskUserQuestionTools(
-  questionnaireState: AgentQuestionnaireState,
+  questionnaireState: AgentQuestionnaireState
 ): ToolDefinition[] {
   return [
     {
-      name: "ask_user_question",
       description:
-        "Ask the user a short step-by-step questionnaire when you need missing information before continuing. Prefer 2-4 predefined choices for each question, and when useful also allow the user to type their own custom answer. Keep the questionnaire concise and wait for the user's answers before continuing.",
+        'Ask short multiple-choice questions when info is missing. Every question needs one choice ending in "(Recommended)".',
+      name: "ask_user_question",
       parameters: {
-        type: "object",
+        additionalProperties: false,
         properties: {
-          title: {
-            type: "string",
-            description: "Short heading shown above the questionnaire.",
-          },
           questions: {
-            type: "array",
-            description: "Questions to show to the user.",
             items: {
-              type: "object",
-              properties: {
-                id: { type: "string", description: "Stable question identifier." },
-                prompt: { type: "string", description: "Question text shown to the user." },
-                allowCustomAnswer: {
-                  type: "boolean",
-                  description:
-                    "Whether the user may provide their own custom answer in addition to the listed choices.",
-                },
-                placeholder: {
-                  type: "string",
-                  description: "Optional placeholder for the custom answer input.",
-                },
-                choices: {
-                  type: "array",
-                  description:
-                    "Optional single-select choices shown to the user. Prefer concrete options first, and also allow custom input when the user may want to provide their own answer.",
-                  items: {
-                    type: "object",
-                    properties: {
-                      id: { type: "string", description: "Stable choice identifier." },
-                      label: { type: "string", description: "Choice text shown to the user." },
-                    },
-                    required: ["id", "label"],
-                    additionalProperties: false,
-                  },
-                },
-              },
-              required: ["id", "prompt", "allowCustomAnswer", "choices"],
               additionalProperties: false,
+              properties: {
+                allowCustomAnswer: { type: "boolean" },
+                choices: { items: { type: "string" }, type: "array" },
+                prompt: { type: "string" },
+              },
+              required: ["prompt", "choices"],
+              type: "object",
             },
+            type: "array",
           },
+          title: { type: "string" },
         },
         required: ["title", "questions"],
-        additionalProperties: false,
+        type: "object",
       },
       async run(input, context) {
         const sessionId = context.sessionId;
@@ -70,71 +70,86 @@ export function createAskUserQuestionTools(
         }
 
         const result = await questionnaireState.write(sessionId, questionnaire);
-        return { questionnaire: result };
+
+        return {
+          message:
+            "Questions shown to the user. Wait for the next user message before continuing.",
+          questionnaire: result,
+        };
       },
     },
   ];
 }
 
+// The same "(Recommended)" label convention Claude Code uses, so no schema field.
+const RECOMMENDED_SUFFIX = /\s*\(recommended\)$/i;
+
+function slugId(value: string, fallback: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+
+  return slug || fallback;
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- This tool-input boundary immediately validates untrusted values with QuestionnaireInputSchema.
 function readQuestionnaire(input: unknown): AgentQuestionnaire | null {
-  if (typeof input !== "object" || input === null) {
+  const parsedInput = QuestionnaireInputSchema.safeParse(input);
+
+  if (!parsedInput.success) {
     return null;
   }
 
-  const record = input as Record<string, unknown>;
-  const title = typeof record.title === "string" ? record.title.trim() : "";
-  const questions = Array.isArray(record.questions) ? record.questions : null;
+  const title = parsedInput.data.title.trim();
 
-  if (!title || !questions) {
+  if (!title) {
     return null;
   }
 
-  const parsed = questions.map((item) => {
-    if (typeof item !== "object" || item === null) {
-      return null;
-    }
+  const parsed = parsedInput.data.questions.map((question, questionIndex) => {
+    const prompt = question.prompt.trim();
 
-    const question = item as Record<string, unknown>;
-    const id = typeof question.id === "string" ? question.id.trim() : "";
-    const prompt = typeof question.prompt === "string" ? question.prompt.trim() : "";
-    const allowCustomAnswer =
-      typeof question.allowCustomAnswer === "boolean" ? question.allowCustomAnswer : null;
-    const placeholder =
-      typeof question.placeholder === "string" && question.placeholder.trim()
-        ? question.placeholder.trim()
-        : undefined;
-    const choicesInput = Array.isArray(question.choices) ? question.choices : null;
+    const rawChoices = question.choices.map((choice) => {
+      const label = choice.label.trim();
+      const unmarked = label.replace(RECOMMENDED_SUFFIX, "");
 
-    if (!id || !prompt || allowCustomAnswer === null || !choicesInput) {
-      return null;
-    }
-
-    const choices = choicesInput.map((choice) => {
-      if (typeof choice !== "object" || choice === null) {
-        return null;
-      }
-
-      const value = choice as Record<string, unknown>;
-      const choiceId = typeof value.id === "string" ? value.id.trim() : "";
-      const label = typeof value.label === "string" ? value.label.trim() : "";
-
-      if (!choiceId || !label) {
-        return null;
-      }
-
-      return { id: choiceId, label };
+      return {
+        id: "id" in choice ? choice.id?.trim() : undefined,
+        label: unmarked,
+        recommended: unmarked !== label,
+      };
     });
 
-    if (choices.some((choice) => choice === null)) {
+    if (!prompt || rawChoices.some((choice) => !choice.label)) {
       return null;
     }
 
+    const questionId =
+      question.id?.trim() || slugId(prompt, `q${questionIndex + 1}`);
+
+    const recommendedIndex = rawChoices.findIndex(
+      (choice) => choice.recommended
+    );
+
+    const choices = rawChoices
+      .map((choice, choiceIndex) => ({
+        id:
+          choice.id ||
+          slugId(choice.label, `${questionId}_c${choiceIndex + 1}`),
+        label: choice.label,
+        recommended: choiceIndex === recommendedIndex || undefined,
+      }))
+      .sort((a, b) => Number(!a.recommended) - Number(!b.recommended));
+
     return {
-      id,
+      allowCustomAnswer: question.allowCustomAnswer ?? false,
+      choices,
+      id: questionId,
+      placeholder: question.placeholder?.trim() || undefined,
       prompt,
-      choices: choices as Array<{ id: string; label: string }>,
-      allowCustomAnswer,
-      placeholder,
     };
   });
 
@@ -144,7 +159,7 @@ function readQuestionnaire(input: unknown): AgentQuestionnaire | null {
 
   return {
     id: nanoid(),
+    questions: parsed.filter((question) => question !== null),
     title,
-    questions: parsed as AgentQuestionnaire["questions"],
   };
 }

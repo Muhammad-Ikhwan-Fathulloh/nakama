@@ -1,28 +1,23 @@
-import { useEffect, useRef, useState } from "react";
-import {
-  Building2Icon,
-  ChevronsUpDownIcon,
-  PencilIcon,
-  PlusIcon,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
+import type { UserOrgSummary } from "@nakama/core/contract";
+import { Button } from "@nakama/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@nakama/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
+} from "@nakama/ui/dropdown-menu";
+import { Input } from "@nakama/ui/input";
+import { cn } from "@nakama/ui/utils";
+import { Add01Icon, ArrowDown01Icon, Edit03Icon } from "hugeicons-react";
+import { type ComponentProps, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/context/use-auth";
-import { cn } from "@/lib/utils";
-import type { UserOrgSummary } from "@nakama/core/contract";
 
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -41,12 +36,198 @@ function canEditOrg(org: UserOrgSummary, isPlatformAdmin: boolean): boolean {
   return isPlatformAdmin || org.role === "admin";
 }
 
+function validateCreateOrg(name: string, slug: string): string | null {
+  const trimmedName = name.trim();
+  const trimmedSlug = slug.trim().toLowerCase();
+
+  if (!trimmedName) {
+    return "Organization name is required.";
+  }
+
+  if (!(trimmedSlug && SLUG_PATTERN.test(trimmedSlug))) {
+    return "Slug must use lowercase letters, numbers, and hyphens.";
+  }
+
+  return null;
+}
+
+function orgSubmitError(err: Error, fallback: string): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+
+  return fallback;
+}
+
 interface OrgSwitcherProps {
   collapsed?: boolean;
 }
 
-export function OrgSwitcher({ collapsed = false }: OrgSwitcherProps) {
-  const { user, orgs, activeOrg, switchOrg, createOrg, updateOrg } = useAuth();
+function OrgSwitcherTrigger({
+  className,
+  collapsed,
+  initial,
+  label,
+  isTeam,
+  ...props
+}: {
+  collapsed: boolean;
+  initial: string;
+  label: string;
+  isTeam: boolean;
+} & ComponentProps<typeof Button>) {
+  return (
+    <Button
+      aria-label={`Current ${isTeam ? "team" : "organization"}: ${label}`}
+      className={cn(
+        "font-normal hover:bg-sidebar-accent/60 motion-reduce:transition-none",
+        collapsed
+          ? "sidebar-nav-link sidebar-nav-link--collapsed p-0"
+          : "h-auto w-full min-w-0 justify-start gap-2 px-2 py-1.5 text-left",
+        className
+      )}
+      title={collapsed ? label : undefined}
+      type="button"
+      variant="ghost"
+      {...props}
+    >
+      {collapsed ? (
+        <span className="flex size-8 items-center justify-center rounded-md bg-muted font-semibold text-foreground text-xs">
+          {initial}
+        </span>
+      ) : (
+        <>
+          <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
+          <ArrowDown01Icon className="size-3.5 shrink-0 text-muted-foreground" />
+        </>
+      )}
+    </Button>
+  );
+}
+
+function OrgSwitcherCreateDialog({
+  error,
+  isSubmitting,
+  name,
+  onNameChange,
+  onOpenChange,
+  onSlugChange,
+  onSubmit,
+  open,
+  slug,
+}: {
+  error: string | null;
+  isSubmitting: boolean;
+  name: string;
+  onNameChange: (value: string) => void;
+  onOpenChange: (open: boolean) => void;
+  onSlugChange: (value: string) => void;
+  onSubmit: (event: React.FormEvent) => void;
+  open: boolean;
+  slug: string;
+}) {
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Create organization</DialogTitle>
+        </DialogHeader>
+        <form className="space-y-4" onSubmit={onSubmit}>
+          <div>
+            <label
+              className="mb-1 block font-medium text-sm"
+              htmlFor="create-org-name"
+            >
+              Name
+            </label>
+            <Input
+              id="create-org-name"
+              onChange={(event) => onNameChange(event.target.value)}
+              placeholder="Acme Corp"
+              required
+              value={name}
+            />
+          </div>
+          <div>
+            <label
+              className="mb-1 block font-medium text-sm"
+              htmlFor="create-org-slug"
+            >
+              Slug
+            </label>
+            <Input
+              id="create-org-slug"
+              onChange={(event) => onSlugChange(event.target.value)}
+              placeholder="acme-corp"
+              required
+              value={slug}
+            />
+          </div>
+          {error ? <p className="text-destructive text-sm">{error}</p> : null}
+          <DialogFooter>
+            <Button disabled={isSubmitting} type="submit">
+              {isSubmitting ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function OrgSwitcherEditDialog({
+  error,
+  isSubmitting,
+  name,
+  onNameChange,
+  onOpenChange,
+  onSubmit,
+  open,
+}: {
+  error: string | null;
+  isSubmitting: boolean;
+  name: string;
+  onNameChange: (value: string) => void;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (event: React.FormEvent) => void;
+  open: boolean;
+}) {
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit organization</DialogTitle>
+        </DialogHeader>
+        <form className="space-y-4" onSubmit={onSubmit}>
+          <div>
+            <label
+              className="mb-1 block font-medium text-sm"
+              htmlFor="edit-org-name"
+            >
+              Name
+            </label>
+            <Input
+              id="edit-org-name"
+              onChange={(event) => onNameChange(event.target.value)}
+              placeholder="Acme Corp"
+              required
+              value={name}
+            />
+          </div>
+          {error ? <p className="text-destructive text-sm">{error}</p> : null}
+          <DialogFooter>
+            <Button disabled={isSubmitting} type="submit">
+              {isSubmitting ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function useOrgSwitcherDialogs() {
+  const { createOrg, updateOrg } = useAuth();
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const editingOrgRef = useRef<UserOrgSummary | null>(null);
@@ -62,11 +243,13 @@ export function OrgSwitcher({ collapsed = false }: OrgSwitcherProps) {
     }
   }, [name]);
 
-  if (!user || orgs.length === 0) {
-    return null;
+  function openCreateDialog() {
+    setError(null);
+    setName("");
+    setSlug("");
+    slugEditedRef.current = false;
+    setCreateOpen(true);
   }
-
-  const label = activeOrg?.name ?? "Organization";
 
   function openEditDialog(org: UserOrgSummary) {
     editingOrgRef.current = org;
@@ -79,29 +262,34 @@ export function OrgSwitcher({ collapsed = false }: OrgSwitcherProps) {
     event.preventDefault();
     setError(null);
 
-    const trimmedName = name.trim();
-    const trimmedSlug = slug.trim().toLowerCase();
+    const validationError = validateCreateOrg(name, slug);
 
-    if (!trimmedName) {
-      setError("Organization name is required.");
-      return;
-    }
+    if (validationError) {
+      setError(validationError);
 
-    if (!trimmedSlug || !SLUG_PATTERN.test(trimmedSlug)) {
-      setError("Slug must use lowercase letters, numbers, and hyphens.");
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      await createOrg({ name: trimmedName, slug: trimmedSlug });
+      await createOrg({
+        name: name.trim(),
+        slug: slug.trim().toLowerCase(),
+      });
       setCreateOpen(false);
       setName("");
       setSlug("");
       slugEditedRef.current = false;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create organization");
+      setError(
+        orgSubmitError(
+          err instanceof Error
+            ? err
+            : new Error("Failed to create organization"),
+          "Failed to create organization"
+        )
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -109,6 +297,7 @@ export function OrgSwitcher({ collapsed = false }: OrgSwitcherProps) {
 
   async function handleEdit(event: React.FormEvent) {
     event.preventDefault();
+
     if (!editingOrgRef.current) {
       return;
     }
@@ -116,8 +305,10 @@ export function OrgSwitcher({ collapsed = false }: OrgSwitcherProps) {
     setError(null);
 
     const trimmedName = name.trim();
+
     if (!trimmedName) {
       setError("Organization name is required.");
+
       return;
     }
 
@@ -129,44 +320,94 @@ export function OrgSwitcher({ collapsed = false }: OrgSwitcherProps) {
       editingOrgRef.current = null;
       setName("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update organization");
+      setError(
+        orgSubmitError(
+          err instanceof Error
+            ? err
+            : new Error("Failed to update organization"),
+          "Failed to update organization"
+        )
+      );
     } finally {
       setIsSubmitting(false);
     }
   }
 
-  const trigger = (
-    <Button
-      type="button"
-      variant="ghost"
-      title={collapsed ? label : undefined}
-      className={cn(
-        "h-auto min-w-0 justify-start gap-2 px-2 py-1.5 text-left font-normal hover:bg-sidebar-accent/60",
-        collapsed ? "size-9 justify-center px-0" : "w-full",
-      )}
-      aria-label={collapsed ? `Current organization: ${label}` : undefined}
-    >
-      <Building2Icon className="size-4 shrink-0 text-muted-foreground" />
-      {!collapsed ? (
-        <>
-          <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
-          <ChevronsUpDownIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-        </>
-      ) : null}
-    </Button>
-  );
+  function handleEditOpenChange(open: boolean) {
+    setEditOpen(open);
+
+    if (!open) {
+      editingOrgRef.current = null;
+      setError(null);
+    }
+  }
+
+  return {
+    createOpen,
+    editOpen,
+    error,
+    handleCreate,
+    handleEdit,
+    handleEditOpenChange,
+    isSubmitting,
+    name,
+    openCreateDialog,
+    openEditDialog,
+    setCreateOpen,
+    setName,
+    setSlug,
+    slug,
+    slugEditedRef,
+  };
+}
+
+export function OrgSwitcher({ collapsed = false }: OrgSwitcherProps) {
+  const { user, orgs, activeOrg, switchOrg } = useAuth();
+  const dialogs = useOrgSwitcherDialogs();
+
+  if (!user || (!activeOrg && orgs.length === 0)) {
+    return null;
+  }
+
+  const label = activeOrg?.name ?? "Organization";
+  const initial = label.charAt(0).toUpperCase();
 
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger render={trigger} />
+        <DropdownMenuTrigger
+          render={
+            <OrgSwitcherTrigger
+              collapsed={collapsed}
+              initial={initial}
+              isTeam={Boolean(activeOrg?.parentOrgId)}
+              label={label}
+            />
+          }
+        />
 
-        <DropdownMenuContent align="start" className="w-64 p-0">
+        <DropdownMenuContent
+          align="start"
+          className="w-64 p-0"
+          side={collapsed ? "right" : "bottom"}
+          sideOffset={8}
+        >
+          <div className="border-border/50 border-b px-2 py-1.5">
+            <p className="font-medium text-muted-foreground text-xs">
+              {orgs.some((org) => org.parentOrgId)
+                ? "Select organization or team"
+                : "Select organization"}
+            </p>
+          </div>
           <div className="p-1">
+            {activeOrg && !orgs.some((org) => org.id === activeOrg.id) ? (
+              <DropdownMenuItem>{activeOrg.name}</DropdownMenuItem>
+            ) : null}
             {orgs.map((org) => (
               <DropdownMenuItem
-                key={org.id}
+                aria-label={`Switch to ${org.parentOrgId ? "team" : "organization"} ${org.name}`}
                 className="pr-1"
+                key={org.id}
                 onClick={() => {
                   if (org.id !== activeOrg?.id) {
                     void switchOrg(org.id);
@@ -174,24 +415,29 @@ export function OrgSwitcher({ collapsed = false }: OrgSwitcherProps) {
                 }}
               >
                 <span className="min-w-0 flex-1 truncate">{org.name}</span>
+                {org.parentOrgId ? (
+                  <span className="shrink-0 text-muted-foreground text-xs">
+                    Team
+                  </span>
+                ) : null}
                 {canEditOrg(org, Boolean(user.isPlatformAdmin)) ? (
                   <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    className="pointer-events-none shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/dropdown-menu-item:pointer-events-auto group-hover/dropdown-menu-item:opacity-100 hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100"
                     aria-label={`Edit ${org.name}`}
+                    className="pointer-events-none shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/dropdown-menu-item:pointer-events-auto group-hover/dropdown-menu-item:opacity-100"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      dialogs.openEditDialog(org);
+                    }}
                     onPointerDown={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
                     }}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      openEditDialog(org);
-                    }}
+                    size="icon-xs"
+                    type="button"
+                    variant="ghost"
                   >
-                    <PencilIcon className="size-3.5" aria-hidden />
+                    <Edit03Icon aria-hidden className="size-3.5" />
                   </Button>
                 ) : null}
               </DropdownMenuItem>
@@ -199,18 +445,12 @@ export function OrgSwitcher({ collapsed = false }: OrgSwitcherProps) {
           </div>
 
           {user.isPlatformAdmin ? (
-            <div className="border-t border-border/50 bg-muted/30 p-1">
+            <div className="border-border/50 border-t bg-muted/30 p-1">
               <DropdownMenuItem
-                className="text-muted-foreground"
-                onClick={() => {
-                  setError(null);
-                  setName("");
-      setSlug("");
-      slugEditedRef.current = false;
-      setCreateOpen(true);
-                }}
+                className="cursor-pointer text-muted-foreground"
+                onClick={dialogs.openCreateDialog}
               >
-                <PlusIcon className="size-4" />
+                <Add01Icon className="size-4" />
                 Create organization
               </DropdownMenuItem>
             </div>
@@ -219,86 +459,31 @@ export function OrgSwitcher({ collapsed = false }: OrgSwitcherProps) {
       </DropdownMenu>
 
       {user.isPlatformAdmin ? (
-        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Create organization</DialogTitle>
-            </DialogHeader>
-            <form onSubmit={handleCreate} className="space-y-4">
-              <div>
-                <label htmlFor="create-org-name" className="mb-1 block text-sm font-medium">
-                  Name
-                </label>
-                <Input
-                  id="create-org-name"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="Acme Corp"
-                  required
-                />
-              </div>
-              <div>
-                <label htmlFor="create-org-slug" className="mb-1 block text-sm font-medium">
-                  Slug
-                </label>
-                <Input
-                  id="create-org-slug"
-                  value={slug}
-                  onChange={(event) => {
-                    slugEditedRef.current = true;
-                    setSlug(event.target.value);
-                  }}
-                  placeholder="acme-corp"
-                  required
-                />
-              </div>
-              {error ? <p className="text-sm text-destructive">{error}</p> : null}
-              <DialogFooter>
-                <Button type="submit" disabled={isSubmitting}>
-                  {isSubmitting ? "Creating..." : "Create"}
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+        <OrgSwitcherCreateDialog
+          error={dialogs.error}
+          isSubmitting={dialogs.isSubmitting}
+          name={dialogs.name}
+          onNameChange={dialogs.setName}
+          onOpenChange={dialogs.setCreateOpen}
+          onSlugChange={(value) => {
+            dialogs.slugEditedRef.current = true;
+            dialogs.setSlug(value);
+          }}
+          onSubmit={(event) => void dialogs.handleCreate(event)}
+          open={dialogs.createOpen}
+          slug={dialogs.slug}
+        />
       ) : null}
 
-      <Dialog
-        open={editOpen}
-        onOpenChange={(open) => {
-          setEditOpen(open);
-          if (!open) {
-            editingOrgRef.current = null;
-            setError(null);
-          }
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit organization</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleEdit} className="space-y-4">
-            <div>
-              <label htmlFor="edit-org-name" className="mb-1 block text-sm font-medium">
-                Name
-              </label>
-              <Input
-                id="edit-org-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Acme Corp"
-                required
-              />
-            </div>
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
-            <DialogFooter>
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Saving..." : "Save"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <OrgSwitcherEditDialog
+        error={dialogs.error}
+        isSubmitting={dialogs.isSubmitting}
+        name={dialogs.name}
+        onNameChange={dialogs.setName}
+        onOpenChange={dialogs.handleEditOpenChange}
+        onSubmit={(event) => void dialogs.handleEdit(event)}
+        open={dialogs.editOpen}
+      />
     </>
   );
 }

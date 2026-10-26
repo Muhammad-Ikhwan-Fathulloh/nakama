@@ -1,18 +1,30 @@
 import nodemailer from "nodemailer";
-import type { MailboxConfig } from "./types";
-import type { MailSendInput, MailSender, MailSendResult } from "./types";
 import { sanitizeMailError } from "./sanitize";
+import type {
+  MailboxConfig,
+  MailSender,
+  MailSendInput,
+  MailSendResult,
+} from "./types";
+
+interface SmtpMessageOptions {
+  from: string;
+  html?: string;
+  subject: string;
+  text: string;
+  to: string;
+}
 
 export function createSmtpSender(config: MailboxConfig): MailSender {
   const transporter = nodemailer.createTransport({
+    auth: {
+      pass: config.auth.pass,
+      user: config.auth.user,
+    },
     host: config.smtp.host,
     port: config.smtp.port,
-    secure: config.smtp.secure,
-    auth: {
-      user: config.auth.user,
-      pass: config.auth.pass,
-    },
     requireTLS: !config.smtp.secure,
+    secure: config.smtp.secure,
     tls: {
       minVersion: "TLSv1.2",
       rejectUnauthorized: true,
@@ -22,13 +34,18 @@ export function createSmtpSender(config: MailboxConfig): MailSender {
   return {
     async send(input: MailSendInput): Promise<MailSendResult> {
       try {
-        const info = await transporter.sendMail({
+        const message: SmtpMessageOptions = {
           from: config.from,
-          to: input.to,
           subject: input.subject,
           text: input.text,
-          ...(input.html ? { html: input.html } : {}),
-        });
+          to: input.to,
+        };
+
+        if (input.html) {
+          message.html = input.html;
+        }
+
+        const info = await transporter.sendMail(message);
 
         return { messageId: info.messageId || "sent" };
       } catch (err) {

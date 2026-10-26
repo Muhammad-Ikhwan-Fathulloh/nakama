@@ -1,81 +1,119 @@
-import { formatServerError } from "@nakama/core";
-import type { AgentBrowserInstallEvent, CodingHarnessInstallEvent } from "@nakama/core";
+import { type AgentBrowserInstallEvent, formatServerError } from "@nakama/core";
 
 const INSTALL_STREAM_TIMEOUT_MS = 120_000;
 
+type InstallStreamErrorEvent = { type: "error"; error: string };
+
+type InstallStreamOptions = {
+  timeoutMessage?: string;
+  timeoutMs?: number;
+};
+
 export function streamInstallEvents<TEvent extends { type: string }>(
-  executor: (send: (event: TEvent) => void) => Promise<void>,
-  options: {
-    timeoutMessage?: string;
-  } = {},
+  executor: (
+    send: (event: TEvent) => void,
+    signal: AbortSignal
+  ) => Promise<void>,
+  options: InstallStreamOptions = {}
 ): Response {
   const encoder = new TextEncoder();
-  const keepaliveIntervalMs = 4_000;
+  const keepaliveIntervalMs = 4000;
+  const timeoutMs = options.timeoutMs ?? INSTALL_STREAM_TIMEOUT_MS;
+
   const timeoutMessage =
     options.timeoutMessage ??
-    `Install timed out after ${Math.round(INSTALL_STREAM_TIMEOUT_MS / 1000)}s waiting for the installer.`;
+    `Install timed out after ${Math.round(timeoutMs / 1000)}s waiting for the installer.`;
+
+  let terminated = false;
+  let keepalive: ReturnType<typeof setInterval> | undefined;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * Closing the stream used to leave the installer running: the deadline ended
+   * the response and nothing told the work to stop. This is what the executor
+   * watches so a timeout, or a client that hangs up, actually reaches it.
+   */
+  const abortController = new AbortController();
+
+  const clearTimers = () => {
+    clearInterval(keepalive);
+    clearTimeout(timeoutId);
+  };
 
   const stream = new ReadableStream<Uint8Array>({
+    cancel() {
+      terminated = true;
+      clearTimers();
+      abortController.abort();
+    },
     async start(controller) {
-      const send = (event: TEvent) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      const send = (event: TEvent | InstallStreamErrorEvent) => {
+        if (terminated) {
+          return;
+        }
+
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(event)}\n\n`)
+        );
       };
 
-      const keepalive = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(": ping\n\n"));
-        } catch {
-          clearInterval(keepalive);
+      const finish = () => {
+        clearTimers();
+
+        if (terminated) {
+          return;
         }
+
+        terminated = true;
+        controller.close();
+      };
+
+      keepalive = setInterval(() => {
+        if (terminated) {
+          clearTimers();
+
+          return;
+        }
+
+        controller.enqueue(encoder.encode(": ping\n\n"));
       }, keepaliveIntervalMs);
 
-      const timeoutId = setTimeout(() => {
+      timeoutId = setTimeout(() => {
         send({
-          type: "error",
           error: timeoutMessage,
-        } as TEvent);
-        clearInterval(keepalive);
-        controller.close();
-      }, INSTALL_STREAM_TIMEOUT_MS);
+          type: "error",
+        });
+        abortController.abort();
+        finish();
+      }, timeoutMs);
 
       try {
-        await executor(send);
+        await executor(send, abortController.signal);
       } catch (error) {
         send({
-          type: "error",
           error: formatServerError(error),
-        } as TEvent);
+          type: "error",
+        });
       } finally {
-        clearTimeout(timeoutId);
-        clearInterval(keepalive);
-        controller.close();
+        finish();
       }
     },
   });
 
   return new Response(stream, {
     headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
+      "Content-Type": "text/event-stream; charset=utf-8",
     },
   });
 }
 
-export function streamCodingHarnessInstall(
-  executor: (send: (event: CodingHarnessInstallEvent) => void) => Promise<void>,
-  options: {
-    timeoutMessage?: string;
-  } = {},
-): Response {
-  return streamInstallEvents<CodingHarnessInstallEvent>(executor, options);
-}
-
 export function streamAgentBrowserInstall(
-  executor: (send: (event: AgentBrowserInstallEvent) => void) => Promise<void>,
-  options: {
-    timeoutMessage?: string;
-  } = {},
+  executor: (
+    send: (event: AgentBrowserInstallEvent) => void,
+    signal: AbortSignal
+  ) => Promise<void>,
+  options: InstallStreamOptions = {}
 ): Response {
   return streamInstallEvents<AgentBrowserInstallEvent>(executor, options);
 }

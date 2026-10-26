@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { NakamaApiError } from "./api-error";
+import type { ChatMessage } from "./contract";
 import {
   countUserImages,
   estimateUserContentTokens,
   getUserMessageText,
+  messagesIncludeUserImages,
   normalizeUserContent,
   parseDataUrl,
+  parseDocumentDataUrl,
   stripImagesForCompaction,
   validateCombinedAttachmentCount,
   validateDocumentAttachments,
@@ -18,42 +21,42 @@ const tinyPngBase64 =
 describe("normalizeUserContent", () => {
   test("returns parts when images present", () => {
     const result = normalizeUserContent("see this", [
-      { mediaType: "image/png", data: tinyPngBase64 },
+      { data: tinyPngBase64, mediaType: "image/png" },
     ]);
 
     expect(Array.isArray(result)).toBe(true);
     expect(result).toEqual([
-      { type: "text", text: "see this" },
-      { type: "image", mediaType: "image/png", data: tinyPngBase64 },
+      { text: "see this", type: "text" },
+      { data: tinyPngBase64, mediaType: "image/png", type: "image" },
     ]);
   });
 
   test("allows image-only message", () => {
     const result = normalizeUserContent("", [
-      { mediaType: "image/png", data: tinyPngBase64 },
+      { data: tinyPngBase64, mediaType: "image/png" },
     ]);
 
     expect(result).toEqual([
-      { type: "image", mediaType: "image/png", data: tinyPngBase64 },
+      { data: tinyPngBase64, mediaType: "image/png", type: "image" },
     ]);
   });
 
   test("returns parts when documents present", () => {
     const result = normalizeUserContent("summarize", undefined, [
       {
+        data: "SGVsbG8=",
         filename: "notes.txt",
         mediaType: "text/plain",
-        data: "SGVsbG8=",
       },
     ]);
 
     expect(result).toEqual([
-      { type: "text", text: "summarize" },
+      { text: "summarize", type: "text" },
       {
-        type: "document",
+        data: "SGVsbG8=",
         filename: "notes.txt",
         mediaType: "text/plain",
-        data: "SGVsbG8=",
+        type: "document",
       },
     ]);
   });
@@ -61,18 +64,18 @@ describe("normalizeUserContent", () => {
   test("allows document-only message", () => {
     const result = normalizeUserContent("", undefined, [
       {
+        data: "SGVsbG8=",
         filename: "notes.txt",
         mediaType: "text/plain",
-        data: "SGVsbG8=",
       },
     ]);
 
     expect(result).toEqual([
       {
-        type: "document",
+        data: "SGVsbG8=",
         filename: "notes.txt",
         mediaType: "text/plain",
-        data: "SGVsbG8=",
+        type: "document",
       },
     ]);
   });
@@ -81,33 +84,97 @@ describe("normalizeUserContent", () => {
 describe("validateImageAttachments", () => {
   test("rejects unsupported media type", () => {
     expect(() =>
-      validateImageAttachments([{ mediaType: "image/bmp", data: tinyPngBase64 }]),
+      validateImageAttachments([
+        { data: tinyPngBase64, mediaType: "image/bmp" },
+      ])
     ).toThrow(NakamaApiError);
   });
 
   test("rejects oversized image", () => {
     const huge = "A".repeat((6 * 1024 * 1024 * 4) / 3);
     expect(() =>
-      validateImageAttachments([{ mediaType: "image/png", data: huge }]),
+      validateImageAttachments([{ data: huge, mediaType: "image/png" }])
     ).toThrow(NakamaApiError);
   });
+
+  test.each(["!!!!", "YQ", "====", "data:image/png;base64,!!!!"])(
+    "rejects invalid base64: %s",
+    (data) => {
+      expect(() =>
+        validateImageAttachments([{ data, mediaType: "image/png" }])
+      ).toThrow(NakamaApiError);
+    }
+  );
 });
 
 describe("validateDocumentAttachments", () => {
   test("rejects unsupported media type", () => {
     expect(() =>
       validateDocumentAttachments([
-        { filename: "bad.bin", mediaType: "application/octet-stream", data: "YWJj" },
-      ]),
+        {
+          data: "YWJj",
+          filename: "bad.bin",
+          mediaType: "application/octet-stream",
+        },
+      ])
     ).toThrow(NakamaApiError);
+  });
+
+  test("accepts markdown attachments", () => {
+    expect(() =>
+      validateDocumentAttachments([
+        {
+          data: "Iw==",
+          filename: "notes.md",
+          mediaType: "text/markdown",
+        },
+      ])
+    ).not.toThrow();
+  });
+
+  test("accepts excel attachments under the size limit", () => {
+    expect(() =>
+      validateDocumentAttachments([
+        {
+          data: "YWJj",
+          filename: "budget.xlsx",
+          mediaType:
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+      ])
+    ).not.toThrow();
+  });
+
+  test("normalizes excel extension when media type is generic", () => {
+    expect(() =>
+      validateDocumentAttachments([
+        {
+          data: "YWJj",
+          filename: "budget.xlsx",
+          mediaType: "application/octet-stream",
+        },
+      ])
+    ).not.toThrow();
   });
 
   test("rejects oversized document", () => {
     const huge = "A".repeat((6 * 1024 * 1024 * 4) / 3);
     expect(() =>
       validateDocumentAttachments([
-        { filename: "big.pdf", mediaType: "application/pdf", data: huge },
-      ]),
+        { data: huge, filename: "big.pdf", mediaType: "application/pdf" },
+      ])
+    ).toThrow(NakamaApiError);
+  });
+
+  test("rejects invalid document base64", () => {
+    expect(() =>
+      validateDocumentAttachments([
+        {
+          data: "!!!!",
+          filename: "notes.txt",
+          mediaType: "text/plain",
+        },
+      ])
     ).toThrow(NakamaApiError);
   });
 });
@@ -122,10 +189,10 @@ describe("getUserMessageText", () => {
   test("extracts text from parts", () => {
     expect(
       getUserMessageText([
-        { type: "text", text: "line one" },
-        { type: "image", mediaType: "image/png", data: tinyPngBase64 },
-        { type: "text", text: "line two" },
-      ]),
+        { text: "line one", type: "text" },
+        { data: tinyPngBase64, mediaType: "image/png", type: "image" },
+        { text: "line two", type: "text" },
+      ])
     ).toBe("line one\nline two");
   });
 });
@@ -133,29 +200,44 @@ describe("getUserMessageText", () => {
 describe("estimateUserContentTokens", () => {
   test("adds fixed tokens per image", () => {
     const tokens = estimateUserContentTokens([
-      { type: "text", text: "hi" },
-      { type: "image", mediaType: "image/png", data: tinyPngBase64 },
+      { text: "hi", type: "text" },
+      { data: tinyPngBase64, mediaType: "image/png", type: "image" },
     ]);
 
-    expect(tokens).toBeGreaterThan(1_400);
+    expect(tokens).toBeGreaterThan(1400);
   });
 });
 
 describe("stripImagesForCompaction", () => {
+  test("omits tool images while preserving the tool result and original history", () => {
+    const message: ChatMessage = {
+      attachments: [
+        { data: tinyPngBase64, mediaType: "image/png", type: "image" },
+      ],
+      content: '{"path":"shot.png"}',
+      name: "read_file",
+      role: "tool",
+      toolCallId: "image",
+    };
+
+    const [stripped] = stripImagesForCompaction([message]);
+    expect(stripped).toEqual({ ...message, attachments: undefined });
+    expect(message.attachments).toHaveLength(1);
+  });
   test("replaces image parts with placeholder text", () => {
     const result = stripImagesForCompaction([
       {
-        role: "user",
         content: [
-          { type: "text", text: "diagram" },
-          { type: "image", mediaType: "image/png", data: tinyPngBase64 },
+          { text: "diagram", type: "text" },
+          { data: tinyPngBase64, mediaType: "image/png", type: "image" },
         ],
+        role: "user",
       },
     ]);
 
     expect(result[0]).toEqual({
-      role: "user",
       content: "diagram\n[1 image omitted from summary]",
+      role: "user",
     });
   });
 });
@@ -163,8 +245,17 @@ describe("stripImagesForCompaction", () => {
 describe("parseDataUrl", () => {
   test("parses valid data url", () => {
     expect(parseDataUrl(`data:image/png;base64,${tinyPngBase64}`)).toEqual({
-      mediaType: "image/png",
       data: tinyPngBase64,
+      mediaType: "image/png",
+    });
+  });
+
+  test("parses data url with parameters", () => {
+    expect(
+      parseDataUrl(`data:image/png;charset=utf-8;base64,${tinyPngBase64}`)
+    ).toEqual({
+      data: tinyPngBase64,
+      mediaType: "image/png",
     });
   });
 
@@ -173,13 +264,67 @@ describe("parseDataUrl", () => {
   });
 });
 
+describe("parseDocumentDataUrl", () => {
+  test("parses document data url with charset parameter", () => {
+    const doc = parseDocumentDataUrl(
+      "data:text/markdown;charset=utf-8;base64,IyBRQSBkb2M=",
+      "qa-test.md"
+    );
+
+    expect(doc).toEqual({
+      data: "IyBRQSBkb2M=",
+      filename: "qa-test.md",
+      mediaType: "text/markdown",
+    });
+  });
+
+  test("parses document data url without explicit mediatype", () => {
+    const doc = parseDocumentDataUrl("data:;base64,IyBRQSBkb2M=", "qa-test.md");
+    expect(doc).toEqual({
+      data: "IyBRQSBkb2M=",
+      filename: "qa-test.md",
+      mediaType: "text/markdown",
+    });
+  });
+
+  test("returns null for non-data url", () => {
+    expect(parseDocumentDataUrl("invalid", "doc.txt")).toBeNull();
+  });
+});
+
 describe("countUserImages", () => {
   test("counts image parts", () => {
     expect(
       countUserImages([
-        { type: "text", text: "x" },
-        { type: "image", mediaType: "image/png", data: tinyPngBase64 },
-      ]),
+        { text: "x", type: "text" },
+        { data: tinyPngBase64, mediaType: "image/png", type: "image" },
+      ])
     ).toBe(1);
+  });
+});
+
+describe("messagesIncludeUserImages", () => {
+  test("detects image parts in user messages", () => {
+    const messages: ChatMessage[] = [
+      { content: "hello", role: "user" },
+      {
+        content: [
+          { text: "see this", type: "text" },
+          { data: "abc", mediaType: "image/png", type: "image" },
+        ],
+        role: "user",
+      },
+    ];
+
+    expect(messagesIncludeUserImages(messages)).toBe(true);
+  });
+
+  test("returns false for text-only history", () => {
+    const messages: ChatMessage[] = [
+      { content: "hello", role: "user" },
+      { content: "hi", role: "assistant" },
+    ];
+
+    expect(messagesIncludeUserImages(messages)).toBe(false);
   });
 });

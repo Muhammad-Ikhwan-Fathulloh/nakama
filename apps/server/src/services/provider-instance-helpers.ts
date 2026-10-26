@@ -1,48 +1,88 @@
 import {
-  findCustomModel,
+  applyChatgptOAuthToInstance,
+  applyXaiOAuthToInstance,
+  createProviderInstanceId,
+  defaultOllamaBaseUrl,
+  defaultOllamaLabel,
+  isChatgptProviderConnected,
+  isOllamaCloudInstance,
   isValidBaseUrl,
+  NakamaApiError,
   normalizeBaseUrl,
+  normalizeProviderInstanceLabel,
+  type OllamaHostMode,
+  type ProviderClient,
+  type ProviderInstance,
+  parseWireApi,
+  readXaiOAuthFromInstance,
+  resolveOllamaHostMode,
+  type UserConfig,
   validateCustomModels,
   validateDisplayName,
+  validateOpenRouterRoutingSettings,
+  validateProviderApiKeyFormat,
+  validateProviderInstanceLabel,
 } from "@nakama/core";
+import { createChatLock } from "@nakama/core/channel-chat-lock";
 import type {
   CreateProviderRequest,
   ProviderInstanceSummary,
   ProviderModelOption,
   UpdateProviderRequest,
 } from "@nakama/core/contract";
-import {
-  createProviderInstanceId,
-  findProviderInstance,
-  normalizeProviderInstanceLabel,
-  type ProviderInstance,
-  validateProviderInstanceLabel,
-} from "@nakama/core";
+import { resolveNetraModelId } from "@nakama/core/discovery-providers";
+import type { DatabaseAdapter } from "@nakama/db";
 import {
   getDefaultModel,
   getModelById,
   getModelsForProviderInstance,
-  isCompatibleModelId,
-  isOpenRouterModelSlug,
   resolveModel,
-  validateOpenCodeGoCustomModels,
   validateCerebrasCustomModels,
+  validateCloudflareCustomModels,
+  validateFireworksCustomModels,
+  validateOllamaCustomModels,
+  validateOpenCodeGoCustomModels,
   validateOpenRouterCustomModels,
 } from "../providers";
+import {
+  type CreateProviderForInstanceOptions,
+  createProviderForInstance,
+} from "../providers/create";
+
+import { modelExistsOnInstance } from "./provider-instance-models";
+
+export { modelExistsOnInstance } from "./provider-instance-models";
+
+// shortcut: One process only; use a shared lock if servers share provider configuration.
+export const providerPublicationLock = createChatLock();
 
 export function toProviderInstanceSummary(
   instance: ProviderInstance,
-  modelCount: number,
+  modelCount: number
 ): ProviderInstanceSummary {
+  const chatgptConnected = isChatgptProviderConnected(instance);
+
   return {
-    id: instance.id,
-    type: instance.type,
-    label: normalizeProviderInstanceLabel(instance.type, instance.label, []),
-    hasApiKey: Boolean(instance.apiKey.trim()) || instance.type === "openai_compatible",
     baseUrl: instance.baseUrl ?? null,
-    ...(instance.customModels?.length ? { customModels: instance.customModels } : {}),
-    modelCount,
     createdAt: instance.createdAt,
+    customModels: instance.customModels?.length
+      ? instance.customModels
+      : undefined,
+    hasApiKey:
+      Boolean(instance.apiKey.trim()) ||
+      chatgptConnected ||
+      Boolean(readXaiOAuthFromInstance(instance)) ||
+      instance.type === "openai_compatible" ||
+      (instance.type === "ollama" && !isOllamaCloudInstance(instance)),
+    hostMode:
+      instance.type === "ollama" ? resolveOllamaHostMode(instance) : null,
+    id: instance.id,
+    label: normalizeProviderInstanceLabel(instance.type, instance.label, []),
+    modelCount,
+    openRouterRouting:
+      instance.type === "openrouter" ? instance.openRouterRouting : undefined,
+    type: instance.type,
+    wireApi: instance.wireApi ?? null,
   };
 }
 
@@ -52,7 +92,7 @@ export function countModelsForInstance(instance: ProviderInstance): number {
 
 export function resolveInitialModel(
   instance: ProviderInstance,
-  requestedModel?: string,
+  requestedModel?: string
 ): string {
   const trimmed = requestedModel?.trim();
 
@@ -63,116 +103,178 @@ export function resolveInitialModel(
   return getDefaultModel(instance.type, instance.customModels);
 }
 
-export function modelExistsOnInstance(
-  instance: ProviderInstance,
-  modelId: string,
-): boolean {
-  const trimmed = modelId.trim();
-
-  if (!trimmed) {
-    return false;
-  }
-
-  const catalog = getModelsForProviderInstance(instance);
-  if (catalog.some((model) => model.id === trimmed)) {
-    return true;
-  }
-
-  if (instance.type === "openrouter" && isOpenRouterModelSlug(trimmed)) {
-    return true;
-  }
-
-  if (instance.type === "cerebras") {
-    if (instance.customModels?.length) {
-      return findCustomModel(instance.customModels, trimmed) !== undefined;
-    }
-
-    return Boolean(getModelById(trimmed)?.provider === "cerebras");
-  }
-
-  if (instance.type === "openai_compatible") {
-    return isCompatibleModelId(trimmed, instance.customModels);
-  }
-
-  if (instance.type === "opencode_go" && trimmed.startsWith("opencode-go/")) {
-    if (instance.customModels?.length) {
-      return findCustomModel(instance.customModels, trimmed) !== undefined;
-    }
-    return true;
-  }
-
-  if (
-    instance.type === "openai" ||
-    instance.type === "anthropic" ||
-    instance.type === "gemini" ||
-    instance.type === "deepseek"
-  ) {
-    if (instance.customModels?.length) {
-      return findCustomModel(instance.customModels, trimmed) !== undefined;
-    }
-    return Boolean(getModelById(trimmed)?.provider === instance.type);
-  }
-
-  return Boolean(getModelById(trimmed)?.provider === instance.type);
-}
-
-export function resolveDefaultModelForInstance(instance: ProviderInstance): string {
+export function resolveDefaultModelForInstance(
+  instance: ProviderInstance
+): string {
   return getDefaultModel(instance.type, instance.customModels);
 }
 
 export function buildProviderInstanceFromCreateRequest(
-  request: CreateProviderRequest,
-  existing: ProviderInstance[],
+  // apiKey and type are widened here on purpose: request bodies reach this
+  // unvalidated, so an absent field has to name itself rather than throw a
+  // TypeError, and the type is what stops the guard being deleted later.
+  request: Omit<CreateProviderRequest, "apiKey" | "type"> & {
+    apiKey?: string;
+    type?: CreateProviderRequest["type"];
+  },
+  existing: ProviderInstance[]
 ): ProviderInstance {
   const type = request.type;
-  const trimmedKey = request.apiKey.trim();
-  const apiKey = trimmedKey;
 
-  if (!apiKey && type !== "openai_compatible") {
-    throw new Error("API key is required.");
+  if (!type) {
+    throw new NakamaApiError("Provider type is required.", 400);
   }
 
-  const fields = buildProviderFieldsFromRequest(request);
+  const apiKey = request.apiKey?.trim() ?? "";
+
+  if (type === "xai_oauth") {
+    if (!request.xaiOAuth) {
+      throw new NakamaApiError(
+        "Sign in with Grok before saving this provider.",
+        400
+      );
+    }
+
+    const label = request.label?.trim()
+      ? validateProviderInstanceLabel(request.label, type)
+      : normalizeProviderInstanceLabel(
+          type,
+          "Grok (SuperGrok / Premium+)",
+          existing
+        );
+
+    return applyXaiOAuthToInstance(
+      {
+        apiKey: "",
+        createdAt: new Date().toISOString(),
+        customModels: request.customModels?.length
+          ? validateCustomModels(request.customModels)
+          : undefined,
+        id: createProviderInstanceId(),
+        label,
+        type,
+      },
+      request.xaiOAuth
+    );
+  }
+
+  if (type === "chatgpt") {
+    if (!request.chatgptOAuth) {
+      throw new NakamaApiError(
+        "Sign in with ChatGPT before saving this provider.",
+        400
+      );
+    }
+
+    const label = request.label?.trim()
+      ? validateProviderInstanceLabel(request.label, type)
+      : normalizeProviderInstanceLabel(type, "ChatGPT (Plus/Pro)", existing);
+
+    return applyChatgptOAuthToInstance(
+      {
+        apiKey: "",
+        createdAt: new Date().toISOString(),
+        customModels: request.customModels?.length
+          ? validateCustomModels(request.customModels)
+          : undefined,
+        id: createProviderInstanceId(),
+        label,
+        type,
+      },
+      request.chatgptOAuth
+    );
+  }
+
+  if (apiKey) {
+    validateProviderApiKeyFormat(apiKey, type);
+  }
+
+  const fields = buildProviderFieldsFromRequest({ ...request, apiKey, type });
+
   const rawLabel = request.label?.trim()
     ? validateProviderInstanceLabel(request.label, type)
     : fields.label;
-  const label = normalizeProviderInstanceLabel(type, rawLabel, existing);
+
+  const label =
+    type === "ollama" && fields.hostMode
+      ? normalizeProviderInstanceLabel(type, rawLabel, existing, {
+          hostMode: fields.hostMode,
+        })
+      : normalizeProviderInstanceLabel(type, rawLabel, existing);
 
   return {
-    id: createProviderInstanceId(),
-    type,
-    label,
     apiKey,
+    id: createProviderInstanceId(),
     ...fields,
     createdAt: new Date().toISOString(),
+    label,
+    type,
   };
 }
 
 export function applyProviderInstanceUpdate(
   instance: ProviderInstance,
-  request: UpdateProviderRequest,
+  request: UpdateProviderRequest
 ): ProviderInstance {
+  if (instance.type === "netra" && request.wireApi === "responses") {
+    throw new Error("Netra Runtime supports Chat Completions only.");
+  }
+
+  if (instance.type === "netra" && request.baseUrl !== undefined) {
+    throw new Error("Netra Runtime uses its fixed API URL.");
+  }
+
   const next: ProviderInstance = { ...instance };
+
+  if (
+    instance.type === "openrouter" &&
+    request.openRouterRouting !== undefined
+  ) {
+    const routing = validateOpenRouterRoutingSettings(
+      request.openRouterRouting
+    );
+
+    next.openRouterRouting = Object.keys(routing).length ? routing : undefined;
+  }
 
   if (request.label !== undefined) {
     next.label = validateProviderInstanceLabel(request.label, instance.type);
   }
 
   if (request.apiKey !== undefined && request.apiKey.trim()) {
-    next.apiKey = request.apiKey.trim();
+    next.apiKey = validateProviderApiKeyFormat(request.apiKey, instance.type);
+  }
+
+  if (request.xaiOAuth && instance.type === "xai_oauth") {
+    return applyXaiOAuthToInstance(next, request.xaiOAuth);
+  }
+
+  if (request.chatgptOAuth && instance.type === "chatgpt") {
+    return applyChatgptOAuthToInstance(next, request.chatgptOAuth);
   }
 
   if (request.baseUrl !== undefined) {
     const normalized = normalizeBaseUrl(request.baseUrl);
+
     if (!isValidBaseUrl(normalized)) {
       throw new Error("A valid http(s) base URL is required.");
     }
+
     next.baseUrl = normalized;
   }
 
+  if (request.hostMode !== undefined && instance.type === "ollama") {
+    next.hostMode = request.hostMode;
+  }
+
+  if (request.wireApi !== undefined && instance.type === "openai_compatible") {
+    next.wireApi = parseWireApi(request.wireApi);
+  }
+
   if (request.customModels !== undefined) {
-    if (instance.type === "openai_compatible") {
+    if (instance.type === "openai_compatible" || instance.type === "netra") {
       next.customModels = validateCustomModels(request.customModels);
+
       if (!next.customModels.length) {
         throw new Error("At least one model is required.");
       }
@@ -180,13 +282,30 @@ export function applyProviderInstanceUpdate(
       next.customModels = validateOpenRouterCustomModels(request.customModels);
     } else if (instance.type === "cerebras") {
       next.customModels = validateCerebrasCustomModels(request.customModels);
+    } else if (instance.type === "fireworks") {
+      next.customModels = validateFireworksCustomModels(request.customModels);
+    } else if (instance.type === "ollama") {
+      next.customModels = validateOllamaCustomModels(request.customModels);
+    } else if (instance.type === "cloudflare") {
+      next.customModels = validateCloudflareCustomModels(request.customModels);
     } else if (instance.type === "opencode_go") {
       next.customModels = validateOpenCodeGoCustomModels(request.customModels);
     } else if (
       instance.type === "openai" ||
+      instance.type === "chatgpt" ||
+      instance.type === "xai_oauth" ||
       instance.type === "anthropic" ||
       instance.type === "gemini" ||
-      instance.type === "deepseek"
+      instance.type === "deepseek" ||
+      instance.type === "doubao" ||
+      instance.type === "together" ||
+      instance.type === "xiaomi" ||
+      instance.type === "meta" ||
+      instance.type === "vercel_ai_gateway" ||
+      instance.type === "mistral" ||
+      instance.type === "qwen" ||
+      instance.type === "qwen_cn" ||
+      instance.type === "perplexity"
     ) {
       next.customModels = validateCustomModels(request.customModels);
     }
@@ -196,9 +315,52 @@ export function applyProviderInstanceUpdate(
 }
 
 function buildProviderFieldsFromRequest(
-  request: CreateProviderRequest,
-): Pick<ProviderInstance, "baseUrl" | "customModels" | "label"> {
+  request: CreateProviderRequest
+): Partial<
+  Pick<
+    ProviderInstance,
+    | "baseUrl"
+    | "customModels"
+    | "label"
+    | "hostMode"
+    | "wireApi"
+    | "openRouterRouting"
+  >
+> {
   const type = request.type;
+
+  if (type === "ollama") {
+    const resolvedHostMode: OllamaHostMode =
+      request.hostMode ??
+      (request.baseUrl?.includes("ollama.com") ? "cloud" : "local");
+
+    const baseUrl = normalizeBaseUrl(
+      request.baseUrl?.trim() || defaultOllamaBaseUrl(resolvedHostMode)
+    );
+
+    if (!isValidBaseUrl(baseUrl)) {
+      throw new Error("A valid http(s) base URL is required.");
+    }
+
+    const customModels = request.customModels?.length
+      ? validateOllamaCustomModels(request.customModels)
+      : request.model?.trim()
+        ? validateOllamaCustomModels([
+            { default: true, id: request.model.trim() },
+          ])
+        : undefined;
+
+    if (!customModels?.length) {
+      throw new Error("At least one Ollama model is required.");
+    }
+
+    return {
+      baseUrl,
+      customModels,
+      hostMode: resolvedHostMode,
+      label: defaultOllamaLabel(resolvedHostMode),
+    };
+  }
 
   if (type === "opencode_go") {
     let customModels = request.customModels?.length
@@ -207,16 +369,35 @@ function buildProviderFieldsFromRequest(
 
     if (!customModels?.length && request.model?.trim()) {
       customModels = validateOpenCodeGoCustomModels([
-        { id: request.model.trim(), default: true },
+        { default: true, id: request.model.trim() },
       ]);
     }
 
-    return { ...(customModels ? { customModels } : {}) };
+    return { customModels };
+  }
+
+  if (type === "netra") {
+    if (request.wireApi === "responses") {
+      throw new Error("Netra Runtime supports Chat Completions only.");
+    }
+
+    const customModels = request.customModels?.length
+      ? validateCustomModels(request.customModels)
+      : request.model?.trim()
+        ? validateCustomModels([{ default: true, id: request.model.trim() }])
+        : undefined;
+
+    if (!customModels?.length) {
+      throw new Error("At least one Netra model is required.");
+    }
+
+    return { customModels };
   }
 
   if (type === "openai_compatible") {
     const label = validateDisplayName(request.label ?? "");
     const baseUrl = normalizeBaseUrl(request.baseUrl ?? "");
+
     if (!isValidBaseUrl(baseUrl)) {
       throw new Error("A valid http(s) base URL is required.");
     }
@@ -226,36 +407,82 @@ function buildProviderFieldsFromRequest(
       : undefined;
 
     if (!customModels?.length && request.model?.trim()) {
-      customModels = validateCustomModels([{ id: request.model.trim(), default: true }]);
+      customModels = validateCustomModels([
+        { default: true, id: request.model.trim() },
+      ]);
     }
 
     if (!customModels?.length) {
       throw new Error("At least one model is required.");
     }
 
-    return { label, baseUrl, customModels };
+    return {
+      baseUrl,
+      customModels,
+      label,
+      wireApi: parseWireApi(request.wireApi),
+    };
   }
 
   if (type === "openrouter") {
     const customModels = request.customModels?.length
       ? validateOpenRouterCustomModels(request.customModels)
       : undefined;
-    return { ...(customModels ? { customModels } : {}) };
+
+    const routing =
+      request.openRouterRouting === undefined
+        ? undefined
+        : validateOpenRouterRoutingSettings(request.openRouterRouting);
+
+    return {
+      customModels,
+      openRouterRouting:
+        routing && Object.keys(routing).length ? routing : undefined,
+    };
   }
 
   if (type === "cerebras") {
     const customModels = request.customModels?.length
       ? validateCerebrasCustomModels(request.customModels)
       : undefined;
-    return { ...(customModels ? { customModels } : {}) };
+
+    return { customModels };
+  }
+
+  if (type === "fireworks") {
+    let customModels = request.customModels?.length
+      ? validateFireworksCustomModels(request.customModels)
+      : undefined;
+
+    if (!customModels?.length && request.model?.trim()) {
+      const catalogModel = getModelById(request.model.trim());
+      customModels = validateFireworksCustomModels([
+        {
+          default: true,
+          id: request.model.trim(),
+          inputPerMillionUsd: catalogModel?.inputPerMillionUsd,
+          outputPerMillionUsd: catalogModel?.outputPerMillionUsd,
+          supportsThinking: catalogModel?.supportsThinking,
+          supportsVision: catalogModel?.supportsVision,
+        },
+      ]);
+    }
+
+    if (!customModels?.length) {
+      throw new Error("At least one Fireworks model is required.");
+    }
+
+    return { customModels };
   }
 
   const rawBaseUrl = request.baseUrl?.trim();
+
   if (!rawBaseUrl) {
     return {};
   }
 
   const baseUrl = normalizeBaseUrl(rawBaseUrl);
+
   if (!isValidBaseUrl(baseUrl)) {
     throw new Error("A valid http(s) base URL is required.");
   }
@@ -264,7 +491,7 @@ function buildProviderFieldsFromRequest(
 }
 
 export function mergeModelsForConfig(
-  providers: ProviderInstance[],
+  providers: ProviderInstance[]
 ): ProviderModelOption[] {
   const models: ProviderModelOption[] = [];
 
@@ -281,7 +508,7 @@ export interface ResolvedProfileProviderSelection {
 }
 
 export function decodeStoredModelSelection(
-  value: string | null | undefined,
+  value: string | null | undefined
 ): { providerId: string; modelId: string } | null {
   const trimmed = value?.trim();
 
@@ -296,14 +523,12 @@ export function decodeStoredModelSelection(
   }
 
   return {
-    providerId: trimmed.slice(0, separator),
     modelId: trimmed.slice(separator + 2),
+    providerId: trimmed.slice(0, separator),
   };
 }
 
-export function extractStoredModelId(
-  value: string | null | undefined,
-): string | null {
+function extractStoredModelId(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
 
   if (!trimmed) {
@@ -313,13 +538,52 @@ export function extractStoredModelId(
   return decodeStoredModelSelection(trimmed)?.modelId ?? trimmed;
 }
 
+/** Decode `providerId::modelId` and resolve the provider, or null if unset. */
+export function resolveConfiguredModelInstance(
+  userConfig: UserConfig | null | undefined,
+  storedModel: string | null | undefined,
+  errors: { invalid: string; missingProvider: string }
+): { instance: ProviderInstance; modelId: string } | null {
+  const trimmed = storedModel?.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const decoded = decodeStoredModelSelection(trimmed);
+
+  if (!decoded || decoded.providerId === "__unknown__") {
+    throw new NakamaApiError(errors.invalid, 400);
+  }
+
+  const instance = userConfig?.providers.find(
+    (entry) => entry.id === decoded.providerId
+  );
+
+  if (!instance) {
+    throw new NakamaApiError(errors.missingProvider, 400);
+  }
+
+  return {
+    instance,
+    modelId:
+      instance.type === "netra"
+        ? resolveNetraModelId(decoded.modelId.trim())
+        : decoded.modelId.trim(),
+  };
+}
+
 export function resolveProfileProviderSelection(options: {
   providers: ProviderInstance[];
   defaultProviderId: string | null | undefined;
   profileModel: string | null | undefined;
 }): ResolvedProfileProviderSelection | null {
   const { providers, defaultProviderId, profileModel } = options;
-  const active = defaultProviderId ? findProviderInstance({ providers }, defaultProviderId) : null;
+
+  const active = defaultProviderId
+    ? providers.find((entry) => entry.id === defaultProviderId)
+    : null;
+
   const fallbackInstance = active ?? providers[0] ?? null;
 
   if (!fallbackInstance) {
@@ -329,12 +593,16 @@ export function resolveProfileProviderSelection(options: {
   const decoded = decodeStoredModelSelection(profileModel);
 
   if (decoded && decoded.providerId !== "__unknown__") {
-    const explicit = findProviderInstance({ providers }, decoded.providerId);
+    const explicit = providers.find((entry) => entry.id === decoded.providerId);
 
-    if (explicit && modelExistsOnInstance(explicit, decoded.modelId)) {
+    if (explicit) {
       return {
         instance: explicit,
-        model: resolveModel(explicit.type, decoded.modelId, explicit.customModels),
+        model: resolveModel(
+          explicit.type,
+          decoded.modelId,
+          explicit.customModels
+        ),
       };
     }
   }
@@ -343,27 +611,31 @@ export function resolveProfileProviderSelection(options: {
 
   if (selectedModel) {
     const matchingProviders = providers.filter((instance) =>
-      modelExistsOnInstance(instance, selectedModel),
+      modelExistsOnInstance(instance, selectedModel)
     );
 
-    if (active && matchingProviders.some((instance) => instance.id === active.id)) {
-      return {
-        instance: active,
-        model: resolveModel(active.type, selectedModel, active.customModels),
-      };
-    }
-
     const catalogProvider = getModelById(selectedModel)?.provider;
+
     const preferred =
-      (catalogProvider
-        ? matchingProviders.find((instance) => instance.type === catalogProvider)
-        : null) ??
+      (catalogProvider === "openai" &&
+      active?.type === "chatgpt" &&
+      matchingProviders.some((instance) => instance.id === active.id)
+        ? active
+        : undefined) ??
+      matchingProviders.find((instance) => instance.type === catalogProvider) ??
+      (active && matchingProviders.some((instance) => instance.id === active.id)
+        ? active
+        : undefined) ??
       matchingProviders[0];
 
     if (preferred) {
       return {
         instance: preferred,
-        model: resolveModel(preferred.type, selectedModel, preferred.customModels),
+        model: resolveModel(
+          preferred.type,
+          selectedModel,
+          preferred.customModels
+        ),
       };
     }
   }
@@ -372,4 +644,38 @@ export function resolveProfileProviderSelection(options: {
     instance: fallbackInstance,
     model: resolveDefaultModelForInstance(fallbackInstance),
   };
+}
+
+export async function createProviderForProfile(
+  db: DatabaseAdapter,
+  profileId: string,
+  userConfig: UserConfig | null,
+  options?: CreateProviderForInstanceOptions
+): Promise<ProviderClient | null> {
+  if (!userConfig) {
+    return null;
+  }
+
+  const profile = await db.getProfile(profileId);
+
+  if (!profile) {
+    return null;
+  }
+
+  const selection = resolveProfileProviderSelection({
+    defaultProviderId: userConfig.defaultProviderId,
+    profileModel: profile.model,
+    providers: userConfig.providers,
+  });
+
+  if (!selection) {
+    return null;
+  }
+
+  return createProviderForInstance(
+    selection.instance,
+    selection.model,
+    process.env,
+    options
+  );
 }

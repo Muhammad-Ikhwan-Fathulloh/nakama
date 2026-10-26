@@ -1,49 +1,67 @@
+import type { OrgRole } from "@nakama/core";
+
 export const DEFAULT_SUB_AGENT_TIMEOUT_MS = 300_000;
+
 export const MAX_SUB_AGENT_TIMEOUT_MS = 600_000;
-export const MAX_SUB_AGENT_OUTPUT_CHARS = 32_000;
-export const MAX_SUB_AGENT_SUMMARY_CHARS = 2_000;
+
+const MAX_SUB_AGENT_OUTPUT_CHARS = 32_000;
+
+const MAX_SUB_AGENT_SUMMARY_CHARS = 2000;
+
 const TRUNCATION_MARKER = "\n...[truncated]";
 
 export interface SubAgentRunInput {
-  orgId: string;
-  profileId: string;
-  task: string;
+  agentDepth: number;
+  clientOrigin?: string;
   context?: string;
+  onActivity?: (label: string) => void;
+  /** Answer text as the model writes it. */
+  onText?: (chunk: string) => void;
+  orgId: string;
+  orgRole?: OrgRole;
+  profileId: string;
+  sessionId?: string;
+  /** Agent group folder the child's file tools may also use. */
+  sharedDir?: string;
+  task: string;
   timeoutMs?: number;
   userId?: string;
-  clientOrigin?: string;
-  agentDepth: number;
 }
 
 export interface SubAgentRunResult {
+  error?: string;
+  output: string;
   status: "success" | "fail" | "timeout";
   summary: string;
-  output: string;
-  error?: string;
 }
 
 export function buildSubAgentResult(
   status: SubAgentRunResult["status"],
   text: string,
-  error?: string,
+  error?: string
 ): SubAgentRunResult {
   const output = truncateField(text, MAX_SUB_AGENT_OUTPUT_CHARS);
   const summary = truncateField(text, MAX_SUB_AGENT_SUMMARY_CHARS);
 
-  return {
+  const result: SubAgentRunResult = {
+    output,
     status,
     summary,
-    output,
-    ...(error ? { error } : {}),
   };
+
+  if (error) {
+    result.error = error;
+  }
+
+  return result;
 }
 
 export function failSubAgentResult(error: string): SubAgentRunResult {
   return {
+    error,
+    output: "",
     status: "fail",
     summary: error,
-    output: "",
-    error,
   };
 }
 
@@ -63,5 +81,6 @@ function truncateField(value: string, maxChars: number): string {
   }
 
   const keep = Math.max(0, maxChars - TRUNCATION_MARKER.length);
+
   return `${value.slice(0, keep)}${TRUNCATION_MARKER}`;
 }

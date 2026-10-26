@@ -1,8 +1,13 @@
 import type {
   AgentChannel,
   AutomationDefinition,
+  AutomationDeliveryChannel,
+  ChatContextUsage,
   ChatMessage,
+  ChatTurnUsage,
+  ChatUsage,
   CompactionResponse,
+  ImageAttachment,
   MessageContentPart,
   ProviderChatOptions,
   ProviderClient,
@@ -11,17 +16,20 @@ import type {
   ToolContext,
   ToolDefinition,
 } from "@nakama/core";
+import { createId, ProviderStreamInterruptedError } from "@nakama/core";
+import { z } from "zod";
 
 export interface AgentRequest {
-  prompt: string;
   channel: AgentChannel;
+  prompt: string;
 }
 
 export interface AgentDependencies {
+  chatOptions?: ProviderChatOptions;
   provider?: ProviderClient;
   tools?: ToolDefinition[];
-  chatOptions?: ProviderChatOptions;
 }
+
 import {
   getUserMessageText,
   messageContentHasDocuments,
@@ -32,129 +40,377 @@ import {
   partitionTools,
   toLlmToolDefinitions,
 } from "@nakama/core";
-import { buildChatSystemPrompt } from "./chat-prompt";
 import {
-  compactHistory,
+  buildChatSystemPrompt,
+  buildWebSearchUnavailableGuidance,
+  UNTRUSTED_DOCUMENT_GUIDANCE,
+} from "./chat-prompt";
+import {
   type CompactionConfig,
+  compactHistory,
+  estimateHistoryTokenBreakdown,
+  estimateHistoryTokens,
+  type HistoryTokenBreakdown,
+  providerReplaysThinking,
+  usableContextTokens,
 } from "./history-compaction";
-import { executeToolCall, serializeToolResult } from "./tool-loop";
+import { parseAutomationResponse } from "./parse";
+import {
+  buildAutomationSystemPrompt,
+  buildAutomationUserPrompt,
+} from "./prompt";
+import {
+  canRunToolCallsInParallel,
+  createTurnTools,
+  executeToolCall,
+  type ToolResult,
+} from "./tool-loop";
+
+const ImageAttachmentSchema = z.object({
+  data: z.string(),
+  mediaType: z.string(),
+});
+
+const VisualToolResultSchema = z.record(z.string(), z.json());
+
+const QuestionnaireToolResultSchema = z.object({ questionnaire: z.json() });
 
 const MAX_TOOL_ITERATIONS = 100;
 
-export interface StreamHandlers {
+const MAX_TURN_OUTPUT_TOKENS = 200_000;
+
+const MAX_OPEN_TODO_NUDGES = 2;
+
+const EMPTY_REPLY_NUDGE =
+  "Reply to the user now with a final answer based on the work so far.";
+
+const EMPTY_REPLY_NOTICE =
+  "The model finished without writing a reply. Send another message to continue.";
+
+const OUTPUT_LIMIT_NOTICE =
+  "The model reached its output token limit before it wrote a reply. Send another message to continue.";
+
+const STREAM_INTERRUPTED_NOTE =
+  "Your previous response was cut off by a provider error. Continue from where it stopped without repeating it. Split large content into smaller tool calls.";
+
+const TRUNCATED_TOOL_CALL_ERROR =
+  "Not run: your reply reached the output token limit, so the arguments of this call were cut off. Split the work into smaller calls.";
+
+interface StreamHandlers {
   onChunk: (delta: string) => void;
+  onSubAgentActivity?: (event: {
+    parentToolCallId: string;
+    label: string;
+  }) => void;
   onThinking?: (delta: string) => void;
+  onToolEnd?: (event: {
+    toolGroupId?: string;
+    toolCallId: string;
+    tool: string;
+    result: unknown;
+    images?: ImageAttachment[];
+  }) => void;
   onToolInputDelta?: (event: {
+    toolGroupId?: string;
     toolCallId: string;
     tool: string;
     delta: string;
     accumulatedArguments?: string;
   }) => void;
   onToolStart?: (event: {
+    toolGroupId?: string;
     toolCallId: string;
     tool: string;
-    input: Record<string, unknown>;
+    input: ToolCall["arguments"];
   }) => void;
-  onToolEnd?: (event: {
-    toolCallId: string;
-    tool: string;
-    result: unknown;
-  }) => void;
+  /** Fired once per LLM call in the turn, after the provider reports usage. */
+  onUsage?: (usage: ChatUsage) => void;
 }
 
-export type SendMessageArg = string | SendMessageInput;
+type SendMessageArg = string | SendMessageInput;
 
 export interface AgentChatSession {
-  send(input: SendMessageArg): Promise<string>;
-  sendStream(input: SendMessageArg, handlers: StreamHandlers): Promise<string>;
   clear(): void;
   compact(options?: { force?: boolean }): Promise<CompactionResponse>;
+  createAutomation(prompt: string): Promise<AutomationDefinition>;
+  getContextUsage(): ChatContextUsage | null;
   getHistory(): readonly ChatMessage[];
   getHistoryRevision(): number;
-  createAutomation(prompt: string): Promise<AutomationDefinition>;
+  /** What the last turn cost. Null before any turn has run on this session. */
+  getTurnUsage(): ChatTurnUsage | null;
+  send(input: SendMessageArg, options?: SendStreamOptions): Promise<string>;
+  sendStream(
+    input: SendMessageArg,
+    handlers: StreamHandlers,
+    options?: SendStreamOptions
+  ): Promise<string>;
 }
 
-export interface ResolvePromptContextInput {
+interface SendStreamOptions {
+  /** Persist the accepted user message before any provider call. */
+  onUserMessage?: () => Promise<void>;
+  /** Cancels the turn: stops the tool loop and asks running tools to abort. */
+  signal?: AbortSignal;
+  whatsappMessage?: ToolContext["whatsappMessage"];
+}
+
+interface ResolvePromptContextInput {
   userMessage?: string;
 }
 
 export interface AgentChatSessionOptions {
+  archiveHistory?: (history: readonly ChatMessage[]) => Promise<string>;
   channel?: AgentRequest["channel"];
-  tools?: ToolDefinition[];
-  systemPrompt?: string;
-  userContext?: string;
-  enableToolLoop?: boolean;
-  soul?: boolean;
-  initialHistory?: ChatMessage[];
-  toolContext?: ToolContext;
-  userTimezone?: string;
   compaction?: CompactionConfig;
-  resolvePromptContext?: (
-    context?: ResolvePromptContextInput,
-  ) => string | Promise<string>;
+  deliveryChannel?: AutomationDeliveryChannel;
+  enableToolLoop?: boolean;
+  initialHistory?: ChatMessage[];
   preprocessUserContent?: (
-    content: string | MessageContentPart[],
+    content: string | MessageContentPart[]
   ) => Promise<string | MessageContentPart[]>;
   rehydrateMessagesForProvider?: (
-    messages: readonly ChatMessage[],
+    messages: readonly ChatMessage[]
   ) => Promise<ChatMessage[]>;
+  resolvePromptContext?: (
+    context?: ResolvePromptContextInput
+  ) => string | Promise<string>;
+  soul?: boolean;
+  systemPrompt?: string;
+  toolContext?: ToolContext;
+  tools?: ToolDefinition[];
+  userContext?: string;
+  userTimezone?: string;
+}
+
+export async function createAutomationFromPrompt(
+  dependencies: AgentDependencies,
+  request: AgentRequest,
+  options?: { tools?: ToolDefinition[] }
+): Promise<AutomationDefinition> {
+  const tools = options?.tools ?? dependencies.tools ?? [];
+
+  if (!dependencies.provider) {
+    throw new Error("Provider is not configured.");
+  }
+
+  const result = await dependencies.provider.generateText({
+    prompt: buildAutomationUserPrompt(request.prompt, request.channel),
+    system: buildAutomationSystemPrompt(tools),
+  });
+
+  return parseAutomationResponse(result.content, {
+    prompt: request.prompt,
+    tools,
+  });
 }
 
 export function createAgentChatSession(
   dependencies: AgentDependencies,
-  harness: {
-    createAutomationFromPrompt(
-      request: AgentRequest,
-      options?: { tools?: ToolDefinition[] },
-    ): Promise<AutomationDefinition>;
-  },
-  options: AgentChatSessionOptions = {},
+  options: AgentChatSessionOptions = {}
 ): AgentChatSession {
   const channel = options.channel ?? "cli";
   const tools = options.tools ?? dependencies.tools ?? [];
   const enableToolLoop = options.enableToolLoop ?? tools.length > 0;
-  const systemPrompt = buildChatSystemPrompt(tools, {
+  const discoveredTools = new Set<string>();
+  let activeTools = createTurnTools(tools, discoveredTools);
+
+  const systemPrompt = buildChatSystemPrompt(activeTools, {
     basePrompt: options.systemPrompt,
-    userContext: options.userContext,
-    enableToolLoop,
-    soul: options.soul,
-    userTimezone: options.userTimezone,
     channel,
+    deliveryChannel: options.deliveryChannel,
+    enableToolLoop,
+    hasDocumentAttachments: messagesIncludeUserDocuments(
+      options.initialHistory ?? []
+    ),
+    soul: options.soul,
+    userContext: options.userContext,
+    userTimezone: options.userTimezone,
   });
-  const toolContext = options.toolContext ?? {};
+
   const history: ChatMessage[] = options.initialHistory
     ? [...options.initialHistory]
     : [];
+
   let historyRevision = 0;
+  let lastContextUsage: ChatContextUsage | null = null;
+  // Filled as each provider call returns, not at the end, so a turn that fails
+  // part way still reports the tokens it already spent.
+  let turnUsageCalls: ChatUsage[] = [];
 
   function bumpHistoryRevision(): void {
     historyRevision += 1;
   }
 
+  function llmToolsForEstimate() {
+    const { localTools } = partitionTools(activeTools);
+
+    return enableToolLoop && localTools.length > 0
+      ? toLlmToolDefinitions(localTools)
+      : undefined;
+  }
+
+  function currentTokenBreakdown(): HistoryTokenBreakdown {
+    const dateLine = `Today is ${formatCurrentDate()}.`;
+
+    return estimateHistoryTokenBreakdown(
+      history,
+      `${systemPrompt}\n\n${dateLine}`,
+      llmToolsForEstimate(),
+      dependencies.provider
+        ? providerReplaysThinking(dependencies.provider.name)
+        : true
+    );
+  }
+
+  function buildContextUsage(
+    usedTokens: number,
+    source: ChatContextUsage["source"],
+    breakdown = currentTokenBreakdown()
+  ): ChatContextUsage | null {
+    if (!options.compaction) {
+      return null;
+    }
+
+    return {
+      breakdown,
+      contextWindow: options.compaction.contextWindow,
+      source,
+      usableContextTokens: usableContextTokens(options.compaction),
+      usedTokens,
+    };
+  }
+
+  function rememberContextUsage(
+    usedTokens: number,
+    source: ChatContextUsage["source"]
+  ): void {
+    lastContextUsage = buildContextUsage(usedTokens, source);
+  }
+
+  function aggregateTurnUsage(): ChatTurnUsage | null {
+    if (turnUsageCalls.length === 0) {
+      return null;
+    }
+
+    const totals = turnUsageCalls.reduce(
+      (acc, call) => ({
+        cachedInputTokens:
+          acc.cachedInputTokens + (call.cachedInputTokens ?? 0),
+        costUsd:
+          acc.costUsd == null || call.costUsd == null
+            ? undefined
+            : acc.costUsd + call.costUsd,
+        estimated: acc.estimated || call.estimated === true,
+        inputTokens: acc.inputTokens + call.inputTokens,
+        outputTokens: acc.outputTokens + call.outputTokens,
+      }),
+      {
+        cachedInputTokens: 0,
+        // SAFETY: The total becomes undefined when any call omits its cost.
+        costUsd: 0 as number | undefined,
+        estimated: false,
+        inputTokens: 0,
+        outputTokens: 0,
+      }
+    );
+
+    const usage: ChatTurnUsage = {
+      cachedInputTokens: totals.cachedInputTokens,
+      calls: [...turnUsageCalls],
+      estimated: totals.estimated,
+      inputTokens: totals.inputTokens,
+      outputTokens: totals.outputTokens,
+      totalTokens: totals.inputTokens + totals.outputTokens,
+    };
+
+    // One unpriced call makes the turn total a lie, so it is dropped rather
+    // than reported short.
+    if (totals.costUsd != null) {
+      usage.costUsd = totals.costUsd;
+    }
+
+    return usage;
+  }
+
+  function estimateCurrentContextUsage(): ChatContextUsage | null {
+    if (!options.compaction) {
+      return null;
+    }
+
+    const breakdown = currentTokenBreakdown();
+
+    return buildContextUsage(
+      breakdown.systemPrompt +
+        breakdown.conversation +
+        breakdown.toolDefinitions,
+      "estimate",
+      breakdown
+    );
+  }
+
   async function runCompaction(force: boolean): Promise<CompactionResponse> {
-    if (!dependencies.provider || !options.compaction) {
+    if (!(dependencies.provider && options.compaction)) {
       return {
         action: "none",
-        messagesBefore: history.length,
         messagesAfter: history.length,
+        messagesBefore: history.length,
       };
     }
 
-    const { localTools } = partitionTools(tools);
+    const { localTools } = partitionTools(activeTools);
+
     const llmTools =
       options.enableToolLoop !== false && localTools.length > 0
         ? toLlmToolDefinitions(localTools)
         : undefined;
+
+    // Compaction is copy-on-write; do not discard anything until archival succeeds.
+    const original = [...history];
+    const revision = historyRevision;
+    const compacted = [...original];
+
+    function assertUnchanged() {
+      if (
+        historyRevision !== revision ||
+        history.length !== original.length ||
+        history.some((message, index) => message !== original[index])
+      ) {
+        throw new Error("History changed during compaction. Try again.");
+      }
+    }
+
     const result = await compactHistory({
-      history,
+      compaction: options.compaction,
+      force,
+      history: compacted,
       provider: dependencies.provider,
       systemPrompt,
       tools: llmTools,
-      compaction: options.compaction,
-      force,
     });
 
     if (result.action !== "none") {
+      assertUnchanged();
+      const recovery = await options.archiveHistory?.(original);
+      assertUnchanged();
+
+      const index =
+        result.action === "summarized"
+          ? 0
+          : compacted.findIndex(
+              (message, position) =>
+                message.role === "tool" && message !== original[position]
+            );
+
+      const first = compacted[index];
+
+      if (recovery && first) {
+        compacted[index] = {
+          ...first,
+          content: `${first.content}\n\n${recovery}`,
+        };
+      }
+
+      history.splice(0, history.length, ...compacted);
       bumpHistoryRevision();
     }
 
@@ -162,41 +418,26 @@ export function createAgentChatSession(
   }
 
   return {
-    async send(input) {
-      return sendMessage(dependencies, tools, systemPrompt, history, resolveSendInput(input), "send", {
-        enableToolLoop,
-        toolContext,
-        runCompaction,
-        resolvePromptContext: options.resolvePromptContext,
-        preprocessUserContent: options.preprocessUserContent,
-        rehydrateMessagesForProvider: options.rehydrateMessagesForProvider,
-      });
-    },
-    async sendStream(input, handlers) {
-      return sendMessage(
-        dependencies,
-        tools,
-        systemPrompt,
-        history,
-        resolveSendInput(input),
-        "stream",
-        {
-          enableToolLoop,
-          handlers,
-          toolContext,
-          runCompaction,
-          resolvePromptContext: options.resolvePromptContext,
-          preprocessUserContent: options.preprocessUserContent,
-          rehydrateMessagesForProvider: options.rehydrateMessagesForProvider,
-        },
-      );
-    },
     clear() {
       history.length = 0;
+      discoveredTools.clear();
+      activeTools = createTurnTools(tools, discoveredTools);
+      lastContextUsage = null;
+      turnUsageCalls = [];
       bumpHistoryRevision();
     },
     compact(options) {
       return runCompaction(options?.force ?? false);
+    },
+    createAutomation(prompt) {
+      return createAutomationFromPrompt(
+        dependencies,
+        { channel, prompt },
+        { tools }
+      );
+    },
+    getContextUsage() {
+      return lastContextUsage ?? estimateCurrentContextUsage();
     },
     getHistory() {
       return history;
@@ -204,14 +445,67 @@ export function createAgentChatSession(
     getHistoryRevision() {
       return historyRevision;
     },
-    createAutomation(prompt) {
-      return harness.createAutomationFromPrompt({ prompt, channel }, { tools });
+    getTurnUsage() {
+      return aggregateTurnUsage();
+    },
+    async send(input, sendOptions) {
+      activeTools = createTurnTools(tools, discoveredTools);
+      turnUsageCalls = [];
+
+      return sendMessage(
+        dependencies,
+        activeTools,
+        systemPrompt,
+        history,
+        resolveSendInput(input),
+        "send",
+        {
+          enableToolLoop,
+          onContextUsage: rememberContextUsage,
+          onTurnUsage: (usage) => turnUsageCalls.push(usage),
+          onUserMessage: sendOptions?.onUserMessage,
+          preprocessUserContent: options.preprocessUserContent,
+          rehydrateMessagesForProvider: options.rehydrateMessagesForProvider,
+          resolvePromptContext: options.resolvePromptContext,
+          runCompaction,
+          signal: sendOptions?.signal,
+          toolContext: options.toolContext,
+          whatsappMessage: sendOptions?.whatsappMessage,
+        }
+      );
+    },
+    async sendStream(input, handlers, streamOptions) {
+      activeTools = createTurnTools(tools, discoveredTools);
+      turnUsageCalls = [];
+
+      return sendMessage(
+        dependencies,
+        activeTools,
+        systemPrompt,
+        history,
+        resolveSendInput(input),
+        "stream",
+        {
+          enableToolLoop,
+          handlers,
+          onContextUsage: rememberContextUsage,
+          onTurnUsage: (usage) => turnUsageCalls.push(usage),
+          onUserMessage: streamOptions?.onUserMessage,
+          preprocessUserContent: options.preprocessUserContent,
+          rehydrateMessagesForProvider: options.rehydrateMessagesForProvider,
+          resolvePromptContext: options.resolvePromptContext,
+          runCompaction,
+          signal: streamOptions?.signal,
+          toolContext: options.toolContext,
+          whatsappMessage: streamOptions?.whatsappMessage,
+        }
+      );
     },
   };
 }
 
 function resolveSendInput(input: SendMessageArg): SendMessageInput {
-  return typeof input === "string" ? { message: input } : input;
+  return input instanceof Object ? input : { message: input };
 }
 
 async function sendMessage(
@@ -224,23 +518,31 @@ async function sendMessage(
   options: {
     enableToolLoop: boolean;
     handlers?: StreamHandlers;
+    onUserMessage?: () => Promise<void>;
     toolContext?: ToolContext;
     runCompaction?: (force: boolean) => Promise<CompactionResponse>;
+    onContextUsage?: (
+      usedTokens: number,
+      source: ChatContextUsage["source"]
+    ) => void;
+    onTurnUsage?: (usage: ChatUsage) => void;
     resolvePromptContext?: (
-      context?: ResolvePromptContextInput,
+      context?: ResolvePromptContextInput
     ) => string | Promise<string>;
     preprocessUserContent?: (
-      content: string | MessageContentPart[],
+      content: string | MessageContentPart[]
     ) => Promise<string | MessageContentPart[]>;
     rehydrateMessagesForProvider?: (
-      messages: readonly ChatMessage[],
+      messages: readonly ChatMessage[]
     ) => Promise<ChatMessage[]>;
-  },
+    signal?: AbortSignal;
+    whatsappMessage?: ToolContext["whatsappMessage"];
+  }
 ): Promise<string> {
   let userContent = normalizeUserContent(
     input.message,
     input.images,
-    input.documents,
+    input.documents
   );
 
   if (options.preprocessUserContent) {
@@ -248,7 +550,9 @@ async function sendMessage(
   }
 
   const userMessage = getUserMessageText(userContent);
-  history.push({ role: "user", content: userContent });
+  history.push({ content: userContent, role: "user" });
+  await options.onUserMessage?.();
+
   const multimodalTurn =
     messageContentHasImages(userContent) ||
     messageContentHasDocuments(userContent) ||
@@ -257,32 +561,40 @@ async function sendMessage(
 
   if (!dependencies.provider) {
     const hasAttachments = multimodalTurn;
+
     const reply = hasAttachments
-      ? "Attachments require a configured provider. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or GEMINI_API_KEY in Settings."
+      ? "Attachments require a configured provider. Add a provider in Control center → AI Providers (/customize/providers), or set OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or GEMINI_API_KEY."
       : "I'm running in offline mode. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or GEMINI_API_KEY to chat with me. You can still use /create to draft automations locally.";
 
     if (mode === "stream" && options.handlers) {
       options.handlers.onChunk(reply);
     }
 
-    history.push({ role: "assistant", content: reply });
+    history.push({ content: reply, role: "assistant" });
+
     return reply;
   }
 
   const { localTools, hasWebSearch } = partitionTools(tools);
-  const enableTools = options.enableToolLoop && (localTools.length > 0 || hasWebSearch);
-  const llmTools =
-    enableTools && localTools.length > 0 ? toLlmToolDefinitions(localTools) : undefined;
+
+  const enableTools =
+    options.enableToolLoop && (localTools.length > 0 || hasWebSearch);
+
+  // Hosted search is dropped wherever the provider cannot serve it: OpenRouter
+  // has no hosted-search path, Gemini rejects googleSearch grounding beside
+  // function declarations, and no provider accepts it beside attachments. The
+  // model is told when that happens, otherwise the capability disappears from
+  // the turn without a word.
+  const hostedWebSearch =
+    enableTools &&
+    hasWebSearch &&
+    dependencies.provider.name !== "openrouter" &&
+    !(dependencies.provider.name === "gemini" && localTools.length > 0) &&
+    !multimodalTurn;
+
   const providerOptions = buildProviderOptions(dependencies, {
-    webSearch:
-      enableTools &&
-      hasWebSearch &&
-      dependencies.provider.name !== "openrouter" &&
-      !(
-        dependencies.provider.name === "gemini" && localTools.length > 0
-      ) &&
-      !multimodalTurn,
     multimodalTurn,
+    webSearch: hostedWebSearch,
   });
 
   if (options.runCompaction) {
@@ -292,34 +604,104 @@ async function sendMessage(
   const promptContext = options.resolvePromptContext
     ? await options.resolvePromptContext({ userMessage })
     : "";
-  const effectiveSystemPrompt = promptContext.trim()
+
+  let effectiveSystemPrompt = promptContext.trim()
     ? `${systemPrompt}\n\n${promptContext.trim()}`
     : systemPrompt;
-  const effectiveToolContext =
+
+  const hasDocumentAttachments =
+    messageContentHasDocuments(userContent) ||
+    messagesIncludeUserDocuments(history);
+
+  if (
+    hasDocumentAttachments &&
+    !effectiveSystemPrompt.includes("untrusted document data")
+  ) {
+    effectiveSystemPrompt = `${effectiveSystemPrompt}\n\n${UNTRUSTED_DOCUMENT_GUIDANCE}`;
+  }
+
+  if (enableTools && hasWebSearch && !hostedWebSearch) {
+    effectiveSystemPrompt = `${effectiveSystemPrompt}\n\n${buildWebSearchUnavailableGuidance(localTools)}`;
+  }
+
+  const baseToolContext =
     input.clientOrigin?.trim() && options.toolContext
       ? { ...options.toolContext, clientOrigin: input.clientOrigin.trim() }
       : input.clientOrigin?.trim()
         ? { clientOrigin: input.clientOrigin.trim() }
         : options.toolContext;
 
+  const effectiveToolContext: ToolContext = {
+    ...baseToolContext,
+    currentChatImages: Array.isArray(userContent)
+      ? userContent.flatMap((part) =>
+          part.type === "image_ref"
+            ? [{ attachmentId: part.attachmentId, mediaType: part.mediaType }]
+            : []
+        )
+      : [],
+    whatsappMessage: options.whatsappMessage,
+  };
+
+  if (options.signal) {
+    effectiveToolContext.signal = options.signal;
+  }
+
   try {
     const reply = await runConversation(
       dependencies.provider,
-      localTools,
+      tools,
       effectiveSystemPrompt,
       history,
       mode,
       enableTools,
-      llmTools,
       providerOptions,
       options.handlers,
       effectiveToolContext,
       options.rehydrateMessagesForProvider,
+      options.onContextUsage,
+      options.signal,
+      options.preprocessUserContent,
+      options.onTurnUsage
     );
 
     return reply;
   } catch (error) {
-    rollbackFailedSend(history);
+    if (options.signal?.aborted) {
+      // Every tool call needs a result before the next user turn, including
+      // calls interrupted by Stop or never started in the cancelled batch.
+      const assistantIndex = history.findLastIndex(
+        (message) => message.role === "assistant"
+      );
+
+      const assistant = history[assistantIndex];
+
+      const completed = new Set(
+        history
+          .slice(assistantIndex + 1)
+          .flatMap((message) =>
+            message.role === "tool" ? [message.toolCallId] : []
+          )
+      );
+
+      if (assistant?.role === "assistant") {
+        for (const call of assistant.toolCalls ?? []) {
+          if (!completed.has(call.id)) {
+            history.push({
+              content: JSON.stringify({
+                error: "Turn cancelled before a result was received.",
+              }),
+              name: call.name,
+              role: "tool",
+              toolCallId: call.id,
+            });
+          }
+        }
+      }
+    } else {
+      rollbackFailedSend(history);
+    }
+
     throw error;
   }
 }
@@ -338,10 +720,6 @@ function rollbackFailedSend(history: ChatMessage[]): void {
       continue;
     }
 
-    if (last?.role === "user") {
-      history.pop();
-    }
-
     break;
   }
 }
@@ -353,42 +731,293 @@ async function runConversation(
   history: ChatMessage[],
   mode: "send" | "stream",
   enableToolLoop: boolean,
-  llmTools: ReturnType<typeof toLlmToolDefinitions> | undefined,
   providerOptions: ProviderChatOptions | undefined,
   handlers?: StreamHandlers,
   toolContext?: ToolContext,
   rehydrateMessagesForProvider?: (
-    messages: readonly ChatMessage[],
+    messages: readonly ChatMessage[]
   ) => Promise<ChatMessage[]>,
+  onContextUsage?: (
+    usedTokens: number,
+    source: ChatContextUsage["source"]
+  ) => void,
+  signal?: AbortSignal,
+  preprocessUserContent?: AgentChatSessionOptions["preprocessUserContent"],
+  onTurnUsage?: (usage: ChatUsage) => void
 ): Promise<string> {
+  let producedTokens = 0;
+  let stoppedReply = "";
+  let finalReplyOnly = false;
+  let thinkingOff = false;
+  let streamRetried = false;
+  let streamInterrupted = false;
+  let openTodoNudges = 0;
+  let openTodosReminder: string | null = null;
+
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
-    const result = await generateReply(
-      provider,
-      systemPrompt,
-      history,
-      llmTools,
-      providerOptions,
-      mode,
-      handlers,
-      rehydrateMessagesForProvider,
+    signal?.throwIfAborted();
+
+    if (producedTokens >= MAX_TURN_OUTPUT_TOKENS) {
+      break;
+    }
+
+    const { localTools: iterationTools } = partitionTools(tools);
+
+    const llmTools =
+      enableToolLoop && !finalReplyOnly && iterationTools.length
+        ? toLlmToolDefinitions(iterationTools)
+        : undefined;
+
+    let iterationPrompt = finalReplyOnly
+      ? `${systemPrompt}\n\n${EMPTY_REPLY_NUDGE}`
+      : systemPrompt;
+
+    if (openTodosReminder) {
+      iterationPrompt = `${iterationPrompt}\n\n${openTodosReminder}`;
+      openTodosReminder = null;
+    }
+
+    if (streamInterrupted) {
+      iterationPrompt = `${iterationPrompt}\n\n${STREAM_INTERRUPTED_NOTE}`;
+      streamInterrupted = false;
+    }
+
+    const reservedTokens =
+      estimateHistoryTokens(
+        history,
+        `${iterationPrompt}\n\nToday is ${formatCurrentDate()}.`,
+        llmTools,
+        providerReplaysThinking(provider.name)
+      ) + Math.max(0, MAX_TURN_OUTPUT_TOKENS - producedTokens);
+
+    const releaseReservation =
+      await toolContext?.assertCanStartLlmTurn?.(reservedTokens);
+
+    const { thinking: _thinking, ...optionsWithoutThinking } =
+      providerOptions ?? {};
+
+    const stepOptions = thinkingOff ? optionsWithoutThinking : providerOptions;
+
+    const toolGroupId = createId("toolgroup");
+    let result: Awaited<ReturnType<typeof generateReply>>;
+
+    try {
+      result = await generateReply(
+        provider,
+        iterationPrompt,
+        history,
+        llmTools,
+        finalReplyOnly ? { ...stepOptions, webSearch: false } : stepOptions,
+        mode,
+        handlers,
+        rehydrateMessagesForProvider,
+        signal,
+        toolGroupId
+      );
+
+      const usedTokens =
+        result.usage?.inputTokens ??
+        estimateHistoryTokens(
+          history,
+          `${iterationPrompt}\n\nToday is ${formatCurrentDate()}.`,
+          llmTools,
+          providerReplaysThinking(provider.name)
+        );
+
+      onContextUsage?.(
+        usedTokens,
+        result.usage && !result.usage.estimated ? "provider" : "estimate"
+      );
+
+      try {
+        toolContext?.recordTurnUsage?.({
+          estimated: Boolean(result.usage?.estimated ?? !result.usage),
+          inputTokens: result.usage?.inputTokens ?? 0,
+          outputTokens: result.usage?.outputTokens ?? 0,
+        });
+      } catch {
+        // never let accounting break a turn
+      }
+    } catch (error) {
+      // A stream that broke mid-reply often works on the next try. Retry once
+      // per turn; the partial reply is already in history.
+      if (
+        error instanceof ProviderStreamInterruptedError &&
+        !streamRetried &&
+        !signal?.aborted
+      ) {
+        streamRetried = true;
+        streamInterrupted = true;
+        continue;
+      }
+
+      throw error;
+    } finally {
+      // The hold covers one provider call. Usage is on the ledger by now if the
+      // call returned, and a call that threw or was aborted spent nothing.
+      await releaseReservation?.().catch(() => undefined);
+    }
+
+    // Backstop for providers that ignore the signal. The in-flight request is
+    // aborted through GenerateChatInput.signal; this only catches the case where
+    // it returned anyway, so a cancelled turn never starts another tool batch.
+    signal?.throwIfAborted();
+
+    if (result.usage) {
+      handlers?.onUsage?.(result.usage);
+      onTurnUsage?.(result.usage);
+    }
+
+    producedTokens += Math.max(
+      result.usage?.outputTokens ?? 0,
+      estimateHistoryTokens([result.assistantMessage], "")
     );
 
-    history.push(result.assistantMessage);
+    if (
+      enableToolLoop &&
+      producedTokens >= MAX_TURN_OUTPUT_TOKENS &&
+      result.toolCalls.length > 0
+    ) {
+      // Keep visible text, but not tool calls that will never execute.
+      stoppedReply = result.content;
+      break;
+    }
+
+    if (
+      enableToolLoop &&
+      result.toolCalls.length === 0 &&
+      !result.content.trim()
+    ) {
+      // Thinking used the whole output limit. Try the same step again with
+      // the tools, and do not think for the rest of this turn.
+      if (result.truncated && !thinkingOff) {
+        thinkingOff = true;
+        continue;
+      }
+
+      if (!finalReplyOnly) {
+        finalReplyOnly = true;
+        continue;
+      }
+
+      const notice = result.truncated
+        ? OUTPUT_LIMIT_NOTICE
+        : EMPTY_REPLY_NOTICE;
+
+      history.push({ content: notice, role: "assistant" });
+
+      if (mode === "stream") {
+        handlers?.onChunk(notice);
+      }
+
+      return notice;
+    }
+
+    // Steps the provider already ran are saved in order, each with the text before it,
+    // then the final answer. They are never run again.
+    for (const step of result.completedToolCalls ?? []) {
+      history.push({
+        content: step.textBefore ?? "",
+        role: "assistant",
+        toolCalls: [step.call],
+      });
+      history.push({
+        content: JSON.stringify(step.result ?? null),
+        name: step.call.name,
+        role: "tool",
+        toolCallId: step.call.id,
+      });
+    }
+
+    history.push(
+      result.usage
+        ? { ...result.assistantMessage, usage: result.usage }
+        : result.assistantMessage
+    );
+
+    if (enableToolLoop && result.truncated && result.toolCalls.length > 0) {
+      // The last call was cut off at the output limit, so its arguments are
+      // broken. Tell the model and let it try again in smaller parts.
+      for (const call of result.toolCalls) {
+        const toolResult = { error: TRUNCATED_TOOL_CALL_ERROR };
+
+        handlers?.onToolStart?.({
+          input: call.arguments,
+          tool: call.name,
+          toolCallId: call.id,
+          toolGroupId,
+        });
+        handlers?.onToolEnd?.({
+          result: toolResult,
+          tool: call.name,
+          toolCallId: call.id,
+          toolGroupId,
+        });
+        history.push({
+          content: JSON.stringify(toolResult),
+          name: call.name,
+          role: "tool",
+          toolCallId: call.id,
+        });
+      }
+
+      continue;
+    }
 
     if (!enableToolLoop || result.toolCalls.length === 0) {
+      if (
+        enableToolLoop &&
+        openTodoNudges < MAX_OPEN_TODO_NUDGES &&
+        producedTokens < MAX_TURN_OUTPUT_TOKENS
+      ) {
+        openTodosReminder = (await toolContext?.openTodosReminder?.()) ?? null;
+
+        if (openTodosReminder) {
+          openTodoNudges += 1;
+          continue;
+        }
+      }
+
       return result.content;
     }
 
-    await executeToolCalls(tools, result.toolCalls, history, handlers, toolContext);
-  }
+    const toolHistoryStart = history.length;
 
-  const lastAssistant = [...history]
-    .reverse()
-    .find((message): message is Extract<ChatMessage, { role: "assistant" }> =>
-      message.role === "assistant",
+    const waitingForAnswers = await executeToolCalls(
+      iterationTools,
+      result.toolCalls,
+      history,
+      handlers,
+      toolContext,
+      preprocessUserContent,
+      toolGroupId
     );
 
-  return lastAssistant?.content ?? "";
+    // Check between batches: one batch can overshoot, but no next request runs.
+    producedTokens += estimateHistoryTokens(
+      history.slice(toolHistoryStart),
+      ""
+    );
+
+    if (waitingForAnswers) {
+      return result.content;
+    }
+  }
+
+  const reason =
+    producedTokens >= MAX_TURN_OUTPUT_TOKENS
+      ? "its output budget"
+      : `its limit of ${MAX_TOOL_ITERATIONS} tool rounds`;
+
+  const notice = `${stoppedReply ? "\n\n" : ""}Stopped because this turn reached ${reason}. Send another message to continue.`;
+  const content = stoppedReply + notice;
+  history.push({ content, role: "assistant" });
+
+  if (mode === "stream") {
+    handlers?.onChunk(notice);
+  }
+
+  return content;
 }
 
 async function executeToolCalls(
@@ -397,37 +1026,211 @@ async function executeToolCalls(
   history: ChatMessage[],
   handlers?: StreamHandlers,
   toolContext: ToolContext = {},
-): Promise<void> {
+  preprocessUserContent?: AgentChatSessionOptions["preprocessUserContent"],
+  toolGroupId?: string
+): Promise<boolean> {
+  const contextForCall = (call: ToolCall): ToolContext => {
+    if (!handlers?.onSubAgentActivity || call.name !== "sub_agent") {
+      return toolContext;
+    }
+
+    return {
+      ...toolContext,
+      emitSubAgentActivity: (label) =>
+        handlers.onSubAgentActivity?.({
+          label,
+          parentToolCallId: call.id,
+        }),
+    };
+  };
+
+  if (canRunToolCallsInParallel(tools, toolCalls)) {
+    const results = await Promise.allSettled(
+      toolCalls.map(async (call) => {
+        const toolStartedAt = Date.now();
+        handlers?.onToolStart?.({
+          input: call.arguments,
+          tool: call.name,
+          toolCallId: call.id,
+          toolGroupId,
+        });
+
+        const { result, attachments, images } = await prepareVisualToolResult(
+          await executeToolCall(tools, call, contextForCall(call)),
+          preprocessUserContent
+        );
+
+        const toolCompletedAt = Date.now();
+
+        handlers?.onToolEnd?.({
+          images,
+          result,
+          tool: call.name,
+          toolCallId: call.id,
+          toolGroupId,
+        });
+
+        return { attachments, call, result, toolCompletedAt, toolStartedAt };
+      })
+    );
+
+    for (const result of results) {
+      if (result.status === "rejected") {
+        continue;
+      }
+
+      const entry = result.value;
+
+      const message: ChatMessage = {
+        content: JSON.stringify(entry.result),
+        name: entry.call.name,
+        role: "tool",
+        toolCallId: entry.call.id,
+        toolCompletedAt: entry.toolCompletedAt,
+        toolGroupId,
+        toolStartedAt: entry.toolStartedAt,
+      };
+
+      if (entry.attachments) {
+        message.attachments = entry.attachments;
+      }
+
+      history.push(message);
+    }
+
+    const failed = results.find((result) => result.status === "rejected");
+
+    if (failed?.status === "rejected") {
+      throw failed.reason;
+    }
+
+    return results.some(
+      (entry) =>
+        entry.status === "fulfilled" &&
+        entry.value.call.name === "ask_user_question" &&
+        QuestionnaireToolResultSchema.safeParse(entry.value.result).success
+    );
+  }
+
+  let waitingForAnswers = false;
+
   for (const call of toolCalls) {
+    toolContext.signal?.throwIfAborted();
+    const toolStartedAt = Date.now();
     handlers?.onToolStart?.({
-      toolCallId: call.id,
-      tool: call.name,
       input: call.arguments,
+      tool: call.name,
+      toolCallId: call.id,
+      toolGroupId,
     });
 
-    const result = await executeToolCall(tools, call, toolContext);
+    const { result, attachments, images } = await prepareVisualToolResult(
+      await executeToolCall(tools, call, contextForCall(call)),
+      preprocessUserContent
+    );
+
+    const toolCompletedAt = Date.now();
 
     handlers?.onToolEnd?.({
-      toolCallId: call.id,
-      tool: call.name,
+      images,
       result,
+      tool: call.name,
+      toolCallId: call.id,
+      toolGroupId,
     });
 
-    history.push({
+    const message: ChatMessage = {
+      content: JSON.stringify(result),
+      name: call.name,
       role: "tool",
       toolCallId: call.id,
-      name: call.name,
-      content: serializeToolResult(result),
-    });
+      toolCompletedAt,
+      toolGroupId,
+      toolStartedAt,
+    };
+
+    if (attachments) {
+      message.attachments = attachments;
+    }
+
+    history.push(message);
+
+    if (
+      call.name === "ask_user_question" &&
+      QuestionnaireToolResultSchema.safeParse(result).success
+    ) {
+      waitingForAnswers = true;
+    }
+  }
+
+  return waitingForAnswers;
+}
+
+async function prepareVisualToolResult(
+  result: ToolResult,
+  preprocess?: AgentChatSessionOptions["preprocessUserContent"]
+): Promise<{
+  result: ToolResult;
+  attachments?: MessageContentPart[];
+  /** The tool's own images, so the chat UI can show them. */
+  images?: ImageAttachment[];
+}> {
+  const parsed = VisualToolResultSchema.safeParse(result);
+
+  if (!parsed.success) {
+    return { result };
+  }
+
+  const parsedImages = z
+    .array(ImageAttachmentSchema)
+    .safeParse(parsed.data.images);
+
+  if (!parsedImages.success) {
+    return { result };
+  }
+
+  const images = parsedImages.data;
+  const firstImage = images[0];
+
+  if (!firstImage) {
+    return { result };
+  }
+
+  const metadata = { ...parsed.data };
+  delete metadata.images;
+
+  try {
+    const content = normalizeUserContent("", images);
+    const prepared = preprocess ? await preprocess(content) : content;
+
+    return {
+      attachments: Array.isArray(prepared)
+        ? prepared
+        : [{ text: prepared, type: "text" }],
+      images,
+      result: metadata,
+    };
+  } catch (error) {
+    return {
+      images,
+      result: {
+        ...metadata,
+        content:
+          "Image contents were not inspected. Only file metadata is available; do not infer what the image shows.",
+        inspected: false,
+        mediaType: firstImage.mediaType,
+        reason: error instanceof Error ? error.message : String(error),
+      },
+    };
   }
 }
 
 function formatCurrentDate(): string {
   return new Date().toLocaleDateString("en-US", {
+    day: "numeric",
+    month: "long",
     weekday: "long",
     year: "numeric",
-    month: "long",
-    day: "numeric",
   });
 }
 
@@ -440,29 +1243,168 @@ async function generateReply(
   mode: "send" | "stream",
   handlers?: StreamHandlers,
   rehydrateMessagesForProvider?: (
-    messages: readonly ChatMessage[],
+    messages: readonly ChatMessage[]
   ) => Promise<ChatMessage[]>,
+  signal?: AbortSignal,
+  toolGroupId?: string
 ) {
   const dateLine = `Today is ${formatCurrentDate()}.`;
+  // All tool replies must precede the visual content, including parallel calls.
+  // Expand only for the provider so these don't become fabricated user turns.
+  const expanded: ChatMessage[] = [];
+
+  const lastUserIndex = history.findLastIndex(
+    (message) => message.role === "user"
+  );
+
+  let attachments: MessageContentPart[] = [];
+
+  for (const [index, message] of history.entries()) {
+    if (message.role === "tool" && message.attachments?.length) {
+      const { attachments: parts, ...toolMessage } = message;
+      expanded.push(toolMessage);
+
+      // Page images are turn-local evidence. Keep their source metadata and
+      // stored attachments; a later turn can fetch the page again to inspect it.
+      if (message.name !== "web_fetch" || index > lastUserIndex) {
+        attachments.push(
+          {
+            text: `Image output from ${message.name} (${message.toolCallId}): ${message.content}`,
+            type: "text",
+          },
+          ...parts
+        );
+      }
+    } else {
+      expanded.push(message);
+    }
+
+    if (attachments.length && history[index + 1]?.role !== "tool") {
+      expanded.push({ content: attachments, role: "user" });
+      attachments = [];
+    }
+  }
+
   const messages =
-    rehydrateMessagesForProvider !== undefined
-      ? await rehydrateMessagesForProvider(history)
-      : history;
+    rehydrateMessagesForProvider === undefined
+      ? expanded
+      : await rehydrateMessagesForProvider(expanded);
+
   const input = {
-    system: `${systemPrompt}\n\n${dateLine}`,
     messages,
+    providerOptions: messagesIncludeUserImages(messages)
+      ? undefined
+      : providerOptions,
+    signal,
+    system: `${systemPrompt}\n\n${dateLine}`,
     tools,
-    providerOptions,
   };
 
   if (mode === "stream" && handlers) {
-    return provider.streamChat(input, {
-      onChunk: handlers.onChunk,
-      onThinking: handlers.onThinking,
-      onToolInputDelta: handlers.onToolInputDelta,
-      onToolStart: handlers.onToolStart,
-      onToolEnd: handlers.onToolEnd,
-    });
+    let content = "";
+    let thinking = "";
+    let thinkingStartedAt: number | undefined;
+    let thinkingDurationMs: number | undefined;
+    const pendingToolInputs = new Map<string, string>();
+
+    const finishThinking = () => {
+      if (thinkingStartedAt !== undefined) {
+        thinkingDurationMs =
+          (thinkingDurationMs ?? 0) +
+          Math.max(0, Date.now() - thinkingStartedAt);
+        thinkingStartedAt = undefined;
+      }
+    };
+
+    try {
+      const result = await provider.streamChat(input, {
+        onChunk: (delta) => {
+          if (signal?.aborted) {
+            return;
+          }
+
+          content += delta;
+
+          if (delta) {
+            finishThinking();
+          }
+
+          handlers.onChunk(delta);
+        },
+        onThinking: (delta) => {
+          if (signal?.aborted) {
+            return;
+          }
+
+          thinking += delta;
+
+          if (delta) {
+            thinkingStartedAt ??= Date.now();
+          }
+
+          handlers.onThinking?.(delta);
+        },
+        onToolEnd: (event) => handlers.onToolEnd?.({ ...event, toolGroupId }),
+        onToolInputDelta: (event) => {
+          finishThinking();
+          pendingToolInputs.set(event.toolCallId, event.tool);
+          handlers.onToolInputDelta?.({ ...event, toolGroupId });
+        },
+        onToolStart: (event) => {
+          finishThinking();
+          pendingToolInputs.delete(event.toolCallId);
+          handlers.onToolStart?.({ ...event, toolGroupId });
+        },
+      });
+
+      signal?.throwIfAborted();
+      finishThinking();
+
+      return thinkingDurationMs === undefined
+        ? result
+        : {
+            ...result,
+            assistantMessage: {
+              ...result.assistantMessage,
+              thinkingDurationMs,
+            },
+          };
+    } catch (error) {
+      const interrupted = error instanceof ProviderStreamInterruptedError;
+
+      // Tool calls cut off by the broken stream never run; close their steps.
+      if (interrupted) {
+        for (const [toolCallId, tool] of pendingToolInputs) {
+          handlers.onToolEnd?.({
+            result: { error: error.message },
+            tool,
+            toolCallId,
+            toolGroupId,
+          });
+        }
+      }
+
+      if ((signal?.aborted || interrupted) && (content || thinking)) {
+        finishThinking();
+
+        const message: ChatMessage = {
+          content,
+          role: "assistant",
+        };
+
+        if (thinking) {
+          message.thinking = thinking;
+        }
+
+        if (thinkingDurationMs !== undefined) {
+          message.thinkingDurationMs = thinkingDurationMs;
+        }
+
+        history.push(message);
+      }
+
+      throw error;
+    }
   }
 
   return provider.generateChat(input);
@@ -470,19 +1412,30 @@ async function generateReply(
 
 function buildProviderOptions(
   dependencies: AgentDependencies,
-  options: { webSearch: boolean; multimodalTurn: boolean },
+  options: { webSearch: boolean; multimodalTurn: boolean }
 ): ProviderChatOptions | undefined {
   const base = dependencies.chatOptions;
+
   const thinking =
-    options.multimodalTurn || !base?.thinking?.enabled ? undefined : base.thinking;
+    options.multimodalTurn || !base?.thinking?.enabled
+      ? undefined
+      : base.thinking;
+
   const webSearch = options.webSearch ? true : undefined;
 
-  if (!webSearch && !thinking) {
-    return undefined;
+  if (!(webSearch || thinking)) {
+    return;
   }
 
-  return {
-    ...(webSearch ? { webSearch: true } : {}),
-    ...(thinking ? { thinking } : {}),
-  };
+  const providerOptions: ProviderChatOptions = {};
+
+  if (webSearch) {
+    providerOptions.webSearch = true;
+  }
+
+  if (thinking) {
+    providerOptions.thinking = thinking;
+  }
+
+  return providerOptions;
 }

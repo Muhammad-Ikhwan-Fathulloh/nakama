@@ -1,15 +1,28 @@
-import { mkdir, writeFile, mkdtemp, rm } from "node:fs/promises";
-import * as os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { NakamaClient } from "@nakama/client";
-import type { ProfileSummary, UserOrgSummary } from "@nakama/core/contract";
+import type {
+  NakamaClient,
+  SendMessageArg,
+  SendStreamOptions,
+  StreamHandlers,
+} from "@nakama/client";
 import {
   assertBridgeClientMethods,
   parseListProfilesResponse,
   parseListUserOrgsResponse,
 } from "@nakama/core/bridge-api";
-import { ChannelOrgStore } from "@nakama/core/channel-org";
-import type { StreamHandlers } from "@nakama/client";
+import type { ChannelOrgStore } from "@nakama/core/channel-org";
+import {
+  createDefaultTestOrgs,
+  createMultiTestOrgs,
+  createTestOrgStore as createSharedTestOrgStore,
+  withTempHome as withSharedTempHome,
+} from "@nakama/core/channel-test-helpers";
+import type {
+  ChatMessage,
+  ProfileSummary,
+  UserOrgSummary,
+} from "@nakama/core/contract";
 
 export interface MockStreamControl {
   complete(reply?: string): void;
@@ -25,42 +38,6 @@ type StreamStep =
   | { type: "error"; message: string }
   | { type: "resolve"; reply?: string };
 
-export function createMultiTestOrgs(): UserOrgSummary[] {
-  const now = new Date().toISOString();
-  return [
-    {
-      id: "org_a",
-      name: "Acme",
-      slug: "acme",
-      role: "admin",
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: "org_b",
-      name: "Beta",
-      slug: "beta",
-      role: "member",
-      createdAt: now,
-      updatedAt: now,
-    },
-  ];
-}
-
-export function createDefaultTestOrgs(): UserOrgSummary[] {
-  const now = new Date().toISOString();
-  return [
-    {
-      id: "org_test",
-      name: "Test Org",
-      slug: "test-org",
-      role: "admin",
-      createdAt: now,
-      updatedAt: now,
-    },
-  ];
-}
-
 export function createMockClient(
   options: {
     streaming?: boolean;
@@ -68,66 +45,107 @@ export function createMockClient(
     autoComplete?: boolean;
     profiles?: ProfileSummary[];
     orgs?: UserOrgSummary[];
-  } = {},
+    messages?: ChatMessage[];
+    toolEvents?: Parameters<NonNullable<StreamHandlers["onToolEnd"]>>[0][];
+    done?: boolean;
+    reply?: string;
+    streamError?: Error;
+    getMessagesError?: Error;
+  } = {}
 ) {
+  const profileIds: string[] = [];
+  const streamInputs: SendMessageArg[] = [];
+  const streamOptions: Array<SendStreamOptions | undefined> = [];
+
   const calls = {
-    createSession: 0,
-    sendStream: 0,
     compact: 0,
-    profileIds: [] as string[],
+    createChatSession: 0,
+    createSession: 0,
+    getMessages: 0,
     listProfiles: 0,
     listUserOrgs: 0,
+    profileIds,
+    publishProfileArtifactShare: 0,
+    readProfileArtifactContent: 0,
+    sendStream: 0,
     setOrgId: 0,
+    streamInputs,
+    streamOptions,
   };
+
   const orgIds: string[] = [];
 
   let streamControl: MockStreamControl | null = null;
 
   const sendStream = async (
-    _input: unknown,
-    handlers: unknown,
-    streamOptions?: { signal?: AbortSignal },
+    _input: SendMessageArg,
+    streamHandlers: StreamHandlers,
+    streamOptions?: SendStreamOptions
   ) => {
     calls.sendStream += 1;
+    calls.streamInputs.push(_input);
+    calls.streamOptions.push(streamOptions);
 
     if (!options.streaming) {
-      return "Agent reply";
-    }
+      for (const event of options.toolEvents ?? []) {
+        streamHandlers.onToolEnd?.(event);
+      }
 
-    const streamHandlers = handlers as StreamHandlers;
+      if (options.streamError) {
+        throw options.streamError;
+      }
+
+      if (options.done !== false) {
+        streamHandlers.onDone?.();
+      }
+
+      return options.reply ?? "Agent reply";
+    }
 
     return new Promise<string>((resolve, reject) => {
       let settled = false;
 
       streamControl = {
-        get signal() {
-          return streamOptions?.signal;
-        },
         complete(reply = "Agent reply") {
-          if (settled) return;
+          if (settled) {
+            return;
+          }
+
           settled = true;
+          streamHandlers.onDone?.();
           resolve(reply);
         },
         fail(error = new Error("Stream failed")) {
-          if (settled) return;
+          if (settled) {
+            return;
+          }
+
           settled = true;
           reject(error);
+        },
+        get signal() {
+          return streamOptions?.signal;
         },
       };
 
       streamOptions?.signal?.addEventListener(
         "abort",
         () => {
-          if (settled) return;
+          if (settled) {
+            return;
+          }
+
           settled = true;
           reject(new DOMException("Aborted", "AbortError"));
         },
-        { once: true },
+        { once: true }
       );
 
       queueMicrotask(() => {
         for (const step of options.steps ?? []) {
-          if (settled) break;
+          if (settled) {
+            break;
+          }
 
           switch (step.type) {
             case "chunk":
@@ -138,16 +156,16 @@ export function createMockClient(
               break;
             case "tool_start":
               streamHandlers.onToolStart?.({
-                toolCallId: "tool_call_1",
-                tool: "todo_write",
                 input: {},
+                tool: "todo_write",
+                toolCallId: "tool_call_1",
               });
               break;
             case "tool_end":
               streamHandlers.onToolEnd?.({
-                toolCallId: "tool_call_1",
-                tool: "todo_write",
                 result: {},
+                tool: "todo_write",
+                toolCallId: "tool_call_1",
               });
               break;
             case "error":
@@ -159,7 +177,11 @@ export function createMockClient(
           }
         }
 
-        if (!settled && options.steps?.length && options.autoComplete !== false) {
+        if (
+          !settled &&
+          options.steps?.length &&
+          options.autoComplete !== false
+        ) {
           streamControl?.complete("Agent reply");
         }
       });
@@ -167,78 +189,119 @@ export function createMockClient(
   };
 
   const session = {
-    id: "session_test",
-    sendStream,
+    clear: async () => {},
     compact: async () => {
       calls.compact += 1;
+
       return {
         action: "summarized" as const,
-        messagesBefore: 10,
         messagesAfter: 4,
+        messagesBefore: 10,
       };
     },
-    getMessages: async () => [],
-    clear: async () => {},
-    send: async () => "ok",
-    purge: async () => {},
     createAutomation: async () => ({}),
+    getMessages: async () => {
+      calls.getMessages += 1;
+
+      if (options.getMessagesError) {
+        throw options.getMessagesError;
+      }
+
+      return options.messages ?? [];
+    },
+    id: "session_test",
+    purge: async () => {},
+    send: async () => "ok",
+    sendStream,
   };
 
   const orgs = options.orgs ?? createDefaultTestOrgs();
 
-  const client = {
+  const clientFixture = {
+    createChatSession: () => {
+      calls.createChatSession += 1;
+
+      return session;
+    },
+    createSession: async (_channel, options = {}) => {
+      calls.createSession += 1;
+      calls.profileIds.push(options.profileId ?? "default");
+
+      return session;
+    },
+    forOrg: () => client,
+    getModels: async () => ({
+      currentProviderId: null,
+      displayName: null,
+      models: [],
+      provider: null,
+      providers: [],
+    }),
+    health: async () => ({ ok: true, providerConfigured: false }),
     listProfiles: async () => {
       calls.listProfiles += 1;
+
       return parseListProfilesResponse({
         profiles: options.profiles ?? [createDefaultProfileSummary()],
       });
     },
     listUserOrgs: async () => {
       calls.listUserOrgs += 1;
+
       return parseListUserOrgsResponse({ orgs });
+    },
+    publishProfileArtifactShare: async () => {
+      calls.publishProfileArtifactShare += 1;
+
+      return {
+        id: "share_test",
+        refreshed: false,
+        sharePath: "/s/tok_test",
+        shareUrl: "https://app.example/s/tok_test",
+        token: "tok_test",
+        webPublicUrlConfigured: true,
+      };
+    },
+    readProfileArtifactContent: async () => {
+      calls.readProfileArtifactContent += 1;
+
+      return {
+        contentType: "text/markdown",
+        data: new TextEncoder().encode("# Report").buffer,
+      };
     },
     setOrgId: (orgId: string | null) => {
       calls.setOrgId += 1;
       orgIds.push(orgId ?? "");
     },
-    createSession: async (_channel, options = {}) => {
-      calls.createSession += 1;
-      calls.profileIds.push(options.profileId ?? "default");
-      return session;
-    },
-    createChatSession: () => session,
-    health: async () => ({ ok: true, providerConfigured: false }),
-    getModels: async () => ({
-      provider: null,
-      currentProviderId: null,
-      providers: [],
-      models: [],
-      displayName: null,
-    }),
-  } as unknown as NakamaClient;
+  };
+
+  // SAFETY: Tests call only the client methods supplied by this mock.
+  const client = clientFixture as NakamaClient;
 
   assertBridgeClientMethods(client);
 
   return {
-    client,
     calls,
-    orgIds,
+    client,
     getStreamControl: () => streamControl,
+    orgIds,
   };
 }
 
 function createDefaultProfileSummary(): ProfileSummary {
   const now = new Date().toISOString();
+
   return {
-    id: "default",
-    name: "Default",
-    model: null,
-    isSuper: false,
-    toolCount: 0,
-    mcpServerCount: 0,
-    soulActive: false,
-    hasAvatar: false,
     createdAt: now,
+    hasAvatar: false,
+    id: "default",
+    isSuper: false,
+    mcpServerCount: 0,
+    model: null,
+    name: "Default",
+    soulActive: false,
+    toolCount: 0,
     updatedAt: now,
   };
 }
@@ -249,8 +312,13 @@ export async function writeWhatsAppConfigIni(
     phoneNumber: string;
     profileId?: string;
     pairingCode?: string | null;
+    /** Defaults to a live window so a fixture code can actually be used. */
+    pairingCodeExpiresAt?: string | null;
     pairedJid?: string | null;
-  },
+    allowedPhones?: string[];
+    allowUnpairedGroupMembers?: boolean;
+    requireGroupMention?: boolean;
+  }
 ): Promise<void> {
   const dir = path.join(homeDir, ".nakama", "whatsapp");
   await mkdir(dir, { recursive: true });
@@ -265,25 +333,35 @@ export async function writeWhatsAppConfigIni(
     lines.push(`pairing_code=${config.pairingCode}`);
   }
 
+  if (config.pairingCodeExpiresAt) {
+    lines.push(`pairing_code_expires_at=${config.pairingCodeExpiresAt}`);
+  }
+
   if (config.pairedJid) {
     lines.push(`paired_jid=${config.pairedJid}`);
+  }
+
+  if (config.allowedPhones?.length) {
+    lines.push(`allowed_phones=${config.allowedPhones.join(",")}`);
+  }
+
+  if (config.requireGroupMention === false) {
+    lines.push("require_group_mention=false");
+  }
+
+  if (config.allowUnpairedGroupMembers !== undefined) {
+    lines.push(
+      `allow_unpaired_group_members=${config.allowUnpairedGroupMembers}`
+    );
   }
 
   lines.push("");
   await writeFile(path.join(dir, "config.ini"), lines.join("\n"), "utf8");
 }
 
-export function createTestOrgStore(homeDir: string): ChannelOrgStore {
-  return new ChannelOrgStore(
-    path.join(homeDir, ".nakama", "whatsapp", "org-selection.json"),
-  );
-}
-
-let tempHomeChain: Promise<void> = Promise.resolve();
-
 export async function waitForStreamControl(
   getStreamControl: () => MockStreamControl | null,
-  timeoutMs = 2_000,
+  timeoutMs = 2000
 ): Promise<MockStreamControl> {
   const deadline = Date.now() + timeoutMs;
 
@@ -300,33 +378,14 @@ export async function waitForStreamControl(
   throw new Error("Timed out waiting for stream control");
 }
 
+export { createMultiTestOrgs };
+
+export function createTestOrgStore(homeDir: string): ChannelOrgStore {
+  return createSharedTestOrgStore(homeDir, "whatsapp");
+}
+
 export async function withTempHome<T>(
-  run: (homeDir: string) => Promise<T>,
+  run: (homeDir: string) => Promise<T>
 ): Promise<T> {
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const previous = tempHomeChain;
-  tempHomeChain = previous.then(() => gate);
-
-  await previous;
-
-  const homeDir = await mkdtemp(path.join(os.tmpdir(), "nakama-whatsapp-home-"));
-  const configDir = path.join(homeDir, ".nakama");
-  const previousConfigDir = process.env.NAKAMA_CONFIG_DIR;
-  process.env.NAKAMA_CONFIG_DIR = configDir;
-
-  try {
-    return await run(homeDir);
-  } finally {
-    if (previousConfigDir === undefined) {
-      delete process.env.NAKAMA_CONFIG_DIR;
-    } else {
-      process.env.NAKAMA_CONFIG_DIR = previousConfigDir;
-    }
-
-    await rm(homeDir, { recursive: true, force: true });
-    release();
-  }
+  return withSharedTempHome("nakama-whatsapp-home-", run);
 }

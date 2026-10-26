@@ -1,115 +1,70 @@
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import type {
   AutomationDelivery,
-  AutomationDeliveryChannel,
   AutomationRunRecord,
   AutomationRunStatus,
+  ProfileSummary,
   StoredAutomation,
 } from "@nakama/core/contract";
+import { MAX_SESSION_SEARCH_LENGTH } from "@nakama/core/contract";
+import { Button } from "@nakama/ui/button";
+import { Command, CommandItem, CommandList } from "@nakama/ui/command";
+import { DialogOverlay, DialogTitle } from "@nakama/ui/dialog";
+import { Input } from "@nakama/ui/input";
 import {
-  BotIcon,
-  CheckCircle2Icon,
-  ChevronRightIcon,
-  CopyIcon,
-  Loader2Icon,
-  PencilIcon,
-  PlayIcon,
-  SearchIcon,
-  Trash2Icon,
-  XCircleIcon,
-  XIcon,
-} from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { MessageResponse } from "@/components/ai-elements/message";
-import { TimezoneSelect } from "@/components/TimezoneSelect";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
+  Popover,
+  PopoverContent,
+  PopoverHeader,
+  PopoverTrigger,
+} from "@nakama/ui/popover";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
+} from "@nakama/ui/select";
+import { Spinner } from "@nakama/ui/spinner";
+import { Textarea } from "@nakama/ui/textarea";
+import { cn } from "@nakama/ui/utils";
+import {
+  ArrowDown01Icon,
+  ArrowRight01Icon,
+  Cancel01Icon,
+  CancelCircleIcon,
+  CheckmarkCircle01Icon,
+  Copy01Icon,
+  Delete02Icon,
+  Loading03Icon,
+  Search01Icon,
+} from "hugeicons-react";
+import { type ReactNode, useMemo, useState } from "react";
+import { ChatMessageList } from "@/components/chat/chat-message-list";
+import { ProfileAvatar } from "@/components/ProfileAvatar";
+import { TimezoneSelect } from "@/components/TimezoneSelect";
+import { useUserTimezone } from "@/hooks/use-timezones";
 import {
   formatFutureRelativeTime,
   formatSessionRelativeTime,
   formatSessionTimestamp,
 } from "@/lib/chat-history";
-import { cn } from "@/lib/utils";
 import {
+  automationRunMessages,
   formatRunDuration,
-  groupRunsByDay,
-  runHistoryShellClass,
+  HOURLY_INTERVALS,
+  previewAutomationSchedule,
+  readSchedulePreset,
   runPreviewText,
+  schedulePresetTrigger,
   summarizeAutomationListMeta,
 } from "@/pages/automations/automations-page.shared";
-
-export function AutomationDetailActions({
-  automation,
-  busy,
-  runningId,
-  onRun,
-  onEdit,
-  onDelete,
-  className,
-}: {
-  automation: StoredAutomation;
-  busy: boolean;
-  runningId: string | null;
-  onRun: (automationId: string) => void | Promise<void>;
-  onEdit: (automation: StoredAutomation) => void;
-  onDelete: (automation: StoredAutomation) => void;
-  className?: string;
-}) {
-  return (
-    <div className={cn("flex shrink-0 items-center gap-1", className)}>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        disabled={busy || runningId !== null}
-        aria-label="Run now"
-        onClick={() => void onRun(automation.id)}
-      >
-        {runningId === automation.id ? (
-          <Spinner className="size-3.5" />
-        ) : (
-          <PlayIcon className="size-3.5" aria-hidden />
-        )}
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        disabled={busy}
-        aria-label="Edit"
-        onClick={() => onEdit(automation)}
-      >
-        <PencilIcon className="size-3.5" aria-hidden />
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        disabled={busy}
-        aria-label="Delete"
-        className="text-destructive hover:text-destructive"
-        onClick={() => onDelete(automation)}
-      >
-        <Trash2Icon className="size-3.5" aria-hidden />
-      </Button>
-    </div>
-  );
-}
 
 export function AutomationListItem({
   automation,
   selected,
   unreadCount,
   busy,
+  running,
   onSelect,
   onDelete,
 }: {
@@ -117,6 +72,7 @@ export function AutomationListItem({
   selected: boolean;
   unreadCount: number;
   busy: boolean;
+  running: boolean;
   onSelect: () => void;
   onDelete: (automation: StoredAutomation) => void;
 }) {
@@ -124,54 +80,63 @@ export function AutomationListItem({
     <div
       className={cn(
         "group flex w-full items-start gap-2 transition-colors",
-        "hover:bg-muted/25 focus-within:bg-muted/25",
-        selected && "bg-muted/35",
+        selected
+          ? "bg-muted dark:bg-muted/50"
+          : "focus-within:bg-muted/25 hover:bg-muted/25"
       )}
     >
       <button
-        type="button"
         aria-current={selected ? "true" : undefined}
         className="flex min-w-0 flex-1 items-start gap-3 px-3 py-3 text-left focus-visible:outline-none"
         onClick={onSelect}
+        type="button"
       >
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-medium text-foreground">{automation.name}</p>
             {unreadCount > 0 ? (
               <span
-                className="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary-foreground"
                 aria-label={`${unreadCount} unread run${unreadCount === 1 ? "" : "s"}`}
+                className="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 font-medium text-[10px] text-primary-foreground tabular-nums leading-none"
               >
                 {unreadCount > 99 ? "99+" : unreadCount}
               </span>
             ) : null}
+            <p className="truncate font-medium text-foreground text-sm">
+              {automation.name}
+            </p>
           </div>
-          <p className="truncate text-xs text-muted-foreground">
+          <p className="truncate text-muted-foreground text-xs">
             {summarizeAutomationListMeta(automation)}
           </p>
           <div className="flex items-center gap-2">
-            <AutomationStateDot enabled={automation.enabled} />
-            <p className="text-[11px] text-muted-foreground">
-              {automation.nextRunAt
-                ? `Next ${formatFutureRelativeTime(automation.nextRunAt)}`
-                : automation.lastRunAt
-                  ? `Last ${formatSessionRelativeTime(automation.lastRunAt)}`
-                  : "No runs yet"}
+            {running ? (
+              <Spinner aria-hidden className="size-3 text-primary" />
+            ) : (
+              <AutomationStateDot enabled={automation.enabled} />
+            )}
+            <p className="text-2xs text-muted-foreground">
+              {running
+                ? "Running"
+                : automation.nextRunAt
+                  ? `Next ${formatFutureRelativeTime(automation.nextRunAt)}`
+                  : automation.lastRunAt
+                    ? `Last ${formatSessionRelativeTime(automation.lastRunAt)}`
+                    : "No runs yet"}
             </p>
           </div>
         </div>
       </button>
 
       <Button
+        aria-label={`Delete ${automation.name}`}
+        className="mt-2 mr-2 shrink-0 text-destructive opacity-0 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+        disabled={busy}
+        onClick={() => onDelete(automation)}
+        size="icon-sm"
         type="button"
         variant="ghost"
-        size="icon-sm"
-        disabled={busy}
-        aria-label={`Delete ${automation.name}`}
-        className="mt-2 mr-2 shrink-0 text-destructive opacity-0 hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100"
-        onClick={() => onDelete(automation)}
       >
-        <Trash2Icon className="size-3.5" aria-hidden />
+        <Delete02Icon aria-hidden className="size-3.5" />
       </Button>
     </div>
   );
@@ -180,12 +145,15 @@ export function AutomationListItem({
 export function AutomationListSkeleton() {
   return (
     <div
-      className="min-h-[12rem] space-y-2 px-2 pb-2"
       aria-busy="true"
       aria-label="Loading automations"
+      className="min-h-[12rem] space-y-2 px-2 pb-2"
     >
       {Array.from({ length: 5 }).map((_, index) => (
-        <div key={index} className="flex items-start gap-3 rounded-md px-3 py-3">
+        <div
+          className="flex items-start gap-3 rounded-md px-3 py-3"
+          key={index}
+        >
           <div className="mt-0.5 size-4 shrink-0 animate-pulse rounded bg-muted/50" />
           <div className="min-w-0 flex-1 space-y-2">
             <div className="h-4 w-2/3 animate-pulse rounded bg-muted/50" />
@@ -201,45 +169,244 @@ export function AutomationListSkeleton() {
 export function AutomationSearch({
   value,
   disabled,
-  isSearching,
   onChange,
   onClear,
 }: {
   value: string;
   disabled: boolean;
-  isSearching: boolean;
   onChange: (value: string) => void;
   onClear: () => void;
 }) {
   return (
     <div className="relative">
-      <SearchIcon
-        className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-        aria-hidden
-      />
-      <Input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder="Search…"
-        disabled={disabled}
-        className={cn("pl-9", isSearching && "pr-9")}
-        aria-label="Search automations"
-      />
-      {isSearching ? (
+      {value ? (
         <button
-          type="button"
           aria-label="Clear search"
-          className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground"
           onClick={onClear}
+          type="button"
         >
-          <XIcon className="size-4" />
+          <Cancel01Icon aria-hidden className="size-4" />
         </button>
-      ) : null}
+      ) : (
+        <Search01Icon
+          aria-hidden
+          className="pointer-events-none absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+        />
+      )}
+      <Input
+        aria-label="Search automations"
+        className="border-border/60 bg-white pr-8 pl-2 shadow-none focus-visible:border-border/60 focus-visible:ring-0"
+        disabled={disabled}
+        maxLength={MAX_SESSION_SEARCH_LENGTH}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            onClear();
+          }
+        }}
+        placeholder="Search automations"
+        value={value}
+      />
     </div>
   );
 }
 
+const TIME_OPTIONS = Array.from({ length: 96 }, (_, index) => {
+  const hour = Math.floor(index / 4);
+  const minute = String((index % 4) * 15).padStart(2, "0");
+
+  return {
+    label: `${hour % 12 || 12}:${minute}${hour < 12 ? "am" : "pm"}`,
+    value: `${String(hour).padStart(2, "0")}:${minute}`,
+  };
+});
+
+function hoursLabel(hours: string) {
+  return hours === "1" ? "1 hour" : `${hours} hours`;
+}
+
+const WEEKDAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
 export function AutomationEditorForm({
+  automation,
+  busy,
+  onChange,
+  profiles,
+}: {
+  automation: StoredAutomation;
+  busy: boolean;
+  onChange: (patch: Partial<StoredAutomation>) => void;
+  profiles: ProfileSummary[];
+}) {
+  const scheduleTrigger =
+    automation.trigger.type === "schedule" ? automation.trigger : null;
+
+  return (
+    <div className="grid gap-6">
+      <Field label="Name">
+        <Input
+          aria-label="Name"
+          className="h-auto rounded-none border-transparent px-0 py-1 font-semibold text-xl shadow-none md:text-xl"
+          disabled={busy}
+          onChange={(event) => onChange({ name: event.target.value })}
+          value={automation.name}
+        />
+      </Field>
+      <Field label="Assistant">
+        <Select
+          disabled={busy}
+          onValueChange={(value) => {
+            const profileId = String(value);
+
+            if (profileId) {
+              onChange({ profileId });
+            }
+          }}
+          value={automation.profileId}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="Select profile">
+              {
+                profiles.find((profile) => profile.id === automation.profileId)
+                  ?.name
+              }
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {profiles.map((profile) => (
+              <SelectItem key={profile.id} value={profile.id}>
+                <span className="flex items-center gap-2">
+                  <ProfileAvatar profile={profile} size="sm" />
+                  <span>{profile.name}</span>
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field label="What should it do?">
+        <Textarea
+          aria-label="What should it do?"
+          className="min-h-24 resize-y rounded-xl p-3 text-sm leading-relaxed"
+          disabled={busy}
+          onChange={(event) => onChange({ prompt: event.target.value })}
+          value={automation.prompt}
+        />
+      </Field>
+      <AutomationScheduleFields
+        automation={automation}
+        busy={busy}
+        onChange={onChange}
+      />
+      <DeliverySettingsFields
+        busy={busy}
+        delivery={automation.delivery}
+        onChange={(delivery) => onChange({ delivery })}
+      />
+      <details className="group border-border border-t pt-3">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 font-semibold sm:min-h-10 [&::-webkit-details-marker]:hidden">
+          More options
+          <ArrowDown01Icon
+            aria-hidden
+            className="size-4 text-muted-foreground transition-transform group-open:rotate-180"
+          />
+        </summary>
+        <div className="grid gap-4 pt-3">
+          <Field label="Notes">
+            <Input
+              disabled={busy}
+              onChange={(event) =>
+                onChange({ description: event.target.value })
+              }
+              value={automation.description}
+            />
+          </Field>
+
+          {scheduleTrigger ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Advanced schedule">
+                <Input
+                  disabled={busy}
+                  onChange={(event) =>
+                    onChange({
+                      trigger: {
+                        cron: event.target.value,
+                        timezone: scheduleTrigger.timezone,
+                        type: "schedule",
+                      },
+                    })
+                  }
+                  value={scheduleTrigger.cron}
+                />
+              </Field>
+              <Field label="Timezone">
+                <TimezoneSelect
+                  allowAccountDefault
+                  disabled={busy}
+                  onValueChange={(timezone) =>
+                    onChange({
+                      trigger: {
+                        cron: scheduleTrigger.cron,
+                        timezone,
+                        type: "schedule",
+                      },
+                    })
+                  }
+                  value={scheduleTrigger.timezone}
+                />
+              </Field>
+            </div>
+          ) : null}
+          <div>
+            {automation.delivery ? (
+              <Field label="Notify on">
+                <Select
+                  disabled={busy}
+                  onValueChange={(value) => {
+                    const notifyValues: NonNullable<
+                      AutomationDelivery["notifyOn"]
+                    >[] = ["success", "failure", "both"];
+
+                    const notifyOn = notifyValues.find(
+                      (notifyValue) => notifyValue === String(value)
+                    );
+
+                    if (notifyOn && automation.delivery) {
+                      onChange({
+                        delivery: { ...automation.delivery, notifyOn },
+                      });
+                    }
+                  }}
+                  value={automation.delivery.notifyOn ?? "success"}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="success">Successful runs</SelectItem>
+                    <SelectItem value="failure">Failed runs</SelectItem>
+                    <SelectItem value="both">Success and failure</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            ) : null}
+          </div>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function AutomationScheduleFields({
   automation,
   busy,
   onChange,
@@ -248,147 +415,340 @@ export function AutomationEditorForm({
   busy: boolean;
   onChange: (patch: Partial<StoredAutomation>) => void;
 }) {
-  const scheduleTrigger = automation.trigger.type === "schedule" ? automation.trigger : null;
-  const isSchedule = scheduleTrigger !== null;
+  const scheduleTrigger =
+    automation.trigger.type === "schedule" ? automation.trigger : null;
+
+  const preset = readSchedulePreset(automation.trigger);
+
+  const frequency =
+    automation.trigger.type === "manual"
+      ? "manual"
+      : (preset?.frequency ?? "custom");
 
   return (
-    <div className="grid gap-5">
-      <Field label="Name">
-        <Input
-          value={automation.name}
-          disabled={busy}
-          onChange={(event) => onChange({ name: event.target.value })}
-        />
-      </Field>
-
-      <Field label="Description">
-        <Input
-          value={automation.description}
-          disabled={busy}
-          onChange={(event) => onChange({ description: event.target.value })}
-        />
-      </Field>
-
-      <Field label="Prompt">
-        <Textarea
-          className="min-h-32"
-          value={automation.prompt}
-          disabled={busy}
-          onChange={(event) => onChange({ prompt: event.target.value })}
-        />
-      </Field>
-
-      <div className="grid gap-5 sm:grid-cols-2">
-        <Field label="Trigger">
-          <Select
-            value={automation.trigger.type}
-            disabled={busy}
-            onValueChange={(value) => {
-              const type = String(value);
-
-              if (type === "manual") {
-                onChange({ trigger: { type: "manual" } });
-                return;
-              }
-
-              onChange({
-                trigger: {
-                  type: "schedule",
-                  cron: scheduleTrigger?.cron ?? "0 8 * * *",
-                  timezone: scheduleTrigger?.timezone,
-                },
-              });
-            }}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="manual">Manual</SelectItem>
-              <SelectItem value="schedule">Schedule</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
-
-        <Field label="Enabled">
-          <label className="flex h-8 items-center gap-2 text-sm text-foreground">
-            <input
-              type="checkbox"
-              className="size-4 rounded border-input"
-              checked={automation.enabled}
+    <>
+      <fieldset className="min-w-0 space-y-3">
+        <legend className="mb-2 font-semibold text-sm">How often?</legend>
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              ["manual", "Only when I ask"],
+              ["hourly", "Hourly"],
+              ["daily", "Every day"],
+              ["weekdays", "Weekdays"],
+              ["weekly", "Weekly"],
+              ["monthly", "Monthly"],
+            ] as const
+          ).map(([value, label]) => (
+            <Button
+              aria-pressed={frequency === value}
+              className="h-auto min-h-11 rounded-full px-3 py-2 aria-pressed:border-primary aria-pressed:bg-primary/5 aria-pressed:text-foreground aria-pressed:ring-1 aria-pressed:ring-primary sm:min-h-10"
               disabled={busy}
-              onChange={(event) => onChange({ enabled: event.target.checked })}
-            />
-            Run on schedule
-          </label>
-        </Field>
-      </div>
-
-      {isSchedule ? (
-        <div className="grid gap-5 sm:grid-cols-2">
-          <Field label="Cron">
-            <Input
-              value={scheduleTrigger.cron}
-              disabled={busy}
-              onChange={(event) =>
+              key={value}
+              onClick={() =>
                 onChange({
-                  trigger: {
-                    type: "schedule",
-                    cron: event.target.value,
-                    timezone: scheduleTrigger.timezone,
-                  },
+                  trigger: schedulePresetTrigger(value, automation.trigger),
                 })
               }
-            />
-          </Field>
-          <Field label="Timezone">
-            <TimezoneSelect
-              value={scheduleTrigger.timezone}
-              disabled={busy}
-              allowAccountDefault
-              onValueChange={(timezone) =>
-                onChange({
-                  trigger: {
-                    type: "schedule",
-                    cron: scheduleTrigger.cron,
-                    timezone,
-                  },
-                })
-              }
-            />
-          </Field>
+              type="button"
+              variant="outline"
+            >
+              {label}
+            </Button>
+          ))}
         </div>
-      ) : null}
-
-      <DeliverySettingsFields
-        delivery={automation.delivery}
+        {preset?.frequency === "weekly" && scheduleTrigger ? (
+          <Field label="On">
+            <Select
+              disabled={busy}
+              onValueChange={(value) =>
+                onChange({
+                  trigger: {
+                    ...scheduleTrigger,
+                    cron: `${preset.minute} ${preset.hour} * * ${value}`,
+                  },
+                })
+              }
+              value={preset.weekday}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue>{WEEKDAYS[Number(preset.weekday)]}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {WEEKDAYS.map((day, index) => (
+                  <SelectItem key={day} value={String(index)}>
+                    {day}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : null}
+        {preset?.frequency === "hourly" && scheduleTrigger ? (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Every">
+              <Select
+                disabled={busy}
+                onValueChange={(value) =>
+                  onChange({
+                    trigger: {
+                      ...scheduleTrigger,
+                      cron: `${preset.minute} ${value === "1" ? "*" : `*/${value}`} * * *`,
+                    },
+                  })
+                }
+                value={preset.everyHours}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue>{hoursLabel(preset.everyHours)}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {HOURLY_INTERVALS.map((hours) => (
+                    <SelectItem key={hours} value={hours}>
+                      {hoursLabel(hours)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="At minute">
+              <Select
+                disabled={busy}
+                onValueChange={(value) =>
+                  onChange({
+                    trigger: {
+                      ...scheduleTrigger,
+                      cron: `${value} ${preset.hour} * * *`,
+                    },
+                  })
+                }
+                value={preset.minute}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue>:{preset.minute.padStart(2, "0")}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: 60 }, (_, index) => (
+                    <SelectItem key={index} value={String(index)}>
+                      :{String(index).padStart(2, "0")}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+        ) : null}
+        {preset?.frequency === "monthly" && scheduleTrigger ? (
+          <Field label="Day of the month">
+            <Select
+              disabled={busy}
+              onValueChange={(value) =>
+                onChange({
+                  trigger: {
+                    ...scheduleTrigger,
+                    cron: `${preset.minute} ${preset.hour} ${value} * *`,
+                  },
+                })
+              }
+              value={preset.day}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue>{preset.day}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {Array.from({ length: 31 }, (_, index) => (
+                  <SelectItem key={index + 1} value={String(index + 1)}>
+                    {index + 1}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : null}
+        {frequency === "custom" ? (
+          <p className="text-muted-foreground text-sm">
+            {automation.trigger.type === "runAt"
+              ? `Once, ${automation.trigger.at}`
+              : `Custom schedule: ${scheduleTrigger?.cron}`}
+          </p>
+        ) : null}
+      </fieldset>
+      <AutomationTimeFields
+        automation={automation}
         busy={busy}
-        onChange={(delivery) => onChange({ delivery })}
+        onChange={onChange}
       />
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <MetaRow
-          label="Next run"
-          value={
-            automation.nextRunAt
-              ? formatFutureRelativeTime(automation.nextRunAt)
-              : "Not scheduled"
-          }
-          hint={automation.nextRunAt ? formatSessionTimestamp(automation.nextRunAt) : undefined}
-        />
-        <MetaRow
-          label="Last run"
-          value={
-            automation.lastRunAt ? formatSessionRelativeTime(automation.lastRunAt) : "Never run"
-          }
-          hint={automation.lastRunAt ? formatSessionTimestamp(automation.lastRunAt) : undefined}
-        />
-      </div>
-    </div>
+      <AutomationNextRun automation={automation} />
+    </>
   );
 }
 
-export function AutomationPanelPlaceholder({ children }: { children: React.ReactNode }) {
+function AutomationNextRun({ automation }: { automation: StoredAutomation }) {
+  const { data: userTimezone, isError } = useUserTimezone();
+
+  if (automation.trigger.type === "manual") {
+    return null;
+  }
+
+  const timezone = automation.trigger.timezone ?? userTimezone;
+  let label = "Turned off";
+
+  if (automation.enabled) {
+    label = isError ? "Time zone unavailable" : "Loading time zone…";
+
+    if (timezone) {
+      label =
+        previewAutomationSchedule(automation.trigger, timezone) ??
+        "No upcoming run";
+    }
+  }
+
+  return (
+    <p
+      aria-live="polite"
+      className="rounded-xl bg-muted/40 px-3 py-3 text-muted-foreground text-sm"
+    >
+      Next run: <span className="font-semibold text-foreground">{label}</span>
+    </p>
+  );
+}
+
+function AutomationTimeFields({
+  automation,
+  busy,
+  onChange,
+}: {
+  automation: StoredAutomation;
+  busy: boolean;
+  onChange: (patch: Partial<StoredAutomation>) => void;
+}) {
+  const preset = readSchedulePreset(automation.trigger);
+
+  const scheduleTrigger =
+    automation.trigger.type === "schedule" ? automation.trigger : null;
+
+  const [pickingTime, setPickingTime] = useState(false);
+
+  const timeValue = preset
+    ? `${preset.hour.padStart(2, "0")}:${preset.minute.padStart(2, "0")}`
+    : "";
+
+  const customTime = preset && !["07:00", "12:00", "18:00"].includes(timeValue);
+
+  function changeTime(value: string) {
+    if (!(value && preset && scheduleTrigger)) {
+      return;
+    }
+
+    const [hour, minute] = value.split(":");
+
+    onChange({
+      trigger: {
+        ...scheduleTrigger,
+        cron: `${Number(minute)} ${Number(hour)} ${preset.day} * ${preset.weekday}`,
+      },
+    });
+  }
+
+  return (
+    <>
+      {preset && preset.frequency !== "hourly" ? (
+        <fieldset className="min-w-0">
+          <legend className="mb-2 font-semibold text-sm">What time?</legend>
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              [
+                ["07:00", "Morning", "7:00 AM"],
+                ["12:00", "Midday", "12:00 PM"],
+                ["18:00", "Evening", "6:00 PM"],
+              ] as const
+            ).map(([value, label, time]) => (
+              <Button
+                aria-label={label}
+                aria-pressed={!customTime && timeValue === value}
+                className="h-auto min-h-14 flex-col items-start gap-0 rounded-xl px-3 py-2 text-left aria-pressed:border-primary aria-pressed:bg-primary/5 aria-pressed:text-foreground aria-pressed:ring-1 aria-pressed:ring-primary"
+                disabled={busy}
+                key={value}
+                onClick={() => {
+                  setPickingTime(false);
+                  changeTime(value);
+                }}
+                type="button"
+                variant="outline"
+              >
+                <span>{label}</span>
+                <span className="font-normal text-muted-foreground">
+                  {time}
+                </span>
+              </Button>
+            ))}
+            <Popover onOpenChange={setPickingTime} open={pickingTime}>
+              <PopoverTrigger
+                render={
+                  <Button
+                    aria-label="Pick a time"
+                    aria-pressed={Boolean(customTime)}
+                    className="h-auto min-h-14 flex-col items-start gap-0 rounded-xl border-dashed px-3 py-2 text-left aria-pressed:border-primary aria-pressed:bg-primary/5 aria-pressed:ring-1 aria-pressed:ring-primary"
+                    disabled={busy}
+                    type="button"
+                    variant="outline"
+                  />
+                }
+              >
+                <span>Pick a time</span>
+                <span className="font-normal text-muted-foreground">
+                  {customTime ? timeValue : "Any time of day"}
+                </span>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="min-w-48 rounded-2xl p-4">
+                <PopoverHeader title="Pick a time" />
+                <Input
+                  aria-label="Run time"
+                  className="h-11 rounded-xl tabular-nums"
+                  disabled={busy}
+                  onChange={(event) => changeTime(event.target.value)}
+                  type="time"
+                  value={timeValue}
+                />
+                <Command
+                  aria-label="Time options"
+                  className="mt-3 h-auto rounded-none! p-0"
+                  defaultValue={timeValue}
+                  shouldFilter={false}
+                  tabIndex={0}
+                >
+                  <CommandList aria-label="Time options" className="max-h-60">
+                    {TIME_OPTIONS.map((option) => (
+                      <CommandItem
+                        className="min-h-10 rounded-none px-3 tabular-nums"
+                        data-checked={option.value === timeValue}
+                        disabled={busy}
+                        key={option.value}
+                        onSelect={() => {
+                          changeTime(option.value);
+                          setPickingTime(false);
+                        }}
+                        value={option.value}
+                      >
+                        {option.label}
+                      </CommandItem>
+                    ))}
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          </div>
+        </fieldset>
+      ) : null}
+    </>
+  );
+}
+
+export function AutomationPanelPlaceholder({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-12 text-center">
       {children}
@@ -398,21 +758,28 @@ export function AutomationPanelPlaceholder({ children }: { children: React.React
 
 export function AutomationDetailSkeleton() {
   return (
-    <div className="flex min-h-0 flex-1 flex-col" aria-busy="true" aria-label="Loading automation">
+    <div
+      aria-busy="true"
+      aria-label="Loading automation"
+      className="flex min-h-0 flex-1 flex-col"
+    >
       <div className="mb-5 flex shrink-0 flex-col gap-4 sm:flex-row sm:justify-between">
-        <div className="min-h-[4.75rem] flex-1 space-y-2">
+        <div className="flex-1 space-y-2">
           <div className="h-5 w-48 animate-pulse rounded bg-muted/50" />
           <div className="h-10 animate-pulse rounded bg-muted/40" />
           <div className="h-3 w-64 animate-pulse rounded bg-muted/35" />
         </div>
         <div className="hidden h-9 gap-2 lg:flex">
           {Array.from({ length: 4 }).map((_, index) => (
-            <div key={index} className="h-7 w-20 animate-pulse rounded-md bg-muted/40" />
+            <div
+              className="h-7 w-20 animate-pulse rounded-md bg-muted/40"
+              key={index}
+            />
           ))}
         </div>
       </div>
       <div className="mb-5 h-9 animate-pulse rounded-md bg-muted/30 lg:hidden" />
-      <div className="flex min-h-0 flex-1 flex-col border-t border-border pt-5">
+      <div className="flex min-h-0 flex-1 flex-col border-border border-t pt-5">
         <div className="mb-4 h-10 shrink-0">
           <div className="h-4 w-28 animate-pulse rounded bg-muted/50" />
           <div className="mt-2 h-3 w-20 animate-pulse rounded bg-muted/35" />
@@ -423,324 +790,554 @@ export function AutomationDetailSkeleton() {
   );
 }
 
-export function AutomationsEmptyState() {
+const AUTOMATION_EXAMPLES = [
+  {
+    getLines: [
+      "Three emails need a reply today",
+      "Design review moved to 14:00",
+      "One invoice is waiting for approval",
+    ],
+    getTime: "Weekdays 8:30",
+    getTitle: "Today at a glance",
+    name: "Morning briefing",
+    prompt:
+      "Read my unread email and today's calendar. Tell me what needs a reply first.",
+    when: "Weekdays at 8:30",
+  },
+  {
+    getLines: [
+      "Merged: the new billing page and two fixes",
+      "Closed: the older login issues",
+      "Still open: the slow export",
+    ],
+    getTime: "Friday 16:00",
+    getTitle: "Report for this week",
+    name: "Weekly team report",
+    prompt:
+      "List the pull requests we merged and the issues we closed this week. Write a short report for the team.",
+    when: "Fridays at 16:00",
+  },
+  {
+    getLines: [
+      "Competitor A changed its pricing page",
+      "Competitor B announced a new integration",
+      "No news from Competitor C",
+    ],
+    getTime: "Monday 9:00",
+    getTitle: "What changed this week",
+    name: "Competitor watch",
+    prompt:
+      "Search the web for news about our main competitors. Send me only the changes that matter.",
+    when: "Mondays at 9:00",
+  },
+  {
+    getLines: [
+      "Two emails need a reply now",
+      "Five can wait until later",
+      "Eight are safe to ignore",
+    ],
+    getTime: "Every hour",
+    getTitle: "New email, sorted",
+    name: "Inbox triage",
+    prompt:
+      "Sort new email into reply, read later and ignore. Draft a reply for the urgent ones.",
+    when: "Every hour",
+  },
+  {
+    getLines: [
+      "Changelog is ready",
+      "Docs page is not updated yet",
+      "Tests pass on main",
+    ],
+    getTime: "When you run it",
+    getTitle: "Before you ship",
+    name: "Release checklist",
+    prompt:
+      "Go through the release checklist. Tell me what is missing before we ship.",
+    when: "Manual",
+  },
+];
+
+export function AutomationExample({
+  onUse,
+  onStartFromScratch,
+}: {
+  onUse: (draft: string) => void;
+  onStartFromScratch: () => void;
+}) {
+  const [index, setIndex] = useState(0);
+  const example = AUTOMATION_EXAMPLES[index];
+
   return (
-    <div className="flex flex-col items-center justify-center gap-3 px-4 py-12 text-center">
-      <div className="flex size-12 items-center justify-center rounded-full border border-border bg-muted/40">
-        <BotIcon className="size-5 text-muted-foreground" aria-hidden />
+    <div className="flex w-full flex-col items-center gap-6">
+      <h2 className="font-semibold text-3xl text-foreground">
+        What could your agent do for you?
+      </h2>
+      <div className="flex flex-wrap justify-center gap-2">
+        {AUTOMATION_EXAMPLES.map((item, i) => (
+          <button
+            aria-pressed={i === index}
+            className={cn(
+              "rounded-full border px-3 py-1.5 text-sm transition-colors",
+              i === index
+                ? "border-foreground bg-foreground text-background"
+                : "border-border text-foreground/80 hover:bg-muted"
+            )}
+            key={item.name}
+            onClick={() => setIndex(i)}
+            type="button"
+          >
+            {item.name}
+          </button>
+        ))}
       </div>
-      <div className="space-y-1">
-        <p className="type-section-title">No automations yet</p>
-        <p className="type-body text-muted-foreground">
-          Ask the agent in Chat to create a scheduled or manual automation for you.
-        </p>
+      <div className="flex w-full max-w-3xl flex-col items-stretch gap-3 lg:flex-row">
+        <div className="flex min-w-0 flex-1 basis-0 flex-col gap-3 rounded-xl border border-border bg-muted/30 p-5 text-left">
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+              You set
+            </span>
+            <span className="rounded-full border border-border bg-background px-2.5 py-1 text-foreground/80 text-xs">
+              {example.when}
+            </span>
+          </div>
+          <p className="font-semibold text-base text-foreground">
+            {example.name}
+          </p>
+          <p className="text-foreground/80 text-sm leading-relaxed">
+            {example.prompt}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center justify-center">
+          <ArrowRight01Icon
+            aria-hidden
+            className="size-5 text-primary max-lg:rotate-90"
+          />
+        </div>
+        <div className="flex min-w-0 flex-1 basis-0 flex-col gap-3 rounded-xl border border-border bg-background p-5 text-left">
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-medium text-primary text-xs uppercase tracking-wide">
+              You get
+            </span>
+            <span className="text-muted-foreground text-xs">
+              {example.getTime}
+            </span>
+          </div>
+          <p className="font-semibold text-base text-foreground">
+            {example.getTitle}
+          </p>
+          <ul className="list-disc space-y-2 pl-5 text-foreground/80 text-sm leading-relaxed marker:text-primary">
+            {example.getLines.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+      <div className="flex gap-3">
+        <Button
+          onClick={() =>
+            onUse(
+              `Create an automation. Run it: ${example.when}. ${example.prompt}`
+            )
+          }
+          type="button"
+        >
+          Use this example
+        </Button>
+        <Button onClick={onStartFromScratch} type="button" variant="outline">
+          Start from scratch
+        </Button>
       </div>
     </div>
+  );
+}
+
+function RunHistoryRow({
+  run,
+  maxDurationMs,
+  onSelect,
+}: {
+  run: AutomationRunRecord;
+  maxDurationMs: number;
+  onSelect: (runId: string) => void;
+}) {
+  const durationMs = runDurationMs(run);
+
+  return (
+    <li className="flex min-w-0 items-center gap-2 py-3">
+      <DialogPrimitive.Trigger
+        aria-label={`Open run from ${formatSessionTimestamp(run.startedAt)}`}
+        className="flex min-w-0 flex-1 items-center gap-3.5 text-left"
+        onClick={() => onSelect(run.id)}
+        title={`${runStatusLabel(run.status)} · ${formatSessionTimestamp(run.startedAt)}`}
+      >
+        {run.status === "running" ? (
+          <RunStatusIcon status={run.status} />
+        ) : (
+          <span
+            aria-label={runStatusLabel(run.status)}
+            className={cn(
+              "size-2 shrink-0 rounded-full",
+              run.status === "failed"
+                ? "bg-destructive"
+                : "bg-emerald-600 dark:bg-emerald-400"
+            )}
+            role="img"
+          />
+        )}
+        {run.read === false ? (
+          <span
+            aria-label="Unread"
+            className="size-1.5 shrink-0 rounded-full bg-primary"
+          />
+        ) : null}
+        <span
+          className={cn(
+            "line-clamp-1 min-w-0 flex-1 text-sm",
+            run.status === "failed" ? "text-destructive" : "text-foreground/80"
+          )}
+        >
+          {runPreviewText(run) || runStatusLabel(run.status)}
+          {run.deliveryStatus === "failed" ? " · Delivery failed" : ""}
+        </span>
+        <span className="hidden w-16 shrink-0 text-muted-foreground text-xs sm:block">
+          {formatSessionRelativeTime(run.startedAt)}
+        </span>
+        <span
+          aria-hidden
+          className="relative hidden h-1.5 w-24 shrink-0 rounded-full bg-muted sm:block"
+        >
+          <span
+            className={cn(
+              "absolute inset-y-0 left-0 rounded-full",
+              run.status === "failed"
+                ? "bg-destructive/40"
+                : "bg-muted-foreground/40"
+            )}
+            style={{
+              width: `${Math.max(3, Math.round((durationMs / maxDurationMs) * 100))}%`,
+            }}
+          />
+        </span>
+        <span className="w-16 shrink-0 whitespace-nowrap text-right text-muted-foreground text-xs tabular-nums">
+          {formatRunDuration(run.startedAt, run.completedAt) ?? ""}
+        </span>
+      </DialogPrimitive.Trigger>
+    </li>
+  );
+}
+
+function RunStatusBar({
+  runs,
+  completedCount,
+  failedCount,
+}: {
+  runs: AutomationRunRecord[];
+  completedCount: number;
+  failedCount: number;
+}) {
+  return (
+    <div
+      aria-label={`${completedCount} completed, ${failedCount} failed`}
+      className="flex gap-1"
+      role="img"
+    >
+      {runs.map((run) => (
+        <span
+          className={cn(
+            "h-2 min-w-0 flex-1 rounded-full",
+            run.status === "failed"
+              ? "bg-destructive"
+              : run.status === "completed"
+                ? "bg-emerald-600 dark:bg-emerald-400"
+                : "bg-muted-foreground/40"
+          )}
+          key={run.id}
+        />
+      ))}
+    </div>
+  );
+}
+
+function RunDetailPopup({
+  selectedRun,
+  busy,
+  running,
+  profileId,
+  onRerun,
+}: {
+  selectedRun: AutomationRunRecord | undefined;
+  busy: boolean;
+  running: boolean;
+  profileId: string;
+  onRerun: () => void;
+}) {
+  const [copiedRunId, setCopiedRunId] = useState<string | null>(null);
+
+  return (
+    <DialogPrimitive.Popup className="fixed inset-y-0 right-0 z-50 flex w-full max-w-3xl translate-x-0 flex-col border-border border-l bg-background shadow-xl outline-none transition-transform duration-200 ease-out data-[ending-style]:translate-x-full data-[starting-style]:translate-x-full motion-reduce:transition-none">
+      <div className="flex shrink-0 items-center gap-3 border-border border-b px-4 py-3">
+        {selectedRun ? <RunStatusIcon status={selectedRun.status} /> : null}
+        <DialogTitle className="min-w-0 flex-1 truncate text-sm">
+          {selectedRun
+            ? `${runStatusLabel(selectedRun.status)} · ${formatSessionTimestamp(selectedRun.startedAt)}`
+            : "Run conversation"}
+        </DialogTitle>
+        {selectedRun ? (
+          <Button
+            aria-label={
+              copiedRunId === selectedRun.id ? "Copied run ID" : "Copy run ID"
+            }
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(selectedRun.id);
+                setCopiedRunId(selectedRun.id);
+              } catch {
+                // Clipboard may be unavailable outside a secure context.
+              }
+            }}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          >
+            {copiedRunId === selectedRun.id ? (
+              <CheckmarkCircle01Icon aria-hidden className="size-4" />
+            ) : (
+              <Copy01Icon aria-hidden className="size-4" />
+            )}
+          </Button>
+        ) : null}
+        {selectedRun?.status === "failed" ? (
+          <Button
+            disabled={busy || running}
+            onClick={onRerun}
+            size="sm"
+            variant="ghost"
+          >
+            Run again
+          </Button>
+        ) : null}
+        <DialogPrimitive.Close
+          render={
+            <Button
+              aria-label="Close run conversation"
+              size="icon-sm"
+              variant="ghost"
+            />
+          }
+        >
+          <Cancel01Icon aria-hidden className="size-4" />
+        </DialogPrimitive.Close>
+      </div>
+      {selectedRun?.deliveryError ? (
+        <p className="px-4 py-2 text-destructive text-sm" role="alert">
+          {selectedRun.deliveryError}
+        </p>
+      ) : null}
+      {selectedRun ? (
+        <ChatMessageList
+          actionsDisabled
+          className="min-h-0 flex-1"
+          emptyMessage={
+            selectedRun.status === "running"
+              ? "Waiting for output…"
+              : "No output returned."
+          }
+          key={selectedRun.id}
+          messages={automationRunMessages(selectedRun)}
+          profileId={profileId}
+          readOnly
+          streamActive={selectedRun.status === "running"}
+          turnStartedAt={selectedRun.startedAt}
+        />
+      ) : null}
+    </DialogPrimitive.Popup>
+  );
+}
+
+function RunPagination({
+  currentPage,
+  pageCount,
+  pageSize,
+  pageStart,
+  total,
+  onPageChange,
+}: {
+  currentPage: number;
+  pageCount: number;
+  pageSize: number;
+  pageStart: number;
+  total: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (pageCount <= 1) {
+    return null;
+  }
+
+  return (
+    <nav
+      aria-label="Run history pages"
+      className="flex items-center justify-between text-muted-foreground text-xs"
+    >
+      <span className="tabular-nums">
+        {pageStart + 1}–{pageStart + pageSize} of {total}
+      </span>
+      <div className="flex gap-1">
+        <Button
+          disabled={currentPage === 0}
+          onClick={() => onPageChange(currentPage - 1)}
+          size="sm"
+          variant="ghost"
+        >
+          Previous
+        </Button>
+        <Button
+          disabled={currentPage >= pageCount - 1}
+          onClick={() => onPageChange(currentPage + 1)}
+          size="sm"
+          variant="ghost"
+        >
+          Next
+        </Button>
+      </div>
+    </nav>
   );
 }
 
 export function RunHistoryList({
   runs,
   busy,
-  onDeleteRun,
+  running,
+  profileId,
+  onRerun,
 }: {
   runs: AutomationRunRecord[];
   busy: boolean;
-  onDeleteRun: (run: AutomationRunRecord) => void;
+  running: boolean;
+  profileId: string;
+  onRerun: () => void;
 }) {
-  const [expandedId, setExpandedId] = useState<string | null>(() => {
-    const running = runs.find((run) => run.status === "running");
-    return running?.id ?? runs[0]?.id ?? null;
-  });
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const selectedRun = runs.find((run) => run.id === selectedRunId);
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(runs.length / RUN_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount - 1);
+  const pageStart = currentPage * RUN_PAGE_SIZE;
 
-  useEffect(() => {
-    const running = runs.find((run) => run.status === "running");
+  const pageRuns = useMemo(
+    () => runs.slice(pageStart, pageStart + RUN_PAGE_SIZE),
+    [runs, pageStart]
+  );
 
-    if (running) {
-      setExpandedId(running.id);
-    }
-  }, [runs]);
+  const completedCount = runs.filter(
+    (run) => run.status === "completed"
+  ).length;
 
-  const groups = useMemo(() => groupRunsByDay(runs), [runs]);
+  const failedCount = runs.filter((run) => run.status === "failed").length;
+  const maxDurationMs = Math.max(1, ...runs.map(runDurationMs));
 
   return (
-    <div className="space-y-5">
-      {groups.map((group) => (
-        <section key={group.label} className="space-y-2">
-          <div className="sticky top-0 z-10 -mx-1 bg-card/95 px-1 pb-1 pt-0.5 backdrop-blur">
-            <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-              {group.label}
-            </p>
-          </div>
-          <ul className="space-y-2">
-            {group.runs.map((run) => (
-              <RunHistoryItem
-                key={run.id}
-                run={run}
-                expanded={expandedId === run.id}
-                busy={busy}
-                onToggle={() => {
-                  setExpandedId((current) => (current === run.id ? null : run.id));
-                }}
-                onDelete={() => onDeleteRun(run)}
-              />
-            ))}
-          </ul>
-        </section>
-      ))}
-    </div>
+    <DialogPrimitive.Root
+      onOpenChange={setOpen}
+      onOpenChangeComplete={(isOpen) => {
+        if (!isOpen) {
+          setSelectedRunId(null);
+        }
+      }}
+      open={open && Boolean(selectedRun)}
+    >
+      <div className="space-y-4">
+        <RunStatusBar
+          completedCount={completedCount}
+          failedCount={failedCount}
+          runs={runs}
+        />
+        <div className="flex gap-4 text-muted-foreground text-xs">
+          <span>{completedCount} completed</span>
+          {failedCount > 0 ? (
+            <span className="text-destructive">{failedCount} failed</span>
+          ) : null}
+        </div>
+        <ul className="divide-y divide-border">
+          {pageRuns.map((run) => (
+            <RunHistoryRow
+              key={run.id}
+              maxDurationMs={maxDurationMs}
+              onSelect={setSelectedRunId}
+              run={run}
+            />
+          ))}
+        </ul>
+        <RunPagination
+          currentPage={currentPage}
+          onPageChange={setPage}
+          pageCount={pageCount}
+          pageSize={pageRuns.length}
+          pageStart={pageStart}
+          total={runs.length}
+        />
+      </div>
+      <DialogPrimitive.Portal>
+        <DialogOverlay className="transition-opacity duration-200 ease-out data-closed:animate-none data-open:animate-none data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none" />
+        <RunDetailPopup
+          busy={busy}
+          onRerun={onRerun}
+          profileId={profileId}
+          running={running}
+          selectedRun={selectedRun}
+        />
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }
 
-function RunHistoryItem({
-  run,
-  expanded,
-  busy,
-  onToggle,
-  onDelete,
-}: {
-  run: AutomationRunRecord;
-  expanded: boolean;
-  busy: boolean;
-  onToggle: () => void;
-  onDelete: () => void;
-}) {
-  const isRunning = run.status === "running";
-  const isUnread = run.read === false;
-  const hasOutput = Boolean(run.output?.trim());
-  const hasError = Boolean(run.error?.trim());
-  const hasDeliveryError = Boolean(run.deliveryError?.trim());
-  const hasBody = hasOutput || hasError || isRunning;
-  const previewText = runPreviewText(run);
-  const duration = formatRunDuration(run.startedAt, run.completedAt);
-  const copyText = [hasError ? run.error : null, hasOutput ? run.output : null]
-    .filter(Boolean)
-    .join("\n\n");
+function runStatusLabel(status: AutomationRunStatus): string {
+  return status === "completed"
+    ? "Completed"
+    : status === "failed"
+      ? "Failed"
+      : "Running";
+}
 
-  async function handleCopy() {
-    if (!copyText) {
-      return;
-    }
+const RUN_PAGE_SIZE = 15;
 
-    try {
-      await navigator.clipboard.writeText(copyText);
-    } catch {
-      // Clipboard may be unavailable outside secure context.
-    }
+function runDurationMs(run: AutomationRunRecord) {
+  if (!run.completedAt) {
+    return 0;
   }
 
-  return (
-    <li>
-      <article
-        className={cn(
-          "overflow-hidden rounded-lg border bg-card/90 transition-all",
-          runHistoryShellClass(run.status),
-        )}
-      >
-        <div className="flex items-start gap-2 px-4 py-3.5 transition-colors hover:bg-muted/25">
-          <button
-            type="button"
-            className={cn(
-              "flex min-w-0 flex-1 items-start gap-3 text-left",
-              !hasBody && "cursor-default",
-            )}
-            disabled={!hasBody}
-            aria-expanded={hasBody ? expanded : undefined}
-            aria-label={
-              hasBody
-                ? `${expanded ? "Collapse" : "Expand"} run from ${formatSessionRelativeTime(run.startedAt)}`
-                : `Run from ${formatSessionRelativeTime(run.startedAt)}`
-            }
-            onClick={() => {
-              if (hasBody) {
-                onToggle();
-              }
-            }}
-          >
-            <RunStatusIcon status={run.status} />
+  const ms = Date.parse(run.completedAt) - Date.parse(run.startedAt);
 
-            <div className="min-w-0 flex-1 space-y-1">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <RunStatusBadge status={run.status} />
-                {run.deliveryStatus ? (
-                  <DeliveryStatusBadge status={run.deliveryStatus} error={run.deliveryError} />
-                ) : null}
-                {isUnread ? (
-                  <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                    New
-                  </span>
-                ) : null}
-                <span className="text-xs text-muted-foreground" aria-hidden>
-                  ·
-                </span>
-                <time
-                  className="text-xs text-muted-foreground"
-                  dateTime={run.startedAt}
-                  title={formatSessionTimestamp(run.startedAt)}
-                >
-                  {formatSessionRelativeTime(run.startedAt)}
-                </time>
-                {duration ? (
-                  <>
-                    <span className="text-xs text-muted-foreground" aria-hidden>
-                      ·
-                    </span>
-                    <span className="text-xs text-muted-foreground">{duration}</span>
-                  </>
-                ) : null}
-              </div>
-
-              {previewText ? (
-                <p
-                  className={cn(
-                    "line-clamp-2 pr-2 text-sm leading-relaxed",
-                    run.status === "failed" ? "text-destructive" : "text-muted-foreground",
-                  )}
-                >
-                  {previewText}
-                </p>
-              ) : null}
-            </div>
-
-            {hasBody ? (
-              <ChevronRightIcon
-                className={cn(
-                  "mt-1 size-4 shrink-0 text-muted-foreground transition-transform duration-200",
-                  expanded && "rotate-90",
-                )}
-                aria-hidden
-              />
-            ) : null}
-          </button>
-
-          <div className="flex shrink-0 items-center gap-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="mt-0.5 shrink-0 text-muted-foreground hover:text-destructive"
-              disabled={busy}
-              aria-label={`Delete run from ${formatSessionRelativeTime(run.startedAt)}`}
-              onClick={onDelete}
-            >
-              <Trash2Icon className="size-4" aria-hidden />
-            </Button>
-          </div>
-        </div>
-
-        <div
-          className={cn(
-            "grid transition-[grid-template-rows] duration-200 ease-out",
-            expanded && hasBody ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
-          )}
-        >
-          <div className="overflow-hidden">
-            <div className="border-t border-border/60 bg-muted/10 px-4 py-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <p className="type-code text-muted-foreground" title={formatSessionTimestamp(run.startedAt)}>
-                  {formatSessionTimestamp(run.startedAt)}
-                  {run.completedAt
-                    ? ` → ${formatSessionTimestamp(run.completedAt)}`
-                    : isRunning
-                      ? " · running"
-                      : ""}
-                </p>
-                {copyText ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 gap-1.5 px-2 text-xs"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void handleCopy();
-                    }}
-                  >
-                    <CopyIcon className="size-3.5" aria-hidden />
-                    Copy
-                  </Button>
-                ) : null}
-              </div>
-
-              {(run.deliveryStatus || hasError || hasOutput) && (
-                <div className="mb-4 flex flex-wrap items-center gap-2">
-                  {run.deliveryStatus ? (
-                    <DeliveryStatusBadge status={run.deliveryStatus} error={run.deliveryError} />
-                  ) : null}
-                  {hasError ? <SoftPill label="Has error" tone="danger" /> : null}
-                  {hasOutput ? <SoftPill label="Has output" tone="default" /> : null}
-                </div>
-              )}
-
-              <Separator className="mb-4 bg-border/60" />
-
-              {hasDeliveryError ? (
-                <div className="mb-4 rounded-md border border-destructive/20 bg-destructive/5 px-3 py-3">
-                  <p className="mb-1 text-xs font-medium uppercase tracking-[0.12em] text-destructive">
-                    Delivery error
-                  </p>
-                  <p className="whitespace-pre-wrap break-words text-sm text-destructive">
-                    {run.deliveryError}
-                  </p>
-                </div>
-              ) : null}
-
-              {isRunning && !hasOutput && !hasError ? (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2Icon className="size-4 animate-spin" aria-hidden />
-                  Run in progress…
-                </div>
-              ) : null}
-
-              {hasError && hasOutput ? (
-                <p className="mb-3 whitespace-pre-wrap break-words text-sm text-destructive">
-                  {run.error}
-                </p>
-              ) : null}
-
-              {hasOutput ? (
-                <div className="max-h-[min(70vh,28rem)] overflow-auto">
-                  <MessageResponse>{run.output ?? ""}</MessageResponse>
-                </div>
-              ) : null}
-
-              {!hasOutput && !hasError && !isRunning ? (
-                <p className="text-sm text-muted-foreground">No output returned.</p>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </article>
-    </li>
-  );
+  return Number.isFinite(ms) ? Math.max(0, ms) : 0;
 }
 
 function RunStatusIcon({ status }: { status: AutomationRunStatus }) {
-  const className = "mt-0.5 size-4 shrink-0";
+  const className = "size-4 shrink-0";
 
   if (status === "completed") {
-    return <CheckCircle2Icon className={cn(className, "text-emerald-600 dark:text-emerald-400")} aria-hidden />;
+    return (
+      <CheckmarkCircle01Icon
+        aria-hidden
+        className={cn(className, "text-emerald-600 dark:text-emerald-400")}
+      />
+    );
   }
 
   if (status === "failed") {
-    return <XCircleIcon className={cn(className, "text-destructive")} aria-hidden />;
+    return (
+      <CancelCircleIcon
+        aria-hidden
+        className={cn(className, "text-destructive")}
+      />
+    );
   }
 
-  return <Loader2Icon className={cn(className, "animate-spin text-muted-foreground")} aria-hidden />;
-}
-
-function RunStatusBadge({ status }: { status: AutomationRunStatus }) {
   return (
-    <span
-      className={cn(
-        "rounded-full px-2 py-0.5 text-[11px] font-medium capitalize",
-        status === "completed" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-        status === "failed" && "bg-destructive/10 text-destructive",
-        status === "running" && "bg-muted text-muted-foreground",
-      )}
-    >
-      {status}
-    </span>
+    <Loading03Icon
+      aria-hidden
+      className={cn(className, "animate-spin text-muted-foreground")}
+    />
   );
 }
 
@@ -756,179 +1353,126 @@ function DeliverySettingsFields({
   const channel = delivery?.channel ?? "none";
 
   return (
-    <div className="grid gap-4 rounded-md border border-border bg-muted/20 p-4">
-      <Field label="Send results to">
-        <Select
-          value={channel}
-          disabled={busy}
-          onValueChange={(value) => {
-            const next = String(value);
+    <fieldset className="grid min-w-0 gap-2">
+      <legend className="mb-2 font-semibold text-sm">
+        Send me the result on
+      </legend>
+      <div className="grid grid-cols-3 gap-2">
+        {(["none", "telegram", "whatsapp", "email", "discord"] as const).map(
+          (value) => (
+            <Button
+              aria-pressed={channel === value}
+              className="min-h-11 rounded-xl aria-pressed:border-primary aria-pressed:bg-primary/5 aria-pressed:text-foreground aria-pressed:ring-1 aria-pressed:ring-primary sm:min-h-10"
+              disabled={busy}
+              key={value}
+              onClick={() => {
+                if (value === channel) {
+                  return;
+                }
 
-            if (next === "none") {
-              onChange(undefined);
-              return;
-            }
+                if (value === "none") {
+                  onChange(undefined);
 
-            onChange({
-              channel: next as AutomationDeliveryChannel,
-              ...(next === "email" && delivery?.to ? { to: delivery.to } : {}),
-              ...(delivery?.notifyOn ? { notifyOn: delivery.notifyOn } : {}),
-            });
-          }}
+                  return;
+                }
+
+                const nextDelivery: AutomationDelivery = { channel: value };
+
+                if (value === "email" && delivery?.to) {
+                  nextDelivery.to = delivery.to;
+                }
+
+                if (value === "discord" && delivery?.channelId) {
+                  nextDelivery.channelId = delivery.channelId;
+                }
+
+                if (delivery?.notifyOn) {
+                  nextDelivery.notifyOn = delivery.notifyOn;
+                }
+
+                onChange(nextDelivery);
+              }}
+              type="button"
+              variant="outline"
+            >
+              {
+                {
+                  discord: "Discord",
+                  email: "Email",
+                  none: "Nowhere",
+                  telegram: "Telegram",
+                  whatsapp: "WhatsApp",
+                }[value]
+              }
+            </Button>
+          )
+        )}
+      </div>
+      <p className="text-muted-foreground text-sm">
+        Results always stay in the run history.
+      </p>
+
+      {delivery?.channel === "discord" ? (
+        <Field
+          hint="Leave blank to DM every paired Discord user."
+          label="Discord channel ID"
         >
-          <SelectTrigger className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">None (run history only)</SelectItem>
-            <SelectItem value="telegram">Telegram</SelectItem>
-            <SelectItem value="whatsapp">WhatsApp</SelectItem>
-            <SelectItem value="email">Email</SelectItem>
-          </SelectContent>
-        </Select>
-      </Field>
+          <Input
+            className="tabular-nums"
+            disabled={busy}
+            onChange={(event) => {
+              const raw = event.target.value.trim();
+
+              const channelId =
+                /discord(?:app)?\.com\/channels\/[^/]+\/(\d{17,20})/i.exec(
+                  raw
+                )?.[1] ?? raw;
+
+              const next = { ...delivery };
+
+              if (channelId) {
+                next.channelId = channelId;
+              } else {
+                delete next.channelId;
+              }
+
+              onChange(next);
+            }}
+            placeholder="Channel ID or discord.com/channels/…"
+            value={delivery.channelId ?? ""}
+          />
+        </Field>
+      ) : null}
 
       {delivery?.channel === "email" ? (
         <Field label="Email recipient">
           <Input
-            type="email"
-            value={delivery.to ?? ""}
             disabled={busy}
-            placeholder="you@example.com"
             onChange={(event) =>
               onChange({
                 ...delivery,
                 to: event.target.value,
               })
             }
+            placeholder="you@example.com"
+            type="email"
+            value={delivery.to ?? ""}
           />
         </Field>
       ) : null}
-
-      {delivery ? (
-        <Field label="Notify on">
-          <Select
-            value={delivery.notifyOn ?? "success"}
-            disabled={busy}
-            onValueChange={(value) =>
-              onChange({
-                ...delivery,
-                notifyOn: String(value) as AutomationDelivery["notifyOn"],
-              })
-            }
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="success">Successful runs</SelectItem>
-              <SelectItem value="failure">Failed runs</SelectItem>
-              <SelectItem value="both">Success and failure</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
-      ) : null}
-    </div>
-  );
-}
-
-function DeliveryStatusBadge({
-  status,
-  error,
-}: {
-  status: NonNullable<AutomationRunRecord["deliveryStatus"]>;
-  error?: string | null;
-}) {
-  const label =
-    status === "sent"
-      ? "Delivered"
-      : status === "failed"
-        ? "Delivery failed"
-        : "Delivery skipped";
-
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
-        status === "sent" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-        status === "failed" && "bg-destructive/10 text-destructive",
-        status === "skipped" && "bg-muted text-muted-foreground",
-      )}
-      title={error ?? undefined}
-    >
-      {label}
-    </span>
-  );
-}
-
-export function AutomationStateBadge({ enabled }: { enabled: boolean }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium",
-        enabled ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-muted text-muted-foreground",
-      )}
-    >
-      <span className={cn("size-1.5 rounded-full", enabled ? "bg-emerald-500" : "bg-muted-foreground/70")} />
-      {enabled ? "Enabled" : "Disabled"}
-    </span>
+    </fieldset>
   );
 }
 
 function AutomationStateDot({ enabled }: { enabled: boolean }) {
   return (
     <span
+      aria-hidden
       className={cn(
         "inline-block size-2 rounded-full",
-        enabled ? "bg-emerald-500" : "bg-muted-foreground/50",
+        enabled ? "bg-emerald-500" : "bg-muted-foreground/50"
       )}
-      aria-hidden
     />
-  );
-}
-
-export function MetaStat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "default" | "attention";
-}) {
-  return (
-    <div className="rounded-md border border-border/60 px-3 py-3">
-      <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
-      <p
-        className={cn(
-          "mt-1 text-sm font-medium",
-          tone === "attention" ? "text-primary" : "text-foreground",
-        )}
-      >
-        {value}
-      </p>
-    </div>
-  );
-}
-
-export function SoftPill({
-  label,
-  tone = "default",
-}: {
-  label: string;
-  tone?: "default" | "success" | "danger";
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full px-2 py-1 text-[11px] font-medium",
-        tone === "default" && "bg-muted text-muted-foreground",
-        tone === "success" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-        tone === "danger" && "bg-destructive/10 text-destructive",
-      )}
-    >
-      {label}
-    </span>
   );
 }
 
@@ -942,32 +1486,26 @@ function Field({
   children: ReactNode;
 }) {
   return (
-    <div>
-      <p className="mb-2 block text-xs font-medium text-muted-foreground">{label}</p>
+    <label className="block min-w-0">
+      <span className="mb-1.5 block font-medium text-sm">{label}</span>
       {children}
       {hint ? (
-        <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{hint}</p>
+        <p className="mt-1.5 text-pretty text-muted-foreground text-xs leading-relaxed">
+          {hint}
+        </p>
       ) : null}
-    </div>
-  );
-}
-
-function MetaRow({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div>
-      <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <p className="mt-1 text-sm text-foreground" title={hint}>
-        {value}
-      </p>
-    </div>
+    </label>
   );
 }
 
 export function ListSkeleton({ rows = 4 }: { rows?: number }) {
   return (
-    <div className="space-y-2" aria-busy="true" aria-label="Loading">
+    <div aria-busy="true" aria-label="Loading" className="space-y-2">
       {Array.from({ length: rows }).map((_, index) => (
-        <div key={index} className="h-10 animate-pulse rounded-md bg-muted/40" />
+        <div
+          className="h-10 animate-pulse rounded-md bg-muted/40"
+          key={index}
+        />
       ))}
     </div>
   );

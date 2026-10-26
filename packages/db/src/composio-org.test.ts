@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createInMemoryDatabaseAdapter } from "./adapters/in-memory";
+import { createInMemoryDatabaseAdapter } from "./index";
 
 describe("composio org isolation", () => {
   test("listComposioToolkitsForOrg returns only matching org rows", async () => {
@@ -7,26 +7,26 @@ describe("composio org isolation", () => {
     const now = new Date().toISOString();
 
     await db.upsertComposioToolkit({
-      id: "ctk_a",
-      orgId: "org_a",
-      toolkitSlug: "gmail",
-      displayName: "Gmail",
-      status: "enabled",
       cachedTools: [],
-      lastError: null,
       createdAt: now,
+      displayName: "Gmail",
+      id: "ctk_a",
+      lastError: null,
+      orgId: "org_a",
+      status: "enabled",
+      toolkitSlug: "gmail",
       updatedAt: now,
     });
 
     await db.upsertComposioToolkit({
-      id: "ctk_b",
-      orgId: "org_b",
-      toolkitSlug: "gmail",
-      displayName: "Gmail",
-      status: "enabled",
       cachedTools: [],
-      lastError: null,
       createdAt: now,
+      displayName: "Gmail",
+      id: "ctk_b",
+      lastError: null,
+      orgId: "org_b",
+      status: "enabled",
+      toolkitSlug: "gmail",
       updatedAt: now,
     });
 
@@ -40,18 +40,18 @@ describe("composio org isolation", () => {
 
     await db.replaceProfileComposioToolkits("profile_1", [
       {
+        allowedActions: ["GMAIL_SEND_EMAIL"],
         profileId: "profile_1",
         toolkitId: "ctk_a",
-        allowedActions: ["GMAIL_SEND_EMAIL"],
       },
     ]);
 
     const assignments = await db.listProfileComposioToolkits("profile_1");
     expect(assignments).toEqual([
       {
+        allowedActions: ["GMAIL_SEND_EMAIL"],
         profileId: "profile_1",
         toolkitId: "ctk_a",
-        allowedActions: ["GMAIL_SEND_EMAIL"],
       },
     ]);
   });

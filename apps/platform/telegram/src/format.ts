@@ -1,19 +1,14 @@
-import { formatClientError } from "@nakama/core/api-error";
 import type { AgentTodo } from "@nakama/core/contract";
 
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
-
-type TelegramTodoRunState = "working" | "completed" | "stopped" | "failed";
-
-export function formatError(error: unknown): string {
-  return formatClientError(error);
-}
 
 export function stripMarkdownForTelegram(text: string): string {
   const protectedUrls = protectBareUrls(text.trim());
   let result = protectedUrls.text;
 
-  result = result.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code: string) => code.trim());
+  result = result.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code: string) =>
+    code.trim()
+  );
   result = result.replace(/`([^`]+)`/g, "$1");
   result = result.replace(/\*\*([^*]+)\*\*/g, "$1");
   result = result.replace(/\*([^*]+)\*/g, "$1");
@@ -38,41 +33,66 @@ export function renderTelegramRichText(text: string): string {
   const escapedText = escapeTelegramHtml(protectedBlocks.text);
   const formattedText = renderInlineTelegramFormatting(escapedText);
 
-  return restoreProtectedBlocks(formattedText, protectedBlocks.blocks).trim();
+  return restoreProtectedBlocks(
+    formattedText,
+    protectedBlocks.blocks,
+    protectedBlocks.prefix
+  ).trim();
 }
 
 /** Placeholder bare http(s) URLs so underscore italic stripping cannot mangle path tokens. */
-function protectBareUrls(text: string): { text: string; urls: string[] } {
+function protectBareUrls(text: string) {
   const urls: string[] = [];
+
   // Stop at whitespace, markdown/HTML delimiters, and common trailing punctuation.
   const protectedText = text.replace(/https?:\/\/[^\s<>\]"'()]+/g, (url) => {
     const token = `@@TCURL${urls.length}@@`;
     urls.push(url);
+
     return token;
   });
 
-  return { text: protectedText, urls };
+  return { text: protectedText, urls } satisfies {
+    text: string;
+    urls: string[];
+  };
 }
 
 function restoreBareUrls(text: string, urls: string[]): string {
   let result = text;
 
   for (let index = 0; index < urls.length; index++) {
-    result = result.replace(`@@TCURL${index}@@`, urls[index]!);
+    result = result.replace(`@@TCURL${index}@@`, () => urls[index]!);
   }
 
   return result;
 }
 
-function protectFencedCodeBlocks(text: string): { text: string; blocks: string[] } {
+function protectFencedCodeBlocks(text: string) {
   const blocks: string[] = [];
-  const protectedText = text.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code: string) => {
-    const token = `@@TCTOKEN${blocks.length}@@`;
-    blocks.push(`<pre><code>${escapeTelegramHtml(trimFenceNewlines(code))}</code></pre>`);
-    return token;
-  });
+  let prefix = "@@TCTOKEN";
 
-  return { text: protectedText, blocks };
+  while (text.includes(prefix)) {
+    prefix += "_";
+  }
+
+  const protectedText = text.replace(
+    /```[\w]*\n?([\s\S]*?)```/g,
+    (_, code: string) => {
+      const token = `${prefix}${blocks.length}@@`;
+      blocks.push(
+        `<pre><code>${escapeTelegramHtml(trimFenceNewlines(code))}</code></pre>`
+      );
+
+      return token;
+    }
+  );
+
+  return { blocks, prefix, text: protectedText } satisfies {
+    blocks: string[];
+    prefix: string;
+    text: string;
+  };
 }
 
 function renderInlineTelegramFormatting(text: string): string {
@@ -92,11 +112,15 @@ function renderLink(_: string, label: string, url: string): string {
   return `<a href="${escapeTelegramAttribute(url)}">${label}</a>`;
 }
 
-function restoreProtectedBlocks(text: string, blocks: string[]): string {
+function restoreProtectedBlocks(
+  text: string,
+  blocks: string[],
+  prefix: string
+): string {
   let result = text;
 
   for (let index = 0; index < blocks.length; index++) {
-    result = result.replace(`@@TCTOKEN${index}@@`, blocks[index]!);
+    result = result.replace(`${prefix}${index}@@`, () => blocks[index]!);
   }
 
   return result;
@@ -128,7 +152,11 @@ export function splitIntoChatBubbles(text: string, maxChars = 400): string[] {
     return splitTelegramMessage(trimmed);
   }
 
-  const paragraphs = trimmed.split(/\n\n+/).map((part) => part.trim()).filter(Boolean);
+  const paragraphs = trimmed
+    .split(/\n\n+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
   const merged: string[] = [];
   let current = "";
 
@@ -215,9 +243,15 @@ export function splitTelegramMessage(text: string): string[] {
   return chunks;
 }
 
+export type TelegramTodoRunState =
+  | "working"
+  | "completed"
+  | "stopped"
+  | "failed";
+
 export function renderTelegramTodoStatus(
   todos: AgentTodo[],
-  state: TelegramTodoRunState,
+  state: TelegramTodoRunState
 ): string {
   const header =
     state === "completed"

@@ -1,12 +1,17 @@
 import {
   createSmtpSender,
-  emailConfigToMailboxConfig,
+  type EmailOutboundAdapter,
   isEmailConfigComplete,
   loadEmailConfig,
-  type EmailOutboundAdapter,
+  toMailboxConfig,
 } from "@nakama/core";
-import type { DatabaseAdapter, CachedMcpTool, StoredMcpServerRecord } from "@nakama/db";
-import type { McpClientManager } from "./mcp-client-manager";
+import type {
+  CachedMcpTool,
+  DatabaseAdapter,
+  StoredMcpServerRecord,
+} from "@nakama/db";
+import type { JsonValue, McpToolArguments } from "./mcp-client-manager";
+import type { McpService } from "./mcp-service";
 
 interface McpEmailTarget {
   server: StoredMcpServerRecord;
@@ -53,7 +58,7 @@ const BODY_FIELD_ALIASES = [
 export async function hasAutomationEmailDeliveryPath(
   db: DatabaseAdapter,
   profileId: string,
-  dependencies: McpEmailDeliveryDependencies = {},
+  dependencies: McpEmailDeliveryDependencies = {}
 ): Promise<boolean> {
   const loadConfig = dependencies.loadConfig ?? loadEmailConfig;
 
@@ -66,8 +71,8 @@ export async function hasAutomationEmailDeliveryPath(
 
 export function createMcpAwareEmailOutboundAdapter(
   db: DatabaseAdapter,
-  manager: McpClientManager,
-  dependencies: McpEmailDeliveryDependencies = {},
+  mcpService: Pick<McpService, "callTool">,
+  dependencies: McpEmailDeliveryDependencies = {}
 ): EmailOutboundAdapter {
   return {
     async send(input) {
@@ -76,44 +81,43 @@ export function createMcpAwareEmailOutboundAdapter(
         const config = await loadConfig();
 
         if (isEmailConfigComplete(config)) {
-          const sender = createSmtpSender(emailConfigToMailboxConfig(config));
+          const sender = createSmtpSender(toMailboxConfig(config));
           await sender.send({
-            to: input.to,
             subject: input.subject,
             text: input.text,
+            to: input.to,
           });
+
           return { ok: true };
         }
 
         if (!input.profileId) {
-          return { ok: false, error: "Email is not configured." };
+          return { error: "Email is not configured.", ok: false };
         }
 
         const target = await findProfileMcpEmailTarget(db, input.profileId);
 
         if (!target) {
-          return { ok: false, error: "Email is not configured." };
+          return { error: "Email is not configured.", ok: false };
         }
 
-        await ensureConnected(manager, target.server, input.orgId ?? undefined, input.profileId);
-        const result = await manager.callTool(
-          target.server.id,
-          target.server.transport,
+        const result = await mcpService.callTool(
+          target.server,
           target.tool.name,
           buildToolArguments(target.tool, input),
-          target.server.transport === "stdio" ? input.profileId : undefined,
-          target.server.transport === "stdio" ? (input.orgId ?? undefined) : undefined,
+          input.orgId ?? undefined,
+          input.profileId
         );
 
         if (isErrorResult(result)) {
-          return { ok: false, error: result.error };
+          return { error: result.error, ok: false };
         }
 
         return { ok: true };
       } catch (error) {
         return {
-          ok: false,
           error: error instanceof Error ? error.message : String(error),
+          ok: false,
         };
       }
     },
@@ -122,13 +126,16 @@ export function createMcpAwareEmailOutboundAdapter(
 
 async function findProfileMcpEmailTarget(
   db: DatabaseAdapter,
-  profileId: string,
+  profileId: string
 ): Promise<McpEmailTarget | null> {
   const servers = await db.listMcpServersForProfile(profileId);
+
   return findBestMcpEmailTarget(servers);
 }
 
-function findBestMcpEmailTarget(servers: StoredMcpServerRecord[]): McpEmailTarget | null {
+function findBestMcpEmailTarget(
+  servers: StoredMcpServerRecord[]
+): McpEmailTarget | null {
   let best: (McpEmailTarget & { score: number }) | null = null;
 
   for (const server of servers) {
@@ -140,7 +147,7 @@ function findBestMcpEmailTarget(servers: StoredMcpServerRecord[]): McpEmailTarge
       }
 
       if (!best || score > best.score) {
-        best = { server, tool, score };
+        best = { score, server, tool };
       }
     }
   }
@@ -148,7 +155,10 @@ function findBestMcpEmailTarget(servers: StoredMcpServerRecord[]): McpEmailTarge
   return best ? { server: best.server, tool: best.tool } : null;
 }
 
-function scoreEmailTool(server: StoredMcpServerRecord, tool: CachedMcpTool): number {
+function scoreEmailTool(
+  server: StoredMcpServerRecord,
+  tool: CachedMcpTool
+): number {
   const serverText = `${server.name} ${server.transport}`.toLowerCase();
   const toolText = `${tool.name} ${tool.description}`.toLowerCase();
   const properties = readSchemaProperties(tool.inputSchema);
@@ -156,7 +166,7 @@ function scoreEmailTool(server: StoredMcpServerRecord, tool: CachedMcpTool): num
   const sendLike = /(send|draft|compose)/.test(toolText);
   const emailLike = /(email|gmail|mail)/.test(toolText);
 
-  if (!sendLike || !emailLike) {
+  if (!(sendLike && emailLike)) {
     return 0;
   }
 
@@ -195,34 +205,14 @@ function scoreEmailTool(server: StoredMcpServerRecord, tool: CachedMcpTool): num
   return score;
 }
 
-async function ensureConnected(
-  manager: McpClientManager,
-  server: StoredMcpServerRecord,
-  orgId: string | undefined,
-  profileId: string,
-): Promise<void> {
-  if (server.transport === "stdio") {
-    if (!orgId) {
-      throw new Error("Profile organization is missing for stdio MCP email delivery.");
-    }
-
-    await manager.ensureConnected(server, orgId, profileId);
-    return;
-  }
-
-  if (!manager.isConnected(server.id, server.transport)) {
-    await manager.connect(server);
-  }
-}
-
 function buildToolArguments(
   tool: CachedMcpTool,
-  input: { to: string; subject: string; text: string },
-): Record<string, unknown> {
+  input: { to: string; subject: string; text: string }
+): McpToolArguments {
   const properties = readSchemaProperties(tool.inputSchema);
 
   if (properties) {
-    const args: Record<string, unknown> = {};
+    const args: McpToolArguments = {};
 
     assignSchemaValue(args, properties, RECIPIENT_FIELD_ALIASES, input.to);
     assignSchemaValue(args, properties, SUBJECT_FIELD_ALIASES, input.subject);
@@ -234,26 +224,26 @@ function buildToolArguments(
   }
 
   return {
-    to: input.to,
-    subject: input.subject,
     body: input.text,
+    subject: input.subject,
+    to: input.to,
   };
 }
 
-function readSchemaProperties(inputSchema: unknown): Record<string, unknown> | null {
-  if (!isRecord(inputSchema)) {
-    return null;
-  }
+function readSchemaProperties<T>(
+  inputSchema: T
+): Map<string, JsonValue> | null {
+  const schema = readJsonObject(inputSchema);
+  const properties = schema?.get("properties");
 
-  const properties = inputSchema.properties;
-  return isRecord(properties) ? properties : null;
+  return properties ? readJsonObject(properties) : null;
 }
 
 function assignSchemaValue(
-  target: Record<string, unknown>,
-  properties: Record<string, unknown>,
+  target: McpToolArguments,
+  properties: Map<string, JsonValue>,
   candidates: string[],
-  value: string,
+  value: string
 ): void {
   const match = findSchemaKey(properties, candidates);
 
@@ -261,30 +251,87 @@ function assignSchemaValue(
     return;
   }
 
-  target[match] = schemaExpectsArray(properties[match]) ? [value] : value;
+  target[match] = schemaExpectsArray(properties.get(match)) ? [value] : value;
 }
 
-function schemaExpectsArray(schema: unknown): boolean {
-  return isRecord(schema) && schema.type === "array";
+function schemaExpectsArray<T>(schema: T): boolean {
+  return readJsonObject(schema)?.get("type") === "array";
 }
 
 function findSchemaKey(
-  properties: Record<string, unknown>,
-  candidates: string[],
+  properties: Map<string, JsonValue>,
+  candidates: string[]
 ): string | undefined {
   const normalizedCandidates = candidates.map(normalizeKey);
 
-  return Object.keys(properties).find((key) => normalizedCandidates.includes(normalizeKey(key)));
+  return [...properties.keys()].find((key) =>
+    normalizedCandidates.includes(normalizeKey(key))
+  );
 }
 
-function isErrorResult(value: unknown): value is { error: string } {
-  return isRecord(value) && typeof value.error === "string" && value.error.trim().length > 0;
+function isErrorResult<T>(value: T): value is T & { error: string } {
+  const record = readJsonObject(value);
+  const error = record?.get("error");
+
+  return isString(error) && error.trim().length > 0;
 }
 
-function isRecord(value: unknown): value is Record<string, any> {
-  return typeof value === "object" && value !== null;
+function readJsonObject<T>(value: T): Map<string, JsonValue> | null {
+  if (!(value instanceof Object)) {
+    return null;
+  }
+
+  const entries = Object.entries(value);
+  const parsed: Array<[string, JsonValue]> = [];
+
+  for (const [key, entry] of entries) {
+    const result = parseJsonValue(entry);
+
+    if (result === undefined) {
+      return null;
+    }
+
+    parsed.push([key, result]);
+  }
+
+  return new Map(parsed);
+}
+
+function parseJsonValue<T>(value: T): JsonValue | undefined {
+  if (
+    value === null ||
+    Object.prototype.toString.call(value) === "[object String]" ||
+    Object.prototype.toString.call(value) === "[object Number]" ||
+    Object.prototype.toString.call(value) === "[object Boolean]"
+  ) {
+    // SAFETY: The accepted primitive tags match JsonValue's scalar members.
+    return value as JsonValue;
+  }
+
+  if (Array.isArray(value)) {
+    const values = value.map(parseJsonValue);
+
+    if (values.some((entry) => entry === undefined)) {
+      return;
+    }
+
+    // SAFETY: The check above excludes every undefined parse result.
+    return values as JsonValue[];
+  }
+
+  if (value instanceof Object) {
+    const object = readJsonObject(value);
+
+    return object ? Object.fromEntries(object) : undefined;
+  }
+
+  return undefined;
 }
 
 function normalizeKey(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isString<T>(value: T): value is T & string {
+  return Object.prototype.toString.call(value) === "[object String]";
 }

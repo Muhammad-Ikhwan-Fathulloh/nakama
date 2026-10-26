@@ -5,13 +5,21 @@ import {
   ensureUserConfigDir,
   isProviderConfigured,
   loadUserConfig,
+  type ProviderClient,
   readEnvValue,
   resolveProvider,
   saveUserConfig,
-  type ProviderClient,
   type UserConfig,
 } from "@nakama/core";
-import { createProviderFromSources } from "./providers";
+import {
+  NETRA_AGENT_MODEL_ID,
+  resolveNetraModelId,
+} from "@nakama/core/discovery-providers";
+import { createProviderFromActiveConfig } from "./providers";
+import {
+  type ManagedSecrets,
+  providerSecretEnvNames,
+} from "./services/managed-secrets";
 
 export interface ProviderBootstrap {
   provider: ProviderClient | null;
@@ -19,7 +27,7 @@ export interface ProviderBootstrap {
 }
 
 async function bootstrapProviderFromEnv(
-  env: Record<string, string | undefined>,
+  env: Record<string, string | undefined>
 ): Promise<UserConfig | null> {
   const providerType = resolveProvider({ env });
 
@@ -34,12 +42,24 @@ async function bootstrapProviderFromEnv(
     return null;
   }
 
+  const netraModel =
+    providerType === "netra"
+      ? resolveNetraModelId(
+          readEnvValue(env, "NETRA_MODEL") ?? NETRA_AGENT_MODEL_ID
+        )
+      : null;
+
+  if (providerType === "netra" && netraModel !== NETRA_AGENT_MODEL_ID) {
+    return null;
+  }
+
   const instance = {
-    id: createProviderInstanceId(),
-    type: providerType,
-    label: defaultProviderLabel(providerType, []),
     apiKey: "",
     createdAt: new Date().toISOString(),
+    customModels: netraModel ? [{ default: true, id: netraModel }] : undefined,
+    id: createProviderInstanceId(),
+    label: defaultProviderLabel(providerType, []),
+    type: providerType,
   };
 
   const config: UserConfig = {
@@ -48,17 +68,47 @@ async function bootstrapProviderFromEnv(
   };
 
   await saveUserConfig(config);
+
   return config;
 }
 
-export async function ensureProviderConfigured(): Promise<ProviderBootstrap> {
+export async function ensureProviderConfigured(
+  secrets?: ManagedSecrets
+): Promise<ProviderBootstrap> {
   await ensureUserConfigDir();
   let userConfig = await loadUserConfig();
 
+  const hydrate = async (
+    config: UserConfig | null
+  ): Promise<UserConfig | null> =>
+    config && secrets
+      ? {
+          ...config,
+          providers: await Promise.all(
+            config.providers.map(async (instance) => ({
+              ...instance,
+              apiKey:
+                (
+                  await secrets.resolve(
+                    "global",
+                    `provider:${instance.id}`,
+                    providerSecretEnvNames(instance.id, instance.type)
+                  )
+                ).value ?? "",
+            }))
+          ),
+        }
+      : config;
+
+  userConfig = await hydrate(userConfig);
+
   if (!isProviderConfigured(userConfig, process.env)) {
-    userConfig = (await bootstrapProviderFromEnv(process.env)) ?? userConfig;
+    userConfig =
+      (await hydrate(await bootstrapProviderFromEnv(process.env))) ??
+      userConfig;
   }
 
-  const provider = createProviderFromSources(process.env, userConfig);
+  const provider = createProviderFromActiveConfig(userConfig, process.env);
+
   return { provider, userConfig };
 }

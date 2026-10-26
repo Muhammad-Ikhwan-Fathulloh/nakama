@@ -1,6 +1,6 @@
 export interface ChannelSendResult {
-  ok: boolean;
   error?: string;
+  ok: boolean;
 }
 
 export interface EmailOutboundAdapter {
@@ -16,6 +16,8 @@ export interface EmailOutboundAdapter {
 export interface TelegramOutboundAdapter {
   send(input: {
     text: string;
+    orgId?: string | null;
+    profileId?: string;
     chatIds?: number[];
     topicId?: number;
     parseMode?: "HTML";
@@ -23,5 +25,18 @@ export interface TelegramOutboundAdapter {
 }
 
 export interface WhatsAppOutboundAdapter {
-  send(input: { text: string }): Promise<ChannelSendResult>;
+  send(input: {
+    profileId?: string;
+    text: string;
+    orgId?: string | null;
+  }): Promise<ChannelSendResult>;
+}
+
+export interface DiscordOutboundAdapter {
+  send(input: {
+    orgId?: string | null;
+    profileId?: string;
+    text: string;
+    channelId?: string;
+  }): Promise<ChannelSendResult>;
 }

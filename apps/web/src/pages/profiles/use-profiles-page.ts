@@ -1,15 +1,19 @@
 import type {
   CreateMcpServerRequest,
   CreateSkillRequest,
+  ImageAttachment,
+  InstallSkillRequest,
+  ProfileDetail,
 } from "@nakama/core/contract";
+import { parseDataUrl } from "@nakama/core/message-content";
+import { BASH_TOOL_ID } from "@nakama/core/tools/protected";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useActiveChatProfile } from "@/context/use-active-chat-profile";
+import { useAuth } from "@/context/use-auth";
+import { useAcpChatControls } from "@/hooks/use-acp-settings";
 import {
-  useComposioToolkits,
-  useProfileComposioToolkits,
-  useUpdateProfileComposioToolkitsMutation,
-} from "@/hooks/use-composio";
-import {
+  useAcpAgentPresetsQuery,
   useMcpServersQuery,
   useModelsQuery,
   useProfileQuery,
@@ -18,45 +22,166 @@ import {
   useToolsQuery,
 } from "@/hooks/use-app-queries";
 import {
+  useComposioToolkits,
+  useProfileComposioToolkits,
+  useUpdateProfileComposioToolkitsMutation,
+} from "@/hooks/use-composio";
+import {
   useAssignMcpServerMutation,
   useAssignSkillMutation,
   useAssignToolMutation,
+  useCloneProfileMutation,
   useCreateMcpServerMutation,
   useCreateSkillMutation,
+  useDeleteProfileAvatarMutation,
   useDeleteProfileMutation,
   useDeleteSkillMutation,
+  useInstallSkillMutation,
   useUnassignMcpServerMutation,
   useUnassignSkillMutation,
   useUnassignToolMutation,
   useUpdateProfileMutation,
   useUploadProfileAvatarMutation,
 } from "@/hooks/use-resource-mutations";
-import { fileToImageAttachment } from "@/lib/profile-images";
+import {
+  acpAgentSettingsKey,
+  NO_ACP_AGENT_PRESETS,
+  presetIdForAgent,
+} from "@/lib/acp-settings";
+import { resolveProfilesPageProfileId } from "@/lib/chat-history";
 import { formatError } from "@/lib/client";
 import {
   extractModelId,
   groupModelsByProvider,
   profileModelSelectionValue,
 } from "@/lib/models";
+import { isProfileOwner } from "@/lib/profiles";
 import {
+  type ProfileDetailTab,
+  type ProfileSaveStatus,
   profileHasPendingEdits,
   profileModelSaveDelayMs,
   profileTextSaveDelayMs,
-  resolveProfileDetailTab,
-  type ProfileDetailTab,
-  type ProfileSaveStatus,
   type RemoveAssignmentTarget,
+  resolveProfileDetailTab,
 } from "@/pages/profiles/profiles-page.shared";
+import { readFileAsDataUrl } from "../../lib/read-file-as-data-url";
+
+function fileToImageAttachment(file: File): Promise<ImageAttachment | null> {
+  return readFileAsDataUrl(file).then(parseDataUrl, () => null);
+}
+
+/** The avatar API stores raster images only, so presets upload as PNG. */
+function svgToPngAttachment(svg: string): Promise<ImageAttachment> {
+  const size = 256;
+
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      canvas.getContext("2d")?.drawImage(image, 0, 0, size, size);
+      resolve({ data: canvas.toDataURL("image/png"), mediaType: "image/png" });
+    };
+
+    image.onerror = () => reject(new Error("Could not render the avatar."));
+
+    image.src = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  });
+}
+
+function isProfilesPageBusy(flags: {
+  assignMcpPending: boolean;
+  assignPending: boolean;
+  assignSkillPending: boolean;
+  clonePending: boolean;
+  createMcpPending: boolean;
+  createSkillPending: boolean;
+  deletePending: boolean;
+  deleteSkillPending: boolean;
+  installSkillPending: boolean;
+  unassignMcpPending: boolean;
+  unassignPending: boolean;
+  unassignSkillPending: boolean;
+  updateComposioPending: boolean;
+  updatePending: boolean;
+}): boolean {
+  return (
+    flags.updatePending ||
+    flags.clonePending ||
+    flags.deletePending ||
+    flags.assignPending ||
+    flags.unassignPending ||
+    flags.assignMcpPending ||
+    flags.unassignMcpPending ||
+    flags.createMcpPending ||
+    flags.createSkillPending ||
+    flags.installSkillPending ||
+    flags.assignSkillPending ||
+    flags.unassignSkillPending ||
+    flags.deleteSkillPending ||
+    flags.updateComposioPending
+  );
+}
+
+function syncProfileEditFieldsFromDetail({
+  detail,
+  syncedDetailId,
+  setSyncedDetailId,
+  setEditName,
+  setEditPrompt,
+  setEditModel,
+  setSavedName,
+  setSavedPrompt,
+  setSavedModel,
+  setSaveStatus,
+}: {
+  detail: ProfileDetail | null | undefined;
+  syncedDetailId: string | null;
+  setSyncedDetailId: (id: string | null) => void;
+  setEditName: (value: string) => void;
+  setEditPrompt: (value: string) => void;
+  setEditModel: (value: string | null) => void;
+  setSavedName: (value: string) => void;
+  setSavedPrompt: (value: string) => void;
+  setSavedModel: (value: string | null) => void;
+  setSaveStatus: (value: ProfileSaveStatus) => void;
+}): string | null {
+  const detailId = detail?.id ?? null;
+
+  if (detailId === syncedDetailId) {
+    return detailId;
+  }
+
+  setSyncedDetailId(detailId);
+
+  if (detail) {
+    setEditName(detail.name);
+    setEditPrompt(detail.systemPrompt);
+    setEditModel(detail.model);
+    setSavedName(detail.name);
+    setSavedPrompt(detail.systemPrompt);
+    setSavedModel(detail.model);
+    setSaveStatus("idle");
+  }
+
+  return detailId;
+}
 
 export function useProfilesPage() {
-
   const [searchParams, setSearchParams] = useSearchParams();
+  const { profileId: liveChatProfileId } = useActiveChatProfile();
+  const { user } = useAuth();
+
   const {
     data: profiles = [],
     isLoading: profilesLoading,
     isFetching: profilesRefreshing,
     error: profilesError,
   } = useProfilesQuery();
+
   const { data: allTools = [] } = useToolsQuery();
   const { data: allMcpServers = [] } = useMcpServersQuery();
   const { data: composioToolkitsData } = useComposioToolkits();
@@ -68,23 +193,55 @@ export function useProfilesPage() {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
   const { data: profileComposioData } = useProfileComposioToolkits(selectedId);
-  const { data: allSkills = [] } = useSkillsQuery();
+
+  const {
+    data: allSkills = [],
+    isLoading: skillsLoading,
+    error: skillsError,
+  } = useSkillsQuery();
+
   const { data: modelsResponse } = useModelsQuery();
+
   const {
     data: detail = null,
     isLoading: detailLoading,
     error: detailError,
     refetch: refetchDetail,
   } = useProfileQuery(selectedId);
+
+  const canManageProfile =
+    (user?.isPlatformAdmin === true || isProfileOwner(detail, user?.id)) &&
+    Boolean(detail && !detail.sharedAgent);
+
   const updateMutation = useUpdateProfileMutation();
+
+  // ACP agents run on the server host, so only platform admins may pick one.
+  const { data: acpPresetsData } = useAcpAgentPresetsQuery();
+
+  const acpAgentPresets =
+    (user?.isPlatformAdmin === true ? acpPresetsData : undefined) ??
+    NO_ACP_AGENT_PRESETS;
+
+  const acpModelControls = useAcpChatControls({
+    agentKey: acpAgentSettingsKey(detail?.acpAgent),
+    enabled: Boolean(detail?.acpAgent),
+    profileId: selectedId,
+    sessionId: null,
+  });
+
+  const acpAgentId = presetIdForAgent(detail?.acpAgent, acpAgentPresets);
+  const { mutateAsync: updateProfile } = updateMutation;
+  const cloneProfileMutation = useCloneProfileMutation();
   const deleteMutation = useDeleteProfileMutation();
   const uploadAvatarMutation = useUploadProfileAvatarMutation();
+  const deleteAvatarMutation = useDeleteProfileAvatarMutation();
   const assignMutation = useAssignToolMutation();
   const unassignMutation = useUnassignToolMutation();
   const assignMcpMutation = useAssignMcpServerMutation();
   const unassignMcpMutation = useUnassignMcpServerMutation();
   const createMcpMutation = useCreateMcpServerMutation();
   const createSkillMutation = useCreateSkillMutation();
+  const installSkillMutation = useInstallSkillMutation();
   const assignSkillMutation = useAssignSkillMutation();
   const unassignSkillMutation = useUnassignSkillMutation();
   const deleteSkillMutation = useDeleteSkillMutation();
@@ -92,13 +249,17 @@ export function useProfilesPage() {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [cloneTargetId, setCloneTargetId] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
-  const [removeConfirm, setRemoveConfirm] = useState<RemoveAssignmentTarget | null>(null);
+
+  const [removeConfirm, setRemoveConfirm] =
+    useState<RemoveAssignmentTarget | null>(null);
+
   const [mcpCreateOpen, setMcpCreateOpen] = useState(false);
   const [skillCreateOpen, setSkillCreateOpen] = useState(false);
-  const [detailSkillId, setDetailSkillId] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [skillInstallOpen, setSkillInstallOpen] = useState(false);
   const [editName, setEditName] = useState("");
   const [editPrompt, setEditPrompt] = useState("");
   const [editModel, setEditModel] = useState<string | null>(null);
@@ -112,25 +273,26 @@ export function useProfilesPage() {
   const savingRef = useRef(false);
   const pendingSaveRef = useRef(false);
   const performSaveRef = useRef<() => Promise<boolean>>(async () => true);
+
   const editStateRef = useRef({
+    detail,
+    editModel,
     editName,
     editPrompt,
-    editModel,
+    savedModel,
     savedName,
     savedPrompt,
-    savedModel,
     selectedId,
-    detail,
   });
 
   const providerModelGroups = useMemo(
     () => groupModelsByProvider(modelsResponse?.models ?? []),
-    [modelsResponse?.models],
+    [modelsResponse?.models]
   );
 
   const modelSelectionValue = useMemo(
     () => profileModelSelectionValue(editModel, providerModelGroups),
-    [editModel, providerModelGroups],
+    [editModel, providerModelGroups]
   );
 
   const modelInCatalog = useMemo(() => {
@@ -141,27 +303,30 @@ export function useProfilesPage() {
     }
 
     return providerModelGroups.some((group) =>
-      group.models.some((model) => model.id === resolvedModelId),
+      group.models.some((model) => model.id === resolvedModelId)
     );
   }, [editModel, providerModelGroups]);
 
-  const busy =
-    updateMutation.isPending ||
-    deleteMutation.isPending ||
-    assignMutation.isPending ||
-    unassignMutation.isPending ||
-    assignMcpMutation.isPending ||
-    unassignMcpMutation.isPending ||
-    createMcpMutation.isPending ||
-    createSkillMutation.isPending ||
-    assignSkillMutation.isPending ||
-    unassignSkillMutation.isPending ||
-    deleteSkillMutation.isPending ||
-    updateComposioMutation.isPending;
+  const busy = isProfilesPageBusy({
+    assignMcpPending: assignMcpMutation.isPending,
+    assignPending: assignMutation.isPending,
+    assignSkillPending: assignSkillMutation.isPending,
+    clonePending: cloneProfileMutation.isPending,
+    createMcpPending: createMcpMutation.isPending,
+    createSkillPending: createSkillMutation.isPending,
+    deletePending: deleteMutation.isPending,
+    deleteSkillPending: deleteSkillMutation.isPending,
+    installSkillPending: installSkillMutation.isPending,
+    unassignMcpPending: unassignMcpMutation.isPending,
+    unassignPending: unassignMutation.isPending,
+    unassignSkillPending: unassignSkillMutation.isPending,
+    updateComposioPending: updateComposioMutation.isPending,
+    updatePending: updateMutation.isPending,
+  });
 
-  const trimmedSearch = searchQuery.trim();
-  const isSearching = trimmedSearch.length > 0;
-  const refreshing = profilesRefreshing || (detailLoading && Boolean(selectedId));
+  const refreshing =
+    profilesRefreshing || (detailLoading && Boolean(selectedId));
+
   const detailTab = resolveProfileDetailTab(searchParams.get("tab"));
 
   const isDirty = useMemo(() => {
@@ -195,20 +360,26 @@ export function useProfilesPage() {
     (delayMs = profileTextSaveDelayMs) => {
       clearScheduledSave();
 
+      if (!canManageProfile) {
+        return;
+      }
+
       const snapshot = editStateRef.current;
       const { selectedId: profileId, detail: profileDetail } = snapshot;
 
-      if (!profileId || !profileDetail) {
+      if (!(profileId && profileDetail) || profileDetail.sharedAgent) {
         return;
       }
 
       if (!snapshot.editName.trim()) {
         setSaveStatus("idle");
+
         return;
       }
 
       if (!profileHasPendingEdits(snapshot)) {
         setSaveStatus("idle");
+
         return;
       }
 
@@ -218,12 +389,17 @@ export function useProfilesPage() {
         void performSaveRef.current();
       }, delayMs);
     },
-    [clearScheduledSave],
+    [canManageProfile, clearScheduledSave]
   );
 
   const performSave = useCallback(async (): Promise<boolean> => {
+    if (!canManageProfile) {
+      return true;
+    }
+
     if (savingRef.current) {
       pendingSaveRef.current = true;
+
       return false;
     }
 
@@ -238,11 +414,12 @@ export function useProfilesPage() {
       detail: profileDetail,
     } = editStateRef.current;
 
-    if (!profileId || !profileDetail) {
+    if (!(profileId && profileDetail) || profileDetail.sharedAgent) {
       return true;
     }
 
     const name = nameDraft.trim();
+
     if (!name) {
       return false;
     }
@@ -253,6 +430,7 @@ export function useProfilesPage() {
       modelDraft === baselineModel
     ) {
       setSaveStatus("idle");
+
       return true;
     }
 
@@ -264,21 +442,21 @@ export function useProfilesPage() {
 
     try {
       await updateMutation.mutateAsync({
-        profileId,
         input: {
+          model: modelDraft,
           name,
           systemPrompt: promptDraft,
-          model: modelDraft,
         },
+        profileId,
       });
       setSavedName(name);
       setSavedPrompt(promptDraft);
       setSavedModel(modelDraft);
       editStateRef.current = {
         ...editStateRef.current,
+        savedModel: modelDraft,
         savedName: name,
         savedPrompt: promptDraft,
-        savedModel: modelDraft,
       };
       setSaveStatus("saved");
       savedSuccessfully = true;
@@ -295,6 +473,7 @@ export function useProfilesPage() {
     } catch (err) {
       setSaveStatus("error");
       setError(formatError(err));
+
       return false;
     } finally {
       savingRef.current = false;
@@ -309,18 +488,18 @@ export function useProfilesPage() {
         scheduleSave(profileTextSaveDelayMs);
       }
     }
-  }, [scheduleSave, updateMutation]);
+  }, [canManageProfile, scheduleSave, updateMutation]);
 
   useEffect(() => {
     editStateRef.current = {
+      detail,
+      editModel,
       editName,
       editPrompt,
-      editModel,
+      savedModel,
       savedName,
       savedPrompt,
-      savedModel,
       selectedId,
-      detail,
     };
   }, [
     detail,
@@ -339,34 +518,78 @@ export function useProfilesPage() {
 
   const flushSave = useCallback(async (): Promise<boolean> => {
     clearScheduledSave();
+
     return performSave();
   }, [clearScheduledSave, performSave]);
 
   const handleEditNameChange = useCallback(
     (value: string) => {
+      if (!canManageProfile) {
+        return;
+      }
+
       setEditName(value);
       editStateRef.current.editName = value;
       scheduleSave(profileTextSaveDelayMs);
     },
-    [scheduleSave],
+    [canManageProfile, scheduleSave]
   );
 
   const handleEditPromptChange = useCallback(
     (value: string) => {
+      if (!canManageProfile) {
+        return;
+      }
+
       setEditPrompt(value);
       editStateRef.current.editPrompt = value;
       scheduleSave(profileTextSaveDelayMs);
     },
-    [scheduleSave],
+    [canManageProfile, scheduleSave]
   );
 
   const handleEditModelChange = useCallback(
     (model: string | null) => {
+      if (!canManageProfile) {
+        return;
+      }
+
       setEditModel(model);
       editStateRef.current.editModel = model;
       scheduleSave(profileModelSaveDelayMs);
     },
-    [scheduleSave],
+    [canManageProfile, scheduleSave]
+  );
+
+  // Saved right away, not debounced: the agent is a choice, not text. An empty
+  // preset id returns the profile to the built-in chat.
+  const handleEditAcpAgent = useCallback(
+    async (presetId: string) => {
+      if (!(selectedId && canManageProfile)) {
+        return;
+      }
+
+      const agent =
+        acpAgentPresets.find((preset) => preset.id === presetId)?.agent ?? null;
+
+      setError(null);
+
+      try {
+        await updateProfile({
+          input: { acpAgent: agent },
+          profileId: selectedId,
+        });
+      } catch (err) {
+        setError(formatError(err));
+      }
+    },
+    [acpAgentPresets, canManageProfile, selectedId, updateProfile]
+  );
+
+  const switchingProfileRef = useRef(false);
+
+  const handleSelectProfileRef = useRef<(profileId: string) => Promise<void>>(
+    async () => undefined
   );
 
   const setSelectedId = useCallback(
@@ -375,17 +598,19 @@ export function useProfilesPage() {
       setSearchParams(
         (current) => {
           const next = new URLSearchParams(current);
+
           if (nextProfileId) {
             next.set("profile", nextProfileId);
           } else {
             next.delete("profile");
           }
+
           return next;
         },
-        { replace: true },
+        { replace: true }
       );
     },
-    [setSearchParams],
+    [setSearchParams]
   );
 
   const setDetailTab = useCallback(
@@ -393,21 +618,24 @@ export function useProfilesPage() {
       setSearchParams(
         (current) => {
           const next = new URLSearchParams(current);
+
           if (nextTab === "profile") {
             next.delete("tab");
           } else {
             next.set("tab", nextTab);
           }
+
           return next;
         },
-        { replace: true },
+        { replace: true }
       );
     },
-    [setSearchParams],
+    [setSearchParams]
   );
 
   useEffect(() => {
     const queryError = profilesError ?? detailError;
+
     if (queryError) {
       setError(formatError(queryError));
     }
@@ -418,6 +646,7 @@ export function useProfilesPage() {
       if (selectedIdRef.current !== null) {
         setSelectedId(null);
       }
+
       return;
     }
 
@@ -425,15 +654,17 @@ export function useProfilesPage() {
 
     if (!profileInitializedRef.current) {
       profileInitializedRef.current = true;
-      const matchedProfile = urlProfileId
-        ? profiles.find((profile) => profile.id === urlProfileId)
-        : null;
-      const defaultProfile =
-        matchedProfile ??
-        profiles.find((profile) => profile.id === "default") ??
-        profiles[0]!;
 
-      setSelectedId(defaultProfile.id);
+      const initialProfileId = resolveProfilesPageProfileId({
+        liveChatProfileId,
+        profiles,
+        search: searchParams.toString(),
+      });
+
+      if (initialProfileId) {
+        setSelectedId(initialProfileId);
+      }
+
       return;
     }
 
@@ -442,31 +673,30 @@ export function useProfilesPage() {
       profiles.some((profile) => profile.id === urlProfileId) &&
       urlProfileId !== selectedIdRef.current
     ) {
-      setSelectedId(urlProfileId);
+      void handleSelectProfileRef.current(urlProfileId);
+
       return;
     }
 
     const current = selectedIdRef.current;
+
     if (current && !profiles.some((profile) => profile.id === current)) {
       setSelectedId(profiles[0]!.id);
     }
-  }, [profiles, searchParams, setSelectedId]);
+  }, [liveChatProfileId, profiles, searchParams, setSelectedId]);
 
-  const detailId = detail?.id ?? null;
-
-  if (detailId !== syncedDetailId) {
-    setSyncedDetailId(detailId);
-
-    if (detail) {
-      setEditName(detail.name);
-      setEditPrompt(detail.systemPrompt);
-      setEditModel(detail.model);
-      setSavedName(detail.name);
-      setSavedPrompt(detail.systemPrompt);
-      setSavedModel(detail.model);
-      setSaveStatus("idle");
-    }
-  }
+  const detailId = syncProfileEditFieldsFromDetail({
+    detail,
+    setEditModel,
+    setEditName,
+    setEditPrompt,
+    setSavedModel,
+    setSavedName,
+    setSavedPrompt,
+    setSaveStatus,
+    setSyncedDetailId,
+    syncedDetailId,
+  });
 
   useEffect(() => {
     if (!detailId) {
@@ -477,46 +707,40 @@ export function useProfilesPage() {
     pendingSaveRef.current = false;
   }, [clearScheduledSave, detailId]);
 
-  useEffect(() => {
-    return () => {
+  useEffect(
+    () => () => {
       clearScheduledSave();
 
       if (savedHintTimerRef.current) {
         clearTimeout(savedHintTimerRef.current);
       }
-    };
-  }, [clearScheduledSave]);
-
-  const filteredProfiles = useMemo(() => {
-    const query = trimmedSearch.toLowerCase();
-    if (!query) {
-      return profiles;
-    }
-
-    return profiles.filter((profile) => {
-      return profile.name.toLowerCase().includes(query) || profile.id.toLowerCase().includes(query);
-    });
-  }, [profiles, trimmedSearch]);
+    },
+    [clearScheduledSave]
+  );
 
   const availableTools = allTools.filter(
-    (tool) => !detail?.tools.some((assigned) => assigned.id === tool.id),
+    (tool) => !detail?.tools.some((assigned) => assigned.id === tool.id)
   );
 
   const availableMcpServers = allMcpServers.filter(
-    (server) => !detail?.mcpServers.some((assigned) => assigned.id === server.id),
+    (server) =>
+      !detail?.mcpServers.some((assigned) => assigned.id === server.id)
   );
 
   const assignedComposioToolkits = useMemo(() => {
-    if (!profileComposioData || !composioToolkitsData) {
+    if (!(profileComposioData && composioToolkitsData)) {
       return [];
     }
 
     const toolkitById = new Map(
-      composioToolkitsData.orgToolkits.map((toolkit) => [toolkit.id, toolkit]),
+      composioToolkitsData.orgToolkits.map((toolkit) => [toolkit.id, toolkit])
     );
 
     const userByToolkitId = new Map(
-      composioToolkitsData.userConnections.map((connection) => [connection.toolkitId, connection]),
+      composioToolkitsData.userConnections.map((connection) => [
+        connection.toolkitId,
+        connection,
+      ])
     );
 
     const assigned: Array<{
@@ -527,6 +751,7 @@ export function useProfilesPage() {
 
     for (const assignment of profileComposioData.assignments) {
       const toolkit = toolkitById.get(assignment.toolkitId);
+
       if (!toolkit) {
         continue;
       }
@@ -547,52 +772,108 @@ export function useProfilesPage() {
     }
 
     const assignedIds = new Set(
-      profileComposioData?.assignments.map((assignment) => assignment.toolkitId) ?? [],
+      profileComposioData?.assignments.map(
+        (assignment) => assignment.toolkitId
+      ) ?? []
     );
 
     return composioToolkitsData.orgToolkits.filter(
-      (toolkit) => toolkit.status !== "disabled" && !assignedIds.has(toolkit.id),
+      (toolkit) => toolkit.status !== "disabled" && !assignedIds.has(toolkit.id)
     );
   }, [composioToolkitsData, profileComposioData]);
 
   const assignedSkillIds = useMemo(
     () => new Set(detail?.skills.map((skill) => skill.id) ?? []),
-    [detail?.skills],
+    [detail?.skills]
   );
 
-  async function handleSelectProfile(profileId: string) {
-    if (profileId === selectedId) {
+  const handleSelectProfile = useCallback(
+    async (profileId: string) => {
+      if (profileId === selectedIdRef.current || switchingProfileRef.current) {
+        return;
+      }
+
+      clearScheduledSave();
+
+      const {
+        editName: nameDraft,
+        editPrompt: promptDraft,
+        editModel: modelDraft,
+        savedName: baselineName,
+        savedPrompt: baselinePrompt,
+        savedModel: baselineModel,
+      } = editStateRef.current;
+
+      const hasPendingEdits =
+        nameDraft.trim() !== baselineName ||
+        promptDraft !== baselinePrompt ||
+        modelDraft !== baselineModel;
+
+      switchingProfileRef.current = true;
+
+      try {
+        if (hasPendingEdits && nameDraft.trim()) {
+          const saved = await performSave();
+
+          if (!saved) {
+            const current = selectedIdRef.current;
+
+            if (current) {
+              setSelectedId(current);
+            }
+
+            return;
+          }
+        }
+
+        setSelectedId(profileId);
+      } finally {
+        switchingProfileRef.current = false;
+      }
+    },
+    [clearScheduledSave, performSave, setSelectedId]
+  );
+
+  useEffect(() => {
+    handleSelectProfileRef.current = handleSelectProfile;
+  }, [handleSelectProfile]);
+
+  useEffect(() => {
+    if (searchParams.get("create") !== "1") {
       return;
     }
 
-    clearScheduledSave();
+    setCreateOpen(true);
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete("create");
 
-    const {
-      editName: nameDraft,
-      editPrompt: promptDraft,
-      editModel: modelDraft,
-      savedName: baselineName,
-      savedPrompt: baselinePrompt,
-      savedModel: baselineModel,
-    } = editStateRef.current;
-    const hasPendingEdits =
-      nameDraft.trim() !== baselineName ||
-      promptDraft !== baselinePrompt ||
-      modelDraft !== baselineModel;
-
-    if (hasPendingEdits && nameDraft.trim()) {
-      const saved = await performSave();
-      if (!saved) {
-        return;
-      }
-    }
-
-    setSelectedId(profileId);
-  }
+        return next;
+      },
+      { replace: true }
+    );
+  }, [searchParams, setSearchParams]);
 
   function openDeleteDialog(profileId: string) {
     setDeleteTargetId(profileId);
     setDeleteOpen(true);
+  }
+
+  function openCloneDialog(profileId: string) {
+    const profile = profiles.find((entry) => entry.id === profileId);
+
+    if (!profile || profile.sharedAgent || user?.isPlatformAdmin !== true) {
+      return;
+    }
+
+    setCloneTargetId(profileId);
+  }
+
+  function handleCloneOpenChange(open: boolean) {
+    if (!(open || busy)) {
+      setCloneTargetId(null);
+    }
   }
 
   function handleDeleteOpenChange(open: boolean) {
@@ -607,11 +888,46 @@ export function useProfilesPage() {
     }
   }
 
+  async function handleCloneConfirm() {
+    const profileId = cloneTargetId;
+    const profile = profiles.find((entry) => entry.id === profileId);
+
+    if (
+      !(profileId && profile) ||
+      profile.sharedAgent ||
+      user?.isPlatformAdmin !== true
+    ) {
+      return;
+    }
+
+    setError(null);
+
+    try {
+      const response = await cloneProfileMutation.mutateAsync(profileId);
+      setCloneTargetId(null);
+      setSelectedId(response.profile.id);
+    } catch (err) {
+      setError(formatError(err));
+    }
+  }
+
+  function handleProfileImported(profileId: string) {
+    setImportOpen(false);
+    setSelectedId(profileId);
+  }
+
   async function handleDeleteConfirm() {
     const profileId = deleteTargetId;
-    const profile = profileId ? profiles.find((entry) => entry.id === profileId) : null;
 
-    if (!profileId || !profile || profile.isSuper) {
+    const profile = profileId
+      ? profiles.find((entry) => entry.id === profileId)
+      : null;
+
+    if (
+      !(profileId && profile) ||
+      profile.isSuper ||
+      (profile.isDefault === true && profiles.length < 3)
+    ) {
       return;
     }
 
@@ -631,21 +947,29 @@ export function useProfilesPage() {
   }
 
   async function handleAssignTool(toolId: string) {
-    if (!selectedId) {
+    if (!(selectedId && canManageProfile)) {
       return;
     }
 
     setError(null);
 
     try {
-      await assignMutation.mutateAsync({ profileId: selectedId, toolId });
+      const pluginId = allTools.find((tool) => tool.id === toolId)?.pluginId;
+
+      const ids = pluginId
+        ? availableTools.flatMap((tool) =>
+            tool.pluginId === pluginId ? [tool.id] : []
+          )
+        : [toolId];
+
+      await assignMutation.mutateAsync({ profileId: selectedId, toolId: ids });
     } catch (err) {
       setError(formatError(err));
     }
   }
 
   async function handleAssignMcpServer(serverId: string) {
-    if (!selectedId) {
+    if (!(selectedId && canManageProfile)) {
       return;
     }
 
@@ -656,20 +980,25 @@ export function useProfilesPage() {
         profileId: selectedId,
         serverId,
       });
+      setMcpCreateOpen(false);
     } catch (err) {
       setError(formatError(err));
     }
   }
 
   async function handleCreateMcpServer(request: CreateMcpServerRequest) {
-    if (!selectedId) {
+    if (!(selectedId && canManageProfile)) {
       return;
     }
 
     setError(null);
 
     try {
-      const response = await createMcpMutation.mutateAsync({ ...request, connect: true });
+      const response = await createMcpMutation.mutateAsync({
+        ...request,
+        connect: true,
+      });
+
       await assignMcpMutation.mutateAsync({
         profileId: selectedId,
         serverId: response.server.id,
@@ -684,7 +1013,11 @@ export function useProfilesPage() {
 
   async function handleAssignSkill(skillId: string) {
     if (!selectedId) {
-      return;
+      throw new Error("Select a profile first.");
+    }
+
+    if (!canManageProfile) {
+      throw new Error("Profile assignments are read-only.");
     }
 
     setError(null);
@@ -693,17 +1026,32 @@ export function useProfilesPage() {
       await assignSkillMutation.mutateAsync({ profileId: selectedId, skillId });
     } catch (err) {
       setError(formatError(err));
+      throw err;
     }
+  }
+
+  async function handleAssignBash() {
+    if (!selectedId) {
+      throw new Error("Select a profile first.");
+    }
+
+    if (!canManageProfile) {
+      throw new Error("Profile assignments are read-only.");
+    }
+
+    await assignMutation.mutateAsync({
+      profileId: selectedId,
+      toolId: [BASH_TOOL_ID],
+    });
   }
 
   async function handleDeleteSkill(skillId: string) {
     const skill = allSkills.find((entry) => entry.id === skillId);
 
-    if (!skill) {
+    if (!(skill && canManageProfile)) {
       return;
     }
 
-    // Confirmation lives in SkillAssignPicker — window.confirm cannot run while that Dialog is open.
     setError(null);
 
     try {
@@ -715,7 +1063,7 @@ export function useProfilesPage() {
   }
 
   async function handleCreateSkill(request: CreateSkillRequest) {
-    if (!selectedId) {
+    if (!(selectedId && canManageProfile)) {
       return;
     }
 
@@ -735,8 +1083,25 @@ export function useProfilesPage() {
     }
   }
 
+  async function handleInstallSkill(request: InstallSkillRequest) {
+    if (!(selectedId && canManageProfile)) {
+      return;
+    }
+
+    setError(null);
+
+    try {
+      await installSkillMutation.mutateAsync(request);
+      setSkillInstallOpen(false);
+    } catch (err) {
+      const message = formatError(err);
+      setError(message);
+      throw new Error(message);
+    }
+  }
+
   async function handleAssignComposioToolkit(toolkitId: string) {
-    if (!selectedId || !profileComposioData) {
+    if (!(selectedId && profileComposioData && canManageProfile)) {
       return;
     }
 
@@ -744,14 +1109,14 @@ export function useProfilesPage() {
 
     try {
       await updateComposioMutation.mutateAsync({
-        profileId: selectedId,
         assignments: [
           ...profileComposioData.assignments.map((assignment) => ({
-            toolkitId: assignment.toolkitId,
             allowedActions: assignment.allowedActions,
+            toolkitId: assignment.toolkitId,
           })),
           { toolkitId },
         ],
+        profileId: selectedId,
       });
     } catch (err) {
       setError(formatError(err));
@@ -759,7 +1124,7 @@ export function useProfilesPage() {
   }
 
   async function handleRemoveAssignmentConfirm() {
-    if (!selectedId || !removeConfirm) {
+    if (!(selectedId && removeConfirm && canManageProfile)) {
       return;
     }
 
@@ -767,9 +1132,15 @@ export function useProfilesPage() {
 
     try {
       if (removeConfirm.kind === "tool") {
-        await unassignMutation.mutateAsync({ profileId: selectedId, toolId: removeConfirm.id });
+        await unassignMutation.mutateAsync({
+          profileId: selectedId,
+          toolId: removeConfirm.ids ?? [removeConfirm.id],
+        });
       } else if (removeConfirm.kind === "mcp") {
-        await unassignMcpMutation.mutateAsync({ profileId: selectedId, serverId: removeConfirm.id });
+        await unassignMcpMutation.mutateAsync({
+          profileId: selectedId,
+          serverId: removeConfirm.id,
+        });
       } else if (removeConfirm.kind === "composio") {
         if (!profileComposioData) {
           return;
@@ -783,17 +1154,20 @@ export function useProfilesPage() {
           }
 
           assignments.push({
-            toolkitId: assignment.toolkitId,
             allowedActions: assignment.allowedActions,
+            toolkitId: assignment.toolkitId,
           });
         }
 
         await updateComposioMutation.mutateAsync({
-          profileId: selectedId,
           assignments,
+          profileId: selectedId,
         });
       } else {
-        await unassignSkillMutation.mutateAsync({ profileId: selectedId, skillId: removeConfirm.id });
+        await unassignSkillMutation.mutateAsync({
+          profileId: selectedId,
+          skillId: removeConfirm.id,
+        });
       }
 
       setRemoveConfirm(null);
@@ -802,12 +1176,14 @@ export function useProfilesPage() {
     }
   }
 
-  async function handleAvatarSelected(event: React.ChangeEvent<HTMLInputElement>) {
+  async function handleAvatarSelected(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
     const file = event.target.files?.[0];
 
     event.target.value = "";
 
-    if (!selectedId || !file) {
+    if (!(selectedId && file && canManageProfile)) {
       return;
     }
 
@@ -818,13 +1194,44 @@ export function useProfilesPage() {
 
       if (!attachment) {
         setError("Could not read the selected image.");
+
         return;
       }
 
-      await uploadAvatarMutation.mutateAsync({ profileId: selectedId, attachment });
+      await uploadAvatarMutation.mutateAsync({
+        attachment,
+        profileId: selectedId,
+      });
     } catch (err) {
       setError(formatError(err));
     }
+  }
+
+  async function handleAvatarPreset(svg: string) {
+    if (!(selectedId && canManageProfile)) {
+      return;
+    }
+
+    setError(null);
+
+    try {
+      await uploadAvatarMutation.mutateAsync({
+        attachment: await svgToPngAttachment(svg),
+        profileId: selectedId,
+      });
+    } catch (err) {
+      setError(formatError(err));
+    }
+  }
+
+  async function handleAvatarRemove() {
+    if (!(selectedId && canManageProfile)) {
+      return;
+    }
+
+    setError(null);
+
+    await deleteAvatarMutation.mutateAsync(selectedId);
   }
 
   function handleCreateOpenChange(open: boolean) {
@@ -835,88 +1242,113 @@ export function useProfilesPage() {
     ? profiles.find((entry) => entry.id === deleteTargetId)
     : null;
 
+  const cloneTarget = cloneTargetId
+    ? profiles.find((entry) => entry.id === cloneTargetId)
+    : null;
 
   return {
+    acpAgentId,
+    acpAgentPresets,
+    acpCurrentModelSelection: acpModelControls.currentModelSelection,
+    acpEffortOptions: acpModelControls.effortOptions,
+    acpEffortValue: acpModelControls.effortValue,
+    acpIsSaving: acpModelControls.isSaving,
+    acpModelGroups: acpModelControls.providerModelGroups,
+    allMcpServers,
+    allSkills,
+    allTools,
+    assignedComposioToolkits,
+    assignedSkillIds,
+    assignMcpMutation,
+    assignSkillMutation,
+    availableComposioToolkits,
+    availableMcpServers,
+    availableTools,
+    avatarInputRef,
+    busy,
+    canManageProfile,
+    cloneProfileMutation,
+    cloneTarget,
+    cloneTargetId,
+    composioToolkitsData,
+    createMcpMutation,
+    createOpen,
+    createSkillMutation,
+    deleteAvatarMutation,
+    deleteMutation,
+    deleteOpen,
+    deleteTarget,
+    deleteTargetId,
+    detail,
+    detailError,
+    detailLoading,
+    detailTab,
+    editModel,
+    editName,
+    editPrompt,
+    error,
+    flushSave,
+    handleAssignBash,
+    handleAssignComposioToolkit,
+    handleAssignMcpServer,
+    handleAssignSkill,
+    handleAssignTool,
+    handleAvatarPreset,
+    handleAvatarRemove,
+    handleAvatarSelected,
+    handleCloneConfirm,
+    handleCloneOpenChange,
+    handleCreateMcpServer,
+    handleCreateOpenChange,
+    handleCreateSkill,
+    handleDeleteConfirm,
+    handleDeleteOpenChange,
+    handleDeleteSkill,
+    handleEditAcpAgent,
+    handleEditModelChange,
+    handleEditNameChange,
+    handleEditPromptChange,
+    handleInstallSkill,
+    handleProfileImported,
+    handleRemoveAssignmentConfirm,
+    importOpen,
+    installSkillMutation,
+    isDirty,
+    mcpCreateOpen,
+    modelInCatalog,
+    modelSelectionValue,
+    modelsResponse,
+    openCloneDialog,
+    openDeleteDialog,
+    profileComposioData,
     profiles,
     profilesLoading,
     profilesRefreshing,
-    allTools,
-    allMcpServers,
-    composioToolkitsData,
-    selectedId,
-    profileComposioData,
-    allSkills,
-    modelsResponse,
-    detail,
-    detailLoading,
-    detailError,
-    refetchDetail,
-    busy,
-    error,
-    createOpen,
-    setCreateOpen,
-    deleteOpen,
-    setDeleteOpen,
-    deleteTargetId,
-    deleteTarget,
-    removeConfirm,
-    setRemoveConfirm,
-    mcpCreateOpen,
-    setMcpCreateOpen,
-    skillCreateOpen,
-    setSkillCreateOpen,
-    detailSkillId,
-    setDetailSkillId,
-    searchQuery,
-    setSearchQuery,
-    editName,
-    editPrompt,
-    editModel,
-    saveStatus,
-    isDirty,
-    trimmedSearch,
-    isSearching,
-    refreshing,
-    detailTab,
     providerModelGroups,
-    modelSelectionValue,
-    modelInCatalog,
-    filteredProfiles,
-    availableTools,
-    availableMcpServers,
-    assignedComposioToolkits,
-    availableComposioToolkits,
-    assignedSkillIds,
-    avatarInputRef,
-    uploadAvatarMutation,
-    createSkillMutation,
-    assignSkillMutation,
-    createMcpMutation,
-    assignMcpMutation,
-    deleteMutation,
-    unassignMutation,
-    unassignMcpMutation,
-    unassignSkillMutation,
-    handleSelectProfile,
-    openDeleteDialog,
-    handleDeleteOpenChange,
-    handleDeleteConfirm,
-    handleAssignTool,
-    handleAssignMcpServer,
-    handleCreateMcpServer,
-    handleAssignSkill,
-    handleDeleteSkill,
-    handleCreateSkill,
-    handleAssignComposioToolkit,
-    handleRemoveAssignmentConfirm,
-    handleAvatarSelected,
-    handleCreateOpenChange,
-    handleEditNameChange,
-    handleEditPromptChange,
-    handleEditModelChange,
-    flushSave,
+    refetchDetail,
+    refreshing,
+    removeConfirm,
+    saveStatus,
+    selectedId,
+    setAcpEffort: acpModelControls.setEffort,
+    setAcpModel: acpModelControls.setModel,
+    setCreateOpen,
+    setDeleteOpen,
     setDetailTab,
+    setImportOpen,
+    setMcpCreateOpen,
+    setRemoveConfirm,
     setSelectedId,
+    setSkillCreateOpen,
+    setSkillInstallOpen,
+    skillCreateOpen,
+    skillInstallOpen,
+    skillsError,
+    skillsLoading,
+    unassignMcpMutation,
+    unassignMutation,
+    unassignSkillMutation,
+    uploadAvatarMutation,
   };
 }
 

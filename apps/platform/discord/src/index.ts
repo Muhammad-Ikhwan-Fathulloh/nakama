@@ -1,30 +1,71 @@
-import { createClient } from "@nakama/client";
-import { ChannelOrgStore, getChannelOrgSelectionPath } from "@nakama/core/channel-org";
-import { ensureServerRunning, stopSpawnedServer } from "@nakama/core/ensure-server";
+import { join } from "node:path";
+import { NakamaClient } from "@nakama/client";
+import {
+  installErrorHandlers,
+  installErrorTrackingSink,
+  log,
+} from "@nakama/core";
+import { hasActiveStreams } from "@nakama/core/channel-active-stream";
+import { channelOwnerFromEnv } from "@nakama/core/channel-config-shared";
+import { ChannelOrgStore } from "@nakama/core/channel-org";
+import { ChannelSessionStore } from "@nakama/core/channel-session-store";
+import { getDiscordConfigDir } from "@nakama/core/discord-config";
+import {
+  createDiscordWorkerHeartbeat,
+  isHeartbeatAlive,
+} from "@nakama/core/discord-worker";
+
+import {
+  ensureServerRunning,
+  stopSpawnedServer,
+} from "@nakama/core/ensure-server";
 import { loadLocalAuthToken } from "@nakama/core/local-auth";
 import { resolveWebPublicUrl } from "@nakama/core/runtime";
-import {
-  clearDiscordWorkerHeartbeat,
-  isHeartbeatAlive,
-  readDiscordWorkerHeartbeat,
-  writeDiscordWorkerHeartbeat,
-} from "@nakama/core/discord-worker";
 import { DiscordAuthStore } from "./auth-store";
 import { createBot } from "./bot";
 import { loadConfig } from "./config";
-import { SessionStore } from "./session-store";
+import { ThreadStore } from "./thread-store";
+
+installErrorHandlers("worker:discord");
+
+void installErrorTrackingSink();
+
+const owner = channelOwnerFromEnv();
+
+const heartbeat = createDiscordWorkerHeartbeat(owner);
+
+const clearDiscordWorkerHeartbeat = heartbeat.clear;
+
+const readDiscordWorkerHeartbeat = heartbeat.read;
+
+const writeDiscordWorkerHeartbeat = (
+  pid: number,
+  updatedAt: string,
+  connected: boolean
+) => heartbeat.write({ connected, pid, updatedAt });
 
 let spawnedChild: Bun.Subprocess | null = null;
-let clientStop: (() => void) | null = null;
+
+let clientStop: (() => void | Promise<void>) | null = null;
+
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
-registerCleanupHandlers(() => {
-  clientStop?.();
+registerCleanupHandlers(async () => {
+  await clientStop?.();
+
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
   }
+
   void clearDiscordWorkerHeartbeat();
-  stopSpawnedServer(spawnedChild);
+
+  if (hasActiveStreams()) {
+    console.warn(
+      "Leaving the spawned Nakama server running so in-flight agent turns can finish; the next worker start will reuse it."
+    );
+  } else {
+    stopSpawnedServer(spawnedChild);
+  }
 });
 
 try {
@@ -37,25 +78,33 @@ try {
   ) {
     console.error(
       `Another Nakama Discord bridge is already running (pid ${existingHeartbeat.pid}). ` +
-        "Stop the existing bridge worker or disable it in the dashboard before starting a new one.",
+        "Stop the existing bridge worker or disable it in the dashboard before starting a new one."
     );
     process.exit(1);
   }
 
   const config = await loadConfig();
-  const { serverUrl, spawnedChild: child } = await ensureServerRunning();
+  await heartbeat.acquire();
+
+  const { serverUrl, spawnedChild: child } = await ensureServerRunning({
+    spawn: false,
+  });
+
   spawnedChild = child;
 
-  const client = createClient({
+  const client = new NakamaClient({
+    authToken:
+      (await loadLocalAuthToken("discord@nakama.internal")) ?? undefined,
     baseUrl: serverUrl,
-    authToken: (await loadLocalAuthToken("discord@nakama.internal")) ?? undefined,
     clientOrigin: resolveWebPublicUrl(),
+    orgId: owner.orgId,
   });
+
   const health = await client.health();
 
   if (!health.providerConfigured) {
     console.warn(
-      "Server has no provider configured. Chat runs in offline mode until an API key is set.",
+      "Server has no provider configured. Chat runs in offline mode until an API key is set."
     );
   }
 
@@ -66,56 +115,110 @@ try {
     console.error(
       `Nakama API authentication failed: ${message}\n` +
         "Restart the server so it can provision the local client user:\n" +
-        "  bun run dev:server",
+        "  bun run dev:server"
     );
     process.exit(1);
   }
 
-  const sessionStore = new SessionStore();
+  const sessionStore = new ChannelSessionStore(
+    join(getDiscordConfigDir(owner), "chat-sessions.json")
+  );
+
   await sessionStore.load();
 
-  const orgStore = new ChannelOrgStore(getChannelOrgSelectionPath("discord"));
+  const threadStore = new ThreadStore(
+    join(getDiscordConfigDir(owner), "chat-threads.json")
+  );
+
+  await threadStore.load();
+
+  const orgStore = new ChannelOrgStore(
+    join(getDiscordConfigDir(owner), "org-selection.json")
+  );
+
   await orgStore.load();
 
-  const authStore = new DiscordAuthStore();
+  const authStore = new DiscordAuthStore(owner);
   await authStore.reload();
 
   const discord = await createBot(config, {
-    client,
     authStore,
-    sessionStore,
+    client,
     orgStore,
+    sessionStore,
+    threadStore,
   });
 
-  console.log("Nakama Discord bridge running.");
+  log("info", "worker.started", { worker: "discord" });
   console.log(`Server: ${serverUrl}`);
   console.log(`Profile: ${config.profileId}`);
   const authConfig = authStore.getConfig();
   const paired = authConfig?.pairedUserIds.length ?? 0;
   const pendingHandshake = authConfig?.handshakeCode ? "yes" : "no";
-  console.log(`Paired users: ${paired} · Pending handshake: ${pendingHandshake}`);
+  console.log(
+    `Paired users: ${paired} · Pending handshake: ${pendingHandshake}`
+  );
   console.log(`Bot: ${discord.user.tag}`);
 
-  clientStop = () => {
-    void discord.destroy();
+  // Assign before heartbeat so failure paths can always destroy the client.
+  clientStop = async () => {
+    await discord.destroy();
   };
 
-  await writeDiscordWorkerHeartbeat(process.pid, new Date().toISOString(), true);
+  await writeDiscordWorkerHeartbeat(
+    process.pid,
+    new Date().toISOString(),
+    true
+  );
   heartbeatTimer = setInterval(() => {
-    void writeDiscordWorkerHeartbeat(process.pid, new Date().toISOString(), true);
+    void writeDiscordWorkerHeartbeat(
+      process.pid,
+      new Date().toISOString(),
+      true
+    );
   }, 15_000);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
+
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+
+  try {
+    await clientStop?.();
+  } catch {
+    // Destroy best-effort on fatal path.
+  }
+
+  // Await before exit — void + process.exit can leave a stale heartbeat file.
+  await clearDiscordWorkerHeartbeat();
   stopSpawnedServer(spawnedChild);
   process.exit(1);
 }
 
-function registerCleanupHandlers(cleanup: () => void): void {
+function registerCleanupHandlers(cleanup: () => void | Promise<void>): void {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    process.on(signal, () => {
-      cleanup();
-      process.exit(0);
+    process.on(signal, async () => {
+      try {
+        await cleanup();
+      } finally {
+        process.exit(0);
+      }
+    });
+  }
+
+  // pm2 stops Windows workers with a "shutdown" message instead of a signal.
+  if (process.platform === "win32") {
+    process.on("message", async (message) => {
+      if (message === "shutdown") {
+        try {
+          await cleanup();
+        } finally {
+          process.exit(0);
+        }
+      }
     });
   }
 }

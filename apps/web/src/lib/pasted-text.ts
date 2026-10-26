@@ -1,5 +1,5 @@
 import type { MessageContentPart } from "@nakama/core/contract";
-import type { FileUIPart } from "ai";
+import type { FileUIPart } from "@/lib/ai-ui-types";
 
 export const LONG_PASTE_WORD_THRESHOLD = 300;
 
@@ -11,6 +11,7 @@ export function normalizePastedText(text: string): string {
 
 export function countWords(text: string): number {
   const normalized = normalizePastedText(text).trim();
+
   if (!normalized) {
     return 0;
   }
@@ -18,22 +19,31 @@ export function countWords(text: string): number {
   return normalized.split(/\s+/).filter(Boolean).length;
 }
 
-export function pastedTextFilename(wordCount: number): string {
+function pastedTextFilename(wordCount: number): string {
   return `Pasted text (${wordCount} words).txt`;
 }
 
 export function createPastedTextFile(text: string): File {
   const normalized = normalizePastedText(text);
   const wordCount = countWords(normalized);
-  return new File([normalized], pastedTextFilename(wordCount), { type: "text/plain" });
+
+  return new File([normalized], pastedTextFilename(wordCount), {
+    type: "text/plain",
+  });
 }
 
-export function isPastedTextDocument(filename: string, mediaType: string): boolean {
-  return mediaType.startsWith("text/plain") && PASTED_TEXT_FILENAME_RE.test(filename);
+export function isPastedTextDocument(
+  filename: string,
+  mediaType: string
+): boolean {
+  return (
+    mediaType.startsWith("text/plain") && PASTED_TEXT_FILENAME_RE.test(filename)
+  );
 }
 
 export function wordCountFromPastedFilename(filename: string): number | null {
   const match = filename.match(PASTED_TEXT_FILENAME_RE);
+
   if (!match) {
     return null;
   }
@@ -47,7 +57,7 @@ export interface DisplayDocument {
 }
 
 export function documentDisplayFromContentPart(
-  part: Extract<MessageContentPart, { type: "document" }>,
+  part: Extract<MessageContentPart, { type: "document" | "document_ref" }>
 ): DisplayDocument {
   return {
     filename: part.filename,

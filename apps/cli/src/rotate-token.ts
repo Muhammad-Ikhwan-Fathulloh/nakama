@@ -1,4 +1,5 @@
 import {
+  getLocalAuthTokenPath,
   LocalAuthTokenManagedExternallyError,
   rotateLocalAuthToken,
 } from "@nakama/core/local-auth";
@@ -8,18 +9,20 @@ export function isRotateTokenCommand(argv = process.argv.slice(2)): boolean {
 }
 
 export async function runRotateToken(): Promise<void> {
-  const token = await rotateLocalAuthToken();
+  await rotateLocalAuthToken();
 
   console.log("Local auth token rotated.");
-  console.log(token);
+  console.log(`Token file: ${getLocalAuthTokenPath()}`);
   console.log("");
-  console.log("Workers reload from disk on the next request. Restart them if anything stays disconnected.");
+  console.log(
+    "Workers reload from disk on the next request. Restart them if anything stays disconnected."
+  );
 }
 
-export function formatRotateTokenError(error: unknown): string {
+export function formatRotateTokenError(error: Error | string): string {
   if (error instanceof LocalAuthTokenManagedExternallyError) {
     return error.message;
   }
 
-  return error instanceof Error ? error.message : String(error);
+  return error instanceof Error ? error.message : error;
 }

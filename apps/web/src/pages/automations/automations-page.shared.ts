@@ -1,25 +1,116 @@
 import type {
   AutomationRunRecord,
-  AutomationRunStatus,
   AutomationTrigger,
   StoredAutomation,
 } from "@nakama/core/contract";
+import { Cron } from "croner";
+import { type ChatListItem, chatMessagesToListItems } from "@/lib/chat-history";
 
-export const sectionClass = "rounded-md border border-border bg-card";
+export function automationRunMessages(
+  run: AutomationRunRecord
+): ChatListItem[] {
+  const running = run.status === "running";
 
-export function formatTrigger(trigger: AutomationTrigger): string {
+  const transcript = run.progress?.length
+    ? run.progress
+    : run.output
+      ? [{ content: run.output, role: "assistant" as const }]
+      : [];
+
+  const messages: ChatListItem[] = chatMessagesToListItems(transcript).map(
+    (message) => ({
+      ...message,
+      createdAt: run.startedAt,
+      streaming:
+        running &&
+        message.role === "assistant" &&
+        message.historyIndex === transcript.length - 1,
+      thinkingStreaming:
+        running &&
+        Boolean(message.thinking) &&
+        !message.content &&
+        message.historyIndex === transcript.length - 1,
+      toolStatus:
+        running && message.role === "tool" && !message.toolCompletedAt
+          ? ("running" as const)
+          : message.toolStatus,
+    })
+  );
+
+  if (running && (!messages.length || messages.at(-1)?.role === "user")) {
+    messages.push({
+      content: "",
+      createdAt: run.startedAt,
+      id: `${run.id}-waiting`,
+      role: "assistant",
+      streaming: true,
+      thinkingStreaming: false,
+      toolStatus: undefined,
+    });
+  }
+
+  if (run.error) {
+    return [
+      ...messages,
+      {
+        content: run.error,
+        failed: true,
+        id: `${run.id}-error`,
+        role: "assistant",
+      },
+    ];
+  }
+
+  return messages;
+}
+
+const DAILY_CRON = /^(\d{1,2}) (\d{1,2}) \* \* \*$/;
+
+interface TriggerDescription {
+  label: string;
+  note?: string;
+}
+
+export function describeTrigger(
+  trigger: AutomationTrigger
+): TriggerDescription {
   if (trigger.type === "manual") {
-    return "Manual trigger";
+    return { label: "Manual only", note: "Starts when you press Run now" };
   }
 
   if (trigger.type === "runAt") {
-    return `One-time · ${trigger.at}${trigger.timezone ? ` (${trigger.timezone})` : ""}`;
+    return { label: `Once, ${trigger.at}`, note: trigger.timezone };
   }
 
-  return `Schedule · ${trigger.cron}${trigger.timezone ? ` (${trigger.timezone})` : ""}`;
+  const preset = readSchedulePreset(trigger);
+
+  if (preset?.frequency === "hourly") {
+    return {
+      label: `${preset.everyHours === "1" ? "Every hour" : `Every ${preset.everyHours} hours`} at :${preset.minute.padStart(2, "0")}`,
+      note: trigger.timezone,
+    };
+  }
+
+  const daily = DAILY_CRON.exec(trigger.cron.trim());
+
+  if (daily) {
+    const time = new Date(2000, 0, 1, Number(daily[2]), Number(daily[1]));
+
+    return {
+      label: `Every day, ${time.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`,
+      note: trigger.timezone,
+    };
+  }
+
+  return {
+    label: "Custom schedule",
+    note: [trigger.cron, trigger.timezone].filter(Boolean).join(" · "),
+  };
 }
 
-export function summarizeAutomationListMeta(automation: StoredAutomation): string {
+export function summarizeAutomationListMeta(
+  automation: StoredAutomation
+): string {
   if (automation.trigger.type === "manual") {
     return "Manual run";
   }
@@ -31,68 +122,7 @@ export function summarizeAutomationListMeta(automation: StoredAutomation): strin
   return "Scheduled automation";
 }
 
-export function groupRunsByDay(
-  runs: AutomationRunRecord[],
-): Array<{ label: string; runs: AutomationRunRecord[] }> {
-  const buckets = new Map<string, AutomationRunRecord[]>();
-
-  for (const run of runs) {
-    const label = formatRunDayLabel(run.startedAt);
-    const bucket = buckets.get(label);
-    if (bucket) {
-      bucket.push(run);
-    } else {
-      buckets.set(label, [run]);
-    }
-  }
-
-  return Array.from(buckets, ([label, groupedRuns]) => ({ label, runs: groupedRuns }));
-}
-
-export function formatRunDayLabel(value: string): string {
-  const date = new Date(value);
-  const now = new Date();
-
-  if (Number.isNaN(date.getTime())) {
-    return "Earlier";
-  }
-
-  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const diffDays = Math.round((startOfToday - startOfDate) / 86_400_000);
-
-  if (diffDays === 0) {
-    return "Today";
-  }
-
-  if (diffDays === 1) {
-    return "Yesterday";
-  }
-
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: date.getFullYear() === now.getFullYear() ? undefined : "numeric",
-  });
-}
-
-export function runHistoryShellClass(status: AutomationRunStatus): string {
-  if (status === "failed") {
-    return "border-destructive/30";
-  }
-
-  if (status === "running") {
-    return "border-border/80";
-  }
-
-  return "border-border/60";
-}
-
 export function runPreviewText(run: AutomationRunRecord): string | null {
-  if (run.status === "running" && !run.output?.trim() && !run.error?.trim()) {
-    return "Run in progress…";
-  }
-
   if (run.status === "failed" && run.error?.trim()) {
     return run.error.trim();
   }
@@ -134,7 +164,10 @@ function truncatePlainText(text: string, maxLength: number): string {
   return `${normalized.slice(0, maxLength).trimEnd()}…`;
 }
 
-export function formatRunDuration(startedAt: string, completedAt: string | null): string | null {
+export function formatRunDuration(
+  startedAt: string,
+  completedAt: string | null
+): string | null {
   if (!completedAt) {
     return null;
   }
@@ -153,7 +186,167 @@ export function formatRunDuration(startedAt: string, completedAt: string | null)
   }
 
   const minutes = Math.floor(seconds / 60);
+
+  if (minutes >= 60) {
+    const hourMinutes = minutes % 60;
+
+    return hourMinutes > 0
+      ? `${Math.floor(minutes / 60)}h ${hourMinutes}m`
+      : `${Math.floor(minutes / 60)}h`;
+  }
+
   const remainder = seconds % 60;
 
   return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+// Steps that divide 24, so the gap across midnight matches the others.
+export const HOURLY_INTERVALS = ["1", "2", "3", "4", "6", "8", "12"];
+
+export function readSchedulePreset(trigger: AutomationTrigger) {
+  if (trigger.type !== "schedule") {
+    return null;
+  }
+
+  const match =
+    /^(\d|[0-5]\d) (\*(?:\/\d{1,2})?|\d|1\d|2[0-3]) (\*|[1-9]|[12]\d|3[01]) \* (\*|1-5|[0-6])$/.exec(
+      trigger.cron.trim()
+    );
+
+  if (!match) {
+    return null;
+  }
+
+  const [, minute, hour, day, weekday] = match;
+
+  const hourly = hour.startsWith("*");
+
+  const everyHours = hour === "*" ? "1" : hour.slice(2);
+
+  if (
+    (day !== "*" && weekday !== "*") ||
+    (hourly &&
+      (day !== "*" ||
+        weekday !== "*" ||
+        !HOURLY_INTERVALS.includes(everyHours)))
+  ) {
+    return null;
+  }
+
+  return {
+    day,
+    everyHours,
+    frequency:
+      day === "*"
+        ? weekday === "*"
+          ? hourly
+            ? "hourly"
+            : "daily"
+          : weekday === "1-5"
+            ? "weekdays"
+            : "weekly"
+        : "monthly",
+    hour,
+    minute,
+    weekday,
+  };
+}
+
+export function schedulePresetTrigger(
+  frequency: string,
+  trigger: AutomationTrigger
+): AutomationTrigger {
+  if (frequency === "manual") {
+    return { type: "manual" };
+  }
+
+  const preset = readSchedulePreset(trigger);
+
+  const day =
+    frequency === "monthly"
+      ? preset?.frequency === "monthly"
+        ? preset.day
+        : "1"
+      : "*";
+
+  const weekday =
+    frequency === "weekdays"
+      ? "1-5"
+      : frequency === "weekly"
+        ? preset?.frequency === "weekly"
+          ? preset.weekday
+          : "1"
+        : "*";
+
+  const hour =
+    frequency === "hourly"
+      ? preset?.frequency === "hourly"
+        ? preset.hour
+        : "*"
+      : preset && preset.frequency !== "hourly"
+        ? preset.hour
+        : "7";
+
+  return {
+    cron: `${preset?.minute ?? "0"} ${hour} ${day} * ${weekday}`,
+    timezone: trigger.type === "manual" ? undefined : trigger.timezone,
+    type: "schedule",
+  };
+}
+
+export function previewAutomationSchedule(
+  trigger: AutomationTrigger,
+  timezone: string,
+  now = new Date()
+): string | null {
+  if (trigger.type === "manual") {
+    return null;
+  }
+
+  try {
+    const next =
+      trigger.type === "runAt"
+        ? new Date(trigger.at)
+        : new Cron(trigger.cron, { paused: true, timezone }).nextRun(now);
+
+    if (!(next && Number.isFinite(next.getTime())) || next <= now) {
+      return null;
+    }
+
+    const dateFormat = new Intl.DateTimeFormat("en-US", {
+      day: "2-digit",
+      month: "2-digit",
+      timeZone: timezone,
+      year: "numeric",
+    });
+
+    const localNow = new Date(dateFormat.format(now));
+    const localNext = new Date(dateFormat.format(next));
+
+    const dayDifference = Math.round(
+      (localNext.getTime() - localNow.getTime()) / 86_400_000
+    );
+
+    const day =
+      dayDifference === 0
+        ? "Today"
+        : dayDifference === 1
+          ? "Tomorrow"
+          : next.toLocaleDateString("en-US", {
+              day: "numeric",
+              month: "short",
+              timeZone: timezone,
+              weekday: "short",
+            });
+
+    const time = next.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: timezone,
+    });
+
+    return `${day}, ${time}`;
+  } catch {
+    return null;
+  }
 }

@@ -1,124 +1,193 @@
 import { describe, expect, test } from "bun:test";
-import type { OrgRole } from "@nakama/core";
-import { createHonoApp } from "../app";
-import { AuthService } from "../../services/auth-service";
-import { OrgService } from "../../services/org-service";
-import { createInMemoryDatabaseAdapter } from "@nakama/db";
-import { loginUserSession } from "../test-session-helpers";
+import {
+  createInMemoryDatabaseAdapter,
+  seedOrgDefaultProfile,
+} from "@nakama/db";
+import { AgentService } from "../../services/agent-service";
 import { setupTestConfigDir } from "../../test-config-dir";
+import { createMinimalHonoApp } from "../test-app-helpers";
+import {
+  loginUserSession,
+  seedOrgAdmin,
+  setupFreshInstallSession,
+} from "../test-session-helpers";
 
 setupTestConfigDir("nakama-rbac-mutations-test-");
 
 const ORG_ID = "org_test";
+
 const PASSWORD = "password123";
 
+test("automation run deletion is unavailable and preserves history", async () => {
+  const { app, databaseAdapter } = createMinimalHonoApp();
+  const admin = await setupFreshInstallSession(app, databaseAdapter);
+  const profile = await seedOrgDefaultProfile(databaseAdapter, admin.orgId!);
+  const now = new Date().toISOString();
+  await databaseAdapter.upsertAutomation({
+    createdAt: now,
+    definition: {},
+    enabled: true,
+    id: "automation_keep",
+    name: "Keep history",
+    orgId: admin.orgId!,
+    profileId: profile.id,
+    updatedAt: now,
+    version: 1,
+  });
+
+  const run = {
+    automationId: "automation_keep",
+    completedAt: now,
+    error: null,
+    id: "run_keep",
+    output: "Saved output",
+    startedAt: now,
+    status: "completed" as const,
+  };
+
+  await databaseAdapter.insertAutomationRun(run);
+
+  const response = await app.fetch(
+    new Request(
+      "http://localhost:4310/v1/automations/automation_keep/runs/run_keep",
+      {
+        headers: admin.headers({ "X-CSRF-Token": admin.csrfToken }),
+        method: "DELETE",
+      }
+    )
+  );
+
+  expect(response.status).toBe(404);
+  expect(
+    await databaseAdapter.getAutomationRun(run.automationId, run.id)
+  ).toMatchObject(run);
+
+  const specResponse = await app.fetch(
+    new Request("http://localhost:4310/openapi.json", {
+      headers: admin.headers(),
+    })
+  );
+
+  expect(specResponse.status).toBe(200);
+  const spec = await specResponse.json();
+  expect(
+    spec.paths["/v1/automations/{automationId}/runs/{runId}"]
+  ).toBeUndefined();
+});
+
 function createApp() {
-  const databaseAdapter = createInMemoryDatabaseAdapter();
-  const authService = new AuthService();
   const calls: string[] = [];
-  const record = (name: string) =>
+
+  const record =
+    (name: string) =>
     async (..._args: unknown[]) => {
       calls.push(name);
+
+      // SAFETY: This test controls the fixture shape at this boundary.
       return { id: "x", name: "x", prompt: "x" } as any;
     };
 
-  const app = createHonoApp({
+  const result = createMinimalHonoApp({
     agent: {
-      listProfiles: async () => ({ profiles: [{ id: "default" }] }),
+      branchSession: record("agent.branchSession"),
+      clearSession: record("agent.clearSession"),
+      compactSession: record("agent.compactSession"),
+      createSession: record("agent.createSession"),
       draftAutomation: record("agent.draftAutomation"),
+      generateImage: record("agent.generateImage"),
+      listProfiles: async () => ({ profiles: [{ id: "default" }] }),
+      purgeSession: record("agent.purgeSession"),
       runAutomation: async () => {
         calls.push("agent.runAutomation");
+
         return { skipped: false };
       },
-      draftTaskPrompt: record("agent.draftTaskPrompt"),
-      runTask: async () => {
-        calls.push("agent.runTask");
-        return { skipped: false };
-      },
-    } as any,
+      transcribeAudio: record("agent.transcribeAudio"),
+    },
     automationService: {
       create: record("automationService.create"),
-      update: record("automationService.update"),
       delete: record("automationService.delete"),
       get: async () => ({ id: "a", name: "a", prompt: "x" }),
-      deleteRun: record("automationService.deleteRun"),
       listRuns: async () => [{ id: "r", status: "ok" }],
-    } as any,
-    taskService: {
-      create: record("taskService.create"),
-      update: record("taskService.update"),
-      delete: record("taskService.delete"),
-      get: async () => ({ id: "t", status: "todo" }),
-      listRuns: async () => [{ id: "r", status: "ok" }],
-    } as any,
-    systemStatus: { getStatus: async () => ({ ok: true }) } as any,
-    workerManager: {} as any,
-    mcpService: {} as any,
-    authService,
-    orgService: new OrgService(databaseAdapter, authService),
-    databaseAdapter,
-    webDistDir: null,
+      update: record("automationService.update"),
+    },
   });
 
-  return { app, databaseAdapter, authService, calls };
+  return { ...result, calls };
 }
 
-async function seedUser(
-  databaseAdapter: ReturnType<typeof createInMemoryDatabaseAdapter>,
-  authService: AuthService,
-  email: string,
-  role: OrgRole,
-) {
-  const now = new Date().toISOString();
-  const userId = `user_${role}`;
-  await databaseAdapter.createUser({
-    id: userId,
-    email,
-    passwordHash: await authService.hashPassword(PASSWORD),
-    createdAt: now,
-    updatedAt: now,
-  });
-  await databaseAdapter.upsertOrganization({
-    id: ORG_ID,
-    name: "Test Org",
-    slug: "test-org",
-    createdAt: now,
-    updatedAt: now,
-  });
-  await databaseAdapter.upsertOrgMember({ orgId: ORG_ID, userId, role, createdAt: now });
-}
+// State-changing routes require organization membership.
+const MUTATING_ROUTES: Array<{ method: string; path: string; body?: unknown }> =
+  [
+    {
+      body: { channel: "web", prompt: "x" },
+      method: "POST",
+      path: "/v1/automations/draft",
+    },
+    {
+      body: { name: "x", prompt: "x" },
+      method: "POST",
+      path: "/v1/automations",
+    },
+    { body: { name: "x" }, method: "PUT", path: "/v1/automations/a1" },
+    { method: "DELETE", path: "/v1/automations/a1" },
+    { method: "POST", path: "/v1/automations/a1/run" },
+    {
+      body: { channel: "web", profileId: "default" },
+      method: "POST",
+      path: "/v1/sessions",
+    },
+    { method: "DELETE", path: "/v1/sessions/s1" },
+    { method: "DELETE", path: "/v1/sessions/s1?purge=true" },
+    { body: { force: true }, method: "POST", path: "/v1/sessions/s1/compact" },
+    {
+      body: { messageIndex: 0 },
+      method: "POST",
+      path: "/v1/sessions/s1/branch",
+    },
+    {
+      body: { audioBase64: "YQ==", mimeType: "audio/wav" },
+      method: "POST",
+      path: "/v1/audio/transcribe",
+    },
+    {
+      body: { prompt: "a cat" },
+      method: "POST",
+      path: "/v1/images/generate",
+    },
+  ];
 
-// State-changing routes a viewer must not be able to reach.
-const MUTATING_ROUTES: Array<{ method: string; path: string; body?: unknown }> = [
-  { method: "POST", path: "/v1/automations/draft", body: { prompt: "x", channel: "web" } },
-  { method: "POST", path: "/v1/automations", body: { name: "x", prompt: "x" } },
-  { method: "PUT", path: "/v1/automations/a1", body: { name: "x" } },
-  { method: "DELETE", path: "/v1/automations/a1" },
-  { method: "POST", path: "/v1/automations/a1/run" },
-  { method: "DELETE", path: "/v1/automations/a1/runs/r1" },
-  { method: "POST", path: "/v1/tasks/draft-prompt", body: { title: "x", description: "x" } },
-  { method: "POST", path: "/v1/tasks", body: { title: "x", prompt: "x" } },
-  { method: "PUT", path: "/v1/tasks/t1", body: { title: "x" } },
-  { method: "DELETE", path: "/v1/tasks/t1" },
-  { method: "POST", path: "/v1/tasks/t1/run" },
-];
-
-describe("RBAC: viewer cannot reach state-changing automation/task routes", () => {
+describe("RBAC: removed member cannot reach state-changing automation/session routes", () => {
   for (const route of MUTATING_ROUTES) {
-    test(`${route.method} ${route.path} -> 403 for viewer`, async () => {
+    test(`${route.method} ${route.path} -> 404 for removed member`, async () => {
       const { app, databaseAdapter, authService, calls } = createApp();
-      await seedUser(databaseAdapter, authService, "viewer@example.com", "viewer");
-      const viewer = await loginUserSession(app, "viewer@example.com", PASSWORD, ORG_ID);
+      await seedOrgAdmin(databaseAdapter, {
+        authService,
+        email: "member@example.com",
+        orgId: ORG_ID,
+        password: PASSWORD,
+        role: "member",
+        userId: "user_secondary_member",
+      });
+
+      const member = await loginUserSession(
+        app,
+        "member@example.com",
+        PASSWORD,
+        ORG_ID
+      );
+
+      await databaseAdapter.deleteOrgMember(ORG_ID, "user_secondary_member");
 
       const response = await app.fetch(
         new Request(`http://localhost:4310${route.path}`, {
-          method: route.method,
-          headers: viewer.headers({ "X-CSRF-Token": viewer.csrfToken }),
           body: route.body ? JSON.stringify(route.body) : undefined,
-        }),
+          headers: member.headers({ "X-CSRF-Token": member.csrfToken }),
+          method: route.method,
+        })
       );
 
-      expect(response.status).toBe(403);
+      expect(response.status).toBe(404);
       // Guard must reject before any service/agent side effect runs.
       expect(calls).toEqual([]);
     });
@@ -126,19 +195,136 @@ describe("RBAC: viewer cannot reach state-changing automation/task routes", () =
 });
 
 describe("RBAC: admin can still reach the same routes (not a 403)", () => {
+  test.each(["admin", "member"] as const)(
+    "messaging Super Nakama sessions enforce the authenticated %s role",
+    async (role) => {
+      const databaseAdapter = createInMemoryDatabaseAdapter();
+      const agent = new AgentService(null, null, databaseAdapter);
+
+      const { app, authService } = createMinimalHonoApp({
+        agent,
+        databaseAdapter,
+      });
+
+      const email = `${role}@example.com`;
+      await seedOrgAdmin(databaseAdapter, {
+        authService,
+        email,
+        orgId: ORG_ID,
+        password: PASSWORD,
+        role,
+        userId: `user_${role}`,
+      });
+      const profile = await seedOrgDefaultProfile(databaseAdapter, ORG_ID);
+      await databaseAdapter.upsertProfile({ ...profile, isSuper: true });
+      const session = await loginUserSession(app, email, PASSWORD, ORG_ID);
+
+      for (const channel of ["telegram", "whatsapp", "discord"]) {
+        const response = await app.fetch(
+          new Request("http://localhost:4310/v1/sessions", {
+            body: JSON.stringify({ channel, profileId: profile.id }),
+            headers: session.headers({ "X-CSRF-Token": session.csrfToken }),
+            method: "POST",
+          })
+        );
+
+        expect(response.status).toBe(role === "admin" ? 201 : 403);
+
+        if (role === "admin") {
+          // SAFETY: This test controls the fixture shape at this boundary.
+          const body = (await response.json()) as { sessionId: string };
+          expect(
+            await databaseAdapter.getSession(body.sessionId)
+          ).toMatchObject({
+            channel,
+            profileId: profile.id,
+            userId: "user_admin",
+          });
+        }
+      }
+    }
+  );
+
   test("POST /v1/automations is not forbidden for admin", async () => {
     const { app, databaseAdapter, authService } = createApp();
-    await seedUser(databaseAdapter, authService, "admin@example.com", "admin");
-    const admin = await loginUserSession(app, "admin@example.com", PASSWORD, ORG_ID);
+    await seedOrgAdmin(databaseAdapter, {
+      authService,
+      email: "admin@example.com",
+      orgId: ORG_ID,
+      password: PASSWORD,
+      role: "admin",
+      userId: "user_admin",
+    });
+
+    const admin = await loginUserSession(
+      app,
+      "admin@example.com",
+      PASSWORD,
+      ORG_ID
+    );
 
     const response = await app.fetch(
       new Request("http://localhost:4310/v1/automations", {
-        method: "POST",
-        headers: admin.headers({ "X-CSRF-Token": admin.csrfToken }),
         body: JSON.stringify({ name: "x", prompt: "x" }),
-      }),
+        headers: admin.headers({ "X-CSRF-Token": admin.csrfToken }),
+        method: "POST",
+      })
     );
 
     expect(response.status).not.toBe(403);
   });
+});
+
+test("force deleting an MCP server requires a platform admin", async () => {
+  const calls: Array<[string, boolean]> = [];
+
+  const { app, authService, databaseAdapter } = createMinimalHonoApp({
+    mcpService: {
+      deleteServer: async (serverId: string, force: boolean) => {
+        calls.push([serverId, force]);
+      },
+    },
+  });
+
+  const platformAdmin = await setupFreshInstallSession(app, databaseAdapter);
+  const orgId = platformAdmin.orgId!;
+  await seedOrgAdmin(databaseAdapter, {
+    authService,
+    email: "org-admin@example.com",
+    orgId,
+    password: PASSWORD,
+    role: "admin",
+    userId: "user_org_admin",
+  });
+
+  const orgAdmin = await loginUserSession(
+    app,
+    "org-admin@example.com",
+    PASSWORD,
+    orgId
+  );
+
+  const url = "http://localhost:4310/v1/mcp/servers/mcp_test?force=true";
+
+  const denied = await app.fetch(
+    new Request(url, {
+      headers: orgAdmin.headers({ "X-CSRF-Token": orgAdmin.csrfToken }),
+      method: "DELETE",
+    })
+  );
+
+  expect(denied.status).toBe(403);
+  expect(calls).toEqual([]);
+
+  const allowed = await app.fetch(
+    new Request(url, {
+      headers: platformAdmin.headers({
+        "X-CSRF-Token": platformAdmin.csrfToken,
+      }),
+      method: "DELETE",
+    })
+  );
+
+  expect(allowed.status).toBe(204);
+  expect(calls).toEqual([["mcp_test", true]]);
 });

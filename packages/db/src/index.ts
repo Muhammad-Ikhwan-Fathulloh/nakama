@@ -1,38 +1,46 @@
-import { createInMemoryDatabaseAdapter } from "./adapters/in-memory";
 import { createSqliteDatabase, type SqliteDatabase } from "./adapters/sqlite";
 import {
-  resolveDatabasePath,
   type ResolveDatabasePathOptions,
+  resolveDatabasePath,
 } from "./database-url";
-import type { DatabaseAdapter } from "./types";
 
-export type { ResolveDatabasePathOptions } from "./database-url";
+/** Same as `createSqliteMemoryAdapter` — kept for existing test imports. */
+export {
+  createSqliteDatabase,
+  createSqliteMemoryAdapter as createInMemoryDatabaseAdapter,
+} from "./adapters/sqlite";
 
 export * from "./automation-store";
-export * from "./constants";
-export * from "./local-client";
-export * from "./org-profiles";
-export * from "./seed";
-export * from "./types";
-export { createInMemoryDatabaseAdapter } from "./adapters/in-memory";
-export { createSqliteDatabase } from "./adapters/sqlite";
 
-export interface Database {
-  adapter: DatabaseAdapter;
-  close(): void;
-}
+export * from "./constants";
+
+export {
+  type ResolveDatabasePathOptions,
+  resolveDatabasePath,
+} from "./database-url";
+
+export * from "./local-client";
+
+export * from "./org-profiles";
+
+export * from "./seed";
+
+export * from "./types";
+
+export * from "./workflow-store";
+
+export * from "./workspace-settings";
+
+export type Database = SqliteDatabase;
 
 export async function createDatabase(
   databaseUrl: string,
-  options: ResolveDatabasePathOptions = {},
+  options: ResolveDatabasePathOptions = {}
 ): Promise<Database> {
   const databasePath = resolveDatabasePath(databaseUrl, options);
 
   if (databasePath === ":memory:") {
-    return {
-      adapter: createInMemoryDatabaseAdapter(),
-      close() {},
-    };
+    return createSqliteDatabase(":memory:");
   }
 
   return createSqliteDatabase(`file:${databasePath}`);

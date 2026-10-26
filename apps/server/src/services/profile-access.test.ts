@@ -3,10 +3,9 @@ import { NakamaApiError } from "@nakama/core";
 import {
   createInMemoryDatabaseAdapter,
   seedOrgDefaultProfile,
-  seedOrgSuperBotProfile,
+  seedOrgSuperNakamaProfile,
 } from "@nakama/db";
 import { AutomationService } from "./automation-service";
-import { TaskService } from "./task-service";
 
 const ORG_ID = "org_test";
 
@@ -14,30 +13,34 @@ async function seed() {
   const db = createInMemoryDatabaseAdapter();
   const now = new Date().toISOString();
   await db.upsertOrganization({
+    createdAt: now,
     id: ORG_ID,
     name: "Test Org",
     slug: "test-org",
-    createdAt: now,
     updatedAt: now,
   });
   const defaultProfile = await seedOrgDefaultProfile(db, ORG_ID);
-  const superProfile = await seedOrgSuperBotProfile(db, ORG_ID);
-  return { db, superId: superProfile.id, defaultId: defaultProfile.id };
+  const superProfile = await seedOrgSuperNakamaProfile(db, ORG_ID);
+
+  return { db, defaultId: defaultProfile.id, superId: superProfile.id };
 }
 
 const automationInput = {
-  name: "a",
   description: "a",
+  name: "a",
   prompt: "do it",
   trigger: { type: "manual" as const },
 };
-const taskInput = { title: "t", prompt: "do it", status: "backlog" as const };
 
-describe("profile access: binding an automation/task to Super Bot is admin-only", () => {
-  test("member cannot bind an automation to the Super Bot profile", async () => {
+describe("profile access: binding an automation to Super Nakama is admin-only", () => {
+  test("member cannot bind an automation to the Super Nakama profile", async () => {
     const { db, superId } = await seed();
-    const service = new AutomationService(db, { getUserTimezone: async () => "UTC" });
 
+    const service = new AutomationService(db, {
+      getUserTimezone: async () => "UTC",
+    });
+
+    // SAFETY: The test fixture matches the contract used by this test.
     const attempt = service.create(ORG_ID, automationInput as any, superId, {
       orgRole: "member",
     });
@@ -46,35 +49,91 @@ describe("profile access: binding an automation/task to Super Bot is admin-only"
     await expect(attempt).rejects.toMatchObject({ status: 403 });
   });
 
-  test("admin can bind an automation to the Super Bot profile", async () => {
+  test("admin can bind an automation to the Super Nakama profile", async () => {
     const { db, superId } = await seed();
-    const service = new AutomationService(db, { getUserTimezone: async () => "UTC" });
 
-    const automation = await service.create(ORG_ID, automationInput as any, superId, {
-      orgRole: "admin",
+    const service = new AutomationService(db, {
+      getUserTimezone: async () => "UTC",
     });
+
+    const automation = await service.create(
+      ORG_ID,
+      // SAFETY: The test fixture matches the contract used by this test.
+      automationInput as any,
+      superId,
+      {
+        orgRole: "admin",
+      }
+    );
 
     expect(automation.profileId).toBe(superId);
   });
 
-  test("member cannot bind a task to the Super Bot profile", async () => {
+  test("omitted access fail-closes Super Nakama bind on create", async () => {
     const { db, superId } = await seed();
-    const service = new TaskService(db);
 
-    const attempt = service.create(ORG_ID, taskInput as any, superId, { orgRole: "member" });
+    const service = new AutomationService(db, {
+      getUserTimezone: async () => "UTC",
+    });
+
+    // SAFETY: The test fixture matches the contract used by this test.
+    const attempt = service.create(ORG_ID, automationInput as any, superId);
 
     await expect(attempt).rejects.toBeInstanceOf(NakamaApiError);
     await expect(attempt).rejects.toMatchObject({ status: 403 });
   });
 
-  test("no access context (internal/agent-tool caller) is not gated", async () => {
-    const { db, superId } = await seed();
-    const service = new AutomationService(db, { getUserTimezone: async () => "UTC" });
+  test("member cannot rebind an automation to Super Nakama", async () => {
+    const { db, defaultId, superId } = await seed();
 
-    // Agent-tool path passes the session's own (already access-checked) profile
-    // with no role context; enforcement is opt-in, so this must still succeed.
-    const automation = await service.create(ORG_ID, automationInput as any, superId);
+    const service = new AutomationService(db, {
+      getUserTimezone: async () => "UTC",
+    });
 
-    expect(automation.profileId).toBe(superId);
+    const automation = await service.create(
+      ORG_ID,
+      // SAFETY: The test fixture matches the contract used by this test.
+      automationInput as any,
+      defaultId,
+      { orgRole: "member" }
+    );
+
+    const attempt = service.update(
+      automation.id,
+      ORG_ID,
+      { profileId: superId },
+      { orgRole: "member" }
+    );
+
+    await expect(attempt).rejects.toBeInstanceOf(NakamaApiError);
+    await expect(attempt).rejects.toMatchObject({ status: 403 });
+    expect((await service.get(automation.id, ORG_ID))?.profileId).toBe(
+      defaultId
+    );
+  });
+
+  test("admin can rebind an automation to Super Nakama", async () => {
+    const { db, defaultId, superId } = await seed();
+
+    const service = new AutomationService(db, {
+      getUserTimezone: async () => "UTC",
+    });
+
+    const automation = await service.create(
+      ORG_ID,
+      // SAFETY: The test fixture matches the contract used by this test.
+      automationInput as any,
+      defaultId,
+      { orgRole: "admin" }
+    );
+
+    const updated = await service.update(
+      automation.id,
+      ORG_ID,
+      { profileId: superId },
+      { orgRole: "admin" }
+    );
+
+    expect(updated.profileId).toBe(superId);
   });
 });

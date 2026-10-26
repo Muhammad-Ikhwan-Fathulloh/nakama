@@ -1,28 +1,41 @@
 import { describe, expect, test } from "bun:test";
-import type { AutomationSchedule, AutomationSchedulerStatus } from "@nakama/core";
 import type { NakamaClient } from "@nakama/client";
+import type { AutomationSchedule } from "@nakama/core";
 import { AutomationWorkerScheduler } from "./scheduler";
 
 function createMockClient(
   overrides: Partial<{
     listAutomationSchedules: () => Promise<AutomationSchedule[]>;
-    runAutomationInternal: (id: string) => Promise<void>;
+    runAutomationInternal: (id: string, orgId: string) => Promise<void>;
+    getAutomationWorkerSettings: () => Promise<{ pollIntervalMinutes: number }>;
     getTimezone: () => Promise<string>;
-  }> = {},
+    listSkillCuratorOrgs: () => Promise<{ orgs: [] }>;
+  }> = {}
 ): NakamaClient {
-  return {
-    listAutomationSchedules: async () => [],
-    runAutomationInternal: async () => {},
+  const mockClient = {
     getTimezone: async () => "UTC",
+    listAutomationSchedules: async () => [],
+    listSkillCuratorOrgs: async () => ({ orgs: [] }),
+    runAutomationInternal: async () => {},
     ...overrides,
-  } as unknown as NakamaClient;
+  };
+
+  // SAFETY: The scheduler calls only the methods supplied by this mock.
+  return mockClient as NakamaClient;
 }
 
 describe("AutomationWorkerScheduler", () => {
   test("starts and loads schedules from client", async () => {
     const schedules: AutomationSchedule[] = [
-      { id: "a1", cron: "0 * * * *", timezone: "UTC", orgId: "o1", profileId: "p1" },
+      {
+        cron: "0 * * * *",
+        id: "a1",
+        orgId: "o1",
+        profileId: "p1",
+        timezone: "UTC",
+      },
     ];
+
     const client = createMockClient({
       listAutomationSchedules: async () => schedules,
     });
@@ -34,60 +47,68 @@ describe("AutomationWorkerScheduler", () => {
     scheduler.stop();
   });
 
-  test("poll reloads schedules", async () => {
-    let schedules: AutomationSchedule[] = [
-      { id: "a1", cron: "0 * * * *", timezone: "UTC", orgId: "o1", profileId: "p1" },
-    ];
-    const client = createMockClient({
-      listAutomationSchedules: async () => schedules,
-    });
+  test("reschedules polling when the workspace-global interval changes", async () => {
+    const callbacks: Array<() => Promise<void>> = [];
+    const intervals: number[] = [];
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    // SAFETY: The mock uses a numeric sentinel only as an opaque timer handle.
+    globalThis.setInterval = ((
+      callback: () => Promise<void>,
+      interval: number
+    ) => {
+      callbacks.push(callback);
+      intervals.push(interval);
 
-    const statusChanges: AutomationSchedulerStatus[] = [];
-    const scheduler = new AutomationWorkerScheduler(client, (status) => {
-      statusChanges.push(status);
-    });
+      // SAFETY: The scheduler stores and clears this opaque mocked timer handle.
+      return 1 as ReturnType<typeof setInterval>;
+    }) as typeof setInterval;
+    // SAFETY: The mock accepts and ignores the opaque timer handle.
+    globalThis.clearInterval = (() => undefined) as typeof clearInterval;
 
-    await scheduler.start();
-    schedules = [];
-    await scheduler.start(); // start already reloads once
+    try {
+      const scheduler = new AutomationWorkerScheduler(
+        createMockClient({
+          getAutomationWorkerSettings: async () => ({
+            pollIntervalMinutes: 10,
+          }),
+        })
+      );
 
-    // Poll interval is not used here; manually trigger reload not exposed.
-    // We verify the scheduler registered the initial schedule.
-    expect(scheduler.getStatus().scheduledJobs).toBe(1);
-    scheduler.stop();
+      scheduler.beginPolling(5 * 60 * 1000);
+      await callbacks[0]!();
+
+      expect(intervals).toEqual([5 * 60 * 1000, 10 * 60 * 1000]);
+      scheduler.stop();
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
   });
 
-  test("runAutomationInternal reports errors without throwing", async () => {
+  test("passes the automation orgId to the internal run endpoint", async () => {
+    const calls: Array<[string, string]> = [];
+
     const client = createMockClient({
       listAutomationSchedules: async () => [
-        { id: "a1", cron: "* * * * *", timezone: "UTC", orgId: "o1", profileId: "p1" },
+        {
+          id: "a1",
+          orgId: "o1",
+          profileId: "p1",
+          runAt: new Date(Date.now() + 50).toISOString(),
+          timezone: "UTC",
+        },
       ],
-      runAutomationInternal: async () => {
-        throw new Error("run failed");
+      runAutomationInternal: async (id: string, orgId: string) => {
+        calls.push([id, orgId]);
       },
     });
 
     const scheduler = new AutomationWorkerScheduler(client);
     await scheduler.start();
-
-    expect(scheduler.getStatus().running).toBe(true);
+    await Bun.sleep(150);
     scheduler.stop();
-  });
 
-  test("falls back to UTC when timezone endpoint fails", async () => {
-    const client = createMockClient({
-      getTimezone: async () => {
-        throw new Error("unavailable");
-      },
-      listAutomationSchedules: async () => [
-        { id: "a1", cron: "0 * * * *", timezone: null, orgId: "o1", profileId: "p1" },
-      ],
-    });
-
-    const scheduler = new AutomationWorkerScheduler(client);
-    await scheduler.start();
-
-    expect(scheduler.getStatus().scheduledJobs).toBe(1);
-    scheduler.stop();
+    expect(calls).toEqual([["a1", "o1"]]);
   });
 });

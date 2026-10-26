@@ -1,7 +1,7 @@
+import { convertDocumentBytes } from "../anydoc-text";
 import { DOCX_MEDIA_TYPE, LEGACY_DOC_MEDIA_TYPE } from "../artifact-mime";
 import { convertDocxToMarkdown } from "../docx-text";
-import { MAX_DOCUMENT_BYTES } from "../message-content";
-import { extractPdfText } from "../pdf-text";
+import { MAX_KNOWLEDGE_DOCUMENT_BYTES } from "../message-content";
 
 const KB_ALLOWED_MEDIA_TYPES = new Set([
   "application/pdf",
@@ -12,19 +12,25 @@ const KB_ALLOWED_MEDIA_TYPES = new Set([
   "text/markdown",
 ]);
 
-const KB_EXTENSION_MEDIA_TYPES: Record<string, string> = {
-  ".pdf": "application/pdf",
-  ".docx": DOCX_MEDIA_TYPE,
-  ".doc": LEGACY_DOC_MEDIA_TYPE,
-  ".txt": "text/plain",
-  ".md": "text/markdown",
+const KB_EXTENSION_MEDIA_TYPES = {
   ".csv": "text/csv",
-};
+  ".doc": LEGACY_DOC_MEDIA_TYPE,
+  ".docx": DOCX_MEDIA_TYPE,
+  ".md": "text/markdown",
+  ".pdf": "application/pdf",
+  ".txt": "text/plain",
+} satisfies Record<string, string>;
 
-export function normalizeKnowledgeBaseMediaType(mediaType: string, filename: string): string {
+export function normalizeKnowledgeBaseMediaType(
+  mediaType: string,
+  filename: string
+): string {
   const trimmed = mediaType.trim().toLowerCase();
   const extension = filename.slice(filename.lastIndexOf(".")).toLowerCase();
-  const fromExtension = KB_EXTENSION_MEDIA_TYPES[extension];
+
+  const fromExtension = Object.entries(KB_EXTENSION_MEDIA_TYPES).find(
+    ([candidate]) => candidate === extension
+  )?.[1];
 
   if (fromExtension) {
     return fromExtension;
@@ -37,30 +43,42 @@ export function normalizeKnowledgeBaseMediaType(mediaType: string, filename: str
   return trimmed;
 }
 
-export function isSupportedKnowledgeBaseMediaType(mediaType: string, filename: string): boolean {
+export function isSupportedKnowledgeBaseMediaType(
+  mediaType: string,
+  filename: string
+): boolean {
   const normalized = normalizeKnowledgeBaseMediaType(mediaType, filename);
+
   return KB_ALLOWED_MEDIA_TYPES.has(normalized);
 }
 
 export async function extractText(
   mediaType: string,
   filename: string,
-  bytes: Buffer,
+  bytes: Buffer
 ): Promise<string> {
-  if (bytes.length > MAX_DOCUMENT_BYTES) {
-    throw new Error(`Document must be at most ${MAX_DOCUMENT_BYTES / (1024 * 1024)} MB.`);
+  if (bytes.length > MAX_KNOWLEDGE_DOCUMENT_BYTES) {
+    throw new Error(
+      `Document must be at most ${MAX_KNOWLEDGE_DOCUMENT_BYTES / (1024 * 1024)} MB.`
+    );
   }
 
   const normalized = normalizeKnowledgeBaseMediaType(mediaType, filename);
 
   if (!KB_ALLOWED_MEDIA_TYPES.has(normalized)) {
     throw new Error(
-      `Unsupported knowledge base document type: ${mediaType}. Allowed: txt, md, csv, pdf, docx.`,
+      `Unsupported knowledge base document type: ${mediaType}. Allowed: txt, md, csv, pdf, docx.`
     );
   }
 
   if (normalized === "application/pdf") {
-    return extractPdfText(bytes);
+    const { text } = await convertDocumentBytes(bytes, {
+      filename,
+      format: "pdf",
+      mediaType: normalized,
+    });
+
+    return text;
   }
 
   // Word-named uploads are decided by their bytes: a real .docx, a legacy OLE .doc

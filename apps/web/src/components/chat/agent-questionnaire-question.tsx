@@ -1,42 +1,59 @@
 import type { AgentQuestionnaire } from "@nakama/core/contract";
-import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import { Input } from "@nakama/ui/input";
+import { cn } from "@nakama/ui/utils";
 import {
-  isCustomChoice,
   type DraftAnswerState,
+  isCustomChoice,
 } from "@/components/chat/agent-questionnaire.shared";
 
+const optionRowClass =
+  "flex min-h-10 w-full items-center gap-2 rounded-md px-2 text-left text-foreground text-sm transition-colors";
+
+function optionStateClass(selected: boolean, disabled: boolean): string {
+  return cn(
+    selected ? "bg-muted font-medium" : "hover:bg-muted/60",
+    disabled && "pointer-events-none opacity-50"
+  );
+}
+
 export function AgentQuestionnaireQuestion({
-  questionIndex,
   question,
   state,
   disabled,
   onStateChange,
 }: {
-  questionIndex: number;
   question: AgentQuestionnaire["questions"][number];
   state: DraftAnswerState;
   disabled: boolean;
   onStateChange: (nextState: DraftAnswerState) => void;
 }) {
-  const customChoice = question.choices.find((choice) => isCustomChoice(choice));
+  const customChoice = question.choices.find((choice) =>
+    isCustomChoice(choice)
+  );
+
   const showCustomInput = question.allowCustomAnswer || Boolean(customChoice);
 
   return (
-    <section className="space-y-2.5">
-      <p className="text-sm font-medium text-foreground">
-        {questionIndex + 1}. {question.prompt}
-      </p>
+    <section className="space-y-2">
+      <p className="font-medium text-foreground text-sm">{question.prompt}</p>
       {question.choices.length > 0 ? (
-        <div className="space-y-1">
-          {question.choices.map((choice) => {
-            if (isCustomChoice(choice)) {
-              const selected = state.selectedChoiceId === choice.id;
+        <div className="space-y-0.5">
+          {question.choices.map((choice, choiceIndex) => {
+            const selected = state.selectedChoiceId === choice.id;
 
+            if (isCustomChoice(choice)) {
               return (
-                <div key={choice.id} className="flex items-center gap-2.5 py-0.5">
+                <div
+                  className={cn(
+                    optionRowClass,
+                    selected ? "bg-muted" : "hover:bg-muted/60",
+                    disabled && "pointer-events-none opacity-50"
+                  )}
+                  key={choice.id}
+                >
                   <button
-                    type="button"
+                    aria-label={choice.label}
+                    className="flex size-10 shrink-0 items-center justify-center text-muted-foreground tabular-nums"
                     data-question-option="true"
                     data-selected={selected}
                     disabled={disabled}
@@ -47,33 +64,21 @@ export function AgentQuestionnaireQuestion({
                         selectedChoiceLabel: choice.label,
                       })
                     }
-                    className={cn(
-                      "flex shrink-0 items-center gap-2.5 text-left text-sm transition-colors",
-                      selected ? "text-primary" : "text-foreground",
-                      disabled && "pointer-events-none opacity-50",
-                    )}
-                    aria-label={choice.label}
+                    type="button"
                   >
-                    <span
-                      className={cn(
-                        "flex size-3.5 shrink-0 items-center justify-center rounded-full border",
-                        selected ? "border-primary" : "border-muted-foreground/40",
-                      )}
-                      aria-hidden
-                    >
-                      <span
-                        className={cn(
-                          "size-1.5 rounded-full bg-primary transition-opacity",
-                          selected ? "opacity-100" : "opacity-0",
-                        )}
-                      />
-                    </span>
+                    {choiceIndex + 1}.
                   </button>
                   <Input
-                    value={state.customAnswer}
+                    className="h-10 flex-1 border-0 bg-transparent! px-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                     disabled={disabled}
-                    placeholder={choice.label}
-                    className="h-auto flex-1 border-0 bg-transparent! px-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                    onChange={(event) =>
+                      onStateChange({
+                        ...state,
+                        customAnswer: event.target.value,
+                        selectedChoiceId: choice.id,
+                        selectedChoiceLabel: choice.label,
+                      })
+                    }
                     onFocus={() =>
                       onStateChange({
                         ...state,
@@ -81,28 +86,23 @@ export function AgentQuestionnaireQuestion({
                         selectedChoiceLabel: choice.label,
                       })
                     }
-                    onChange={(event) =>
-                      onStateChange({
-                        ...state,
-                        selectedChoiceId: choice.id,
-                        selectedChoiceLabel: choice.label,
-                        customAnswer: event.target.value,
-                      })
-                    }
+                    placeholder={choice.label}
+                    value={state.customAnswer}
                   />
                 </div>
               );
             }
 
-            const selected = state.selectedChoiceId === choice.id;
-
             return (
               <button
-                key={choice.id}
-                type="button"
+                className={cn(
+                  optionRowClass,
+                  optionStateClass(selected, disabled)
+                )}
                 data-question-option="true"
                 data-selected={selected}
                 disabled={disabled}
+                key={choice.id}
                 onClick={() =>
                   onStateChange({
                     ...state,
@@ -110,27 +110,22 @@ export function AgentQuestionnaireQuestion({
                     selectedChoiceLabel: choice.label,
                   })
                 }
-                className={cn(
-                  "flex w-full items-center gap-2.5 py-1 text-left text-sm transition-colors",
-                  selected ? "text-primary" : "text-foreground",
-                  disabled && "pointer-events-none opacity-50",
-                )}
+                type="button"
               >
                 <span
-                  className={cn(
-                    "flex size-3.5 shrink-0 items-center justify-center rounded-full border",
-                    selected ? "border-primary" : "border-muted-foreground/40",
-                  )}
                   aria-hidden
+                  className="w-5 shrink-0 text-muted-foreground tabular-nums"
                 >
-                  <span
-                    className={cn(
-                      "size-1.5 rounded-full bg-primary transition-opacity",
-                      selected ? "opacity-100" : "opacity-0",
-                    )}
-                  />
+                  {choiceIndex + 1}.
                 </span>
-                {choice.label}
+                <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                  {choice.label}
+                  {choice.recommended ? (
+                    <span className="ml-auto shrink-0 rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary text-xs">
+                      Recommended
+                    </span>
+                  ) : null}
+                </span>
               </button>
             );
           })}
@@ -138,24 +133,18 @@ export function AgentQuestionnaireQuestion({
       ) : null}
       {showCustomInput && !customChoice ? (
         <Input
-          value={state.customAnswer}
+          className="min-h-10 rounded-md border-dashed"
           disabled={disabled}
-          placeholder={question.placeholder || "Other (custom)"}
-          onFocus={() =>
-            onStateChange({
-              ...state,
-              selectedChoiceId: state.selectedChoiceId,
-              selectedChoiceLabel: state.selectedChoiceLabel,
-            })
-          }
           onChange={(event) =>
             onStateChange({
               ...state,
+              customAnswer: event.target.value,
               selectedChoiceId: state.selectedChoiceId,
               selectedChoiceLabel: state.selectedChoiceLabel,
-              customAnswer: event.target.value,
             })
           }
+          placeholder={question.placeholder || "Other (custom)"}
+          value={state.customAnswer}
         />
       ) : null}
     </section>

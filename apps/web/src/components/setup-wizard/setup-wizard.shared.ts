@@ -1,13 +1,8 @@
-export interface SetupOrganizationDraft {
-  name: string;
-  slug: string;
-}
-
 export interface SetupAccountDraft {
-  name: string;
   email: string;
-  phone: string;
+  name: string;
   password: string;
+  phone: string;
 }
 
 export const SETUP_STEPS = [

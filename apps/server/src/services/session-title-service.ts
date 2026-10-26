@@ -1,23 +1,41 @@
 import { generateSessionTitleFromMessages } from "@nakama/agent";
 import type { ChatMessage, UserConfig } from "@nakama/core";
 import type { DatabaseAdapter } from "@nakama/db";
-import { createProviderForInstance } from "../providers/create";
-import { resolveProfileProviderSelection } from "./provider-instance-helpers";
+import { createProviderForProfile } from "./provider-instance-helpers";
 
-export const SESSION_TITLE_FALLBACK = "Untitled";
+const SESSION_TITLE_FALLBACK = "Untitled";
 
 export class SessionTitleService {
   private readonly inFlight = new Set<string>();
 
   constructor(
     private readonly db: DatabaseAdapter,
-    private readonly getUserConfig: () => UserConfig | null,
+    private readonly getUserConfig: () => UserConfig | null
   ) {}
 
   scheduleSessionTitleGeneration(sessionId: string): void {
     void this.generateSessionTitle(sessionId).catch((error) => {
-      console.error(`Failed to generate session title for ${sessionId}:`, error);
+      console.error(
+        `Failed to generate session title for ${sessionId}:`,
+        error
+      );
     });
+  }
+
+  /** A title for messages kept outside the session store, such as a group chat. */
+  async titleFor(
+    profileId: string,
+    messages: readonly ChatMessage[]
+  ): Promise<string | null> {
+    const provider = await createProviderForProfile(
+      this.db,
+      profileId,
+      this.getUserConfig()
+    );
+
+    return provider
+      ? generateSessionTitleFromMessages(messages, { provider })
+      : null;
   }
 
   private async generateSessionTitle(sessionId: string): Promise<void> {
@@ -35,63 +53,48 @@ export class SessionTitleService {
       }
 
       const storedMessages = await this.db.listMessagesForSession(sessionId);
-      const messages = storedMessages.map((record) => record.payload as ChatMessage);
+
+      const messages = storedMessages.map(
+        // SAFETY: The message store only contains ChatMessage payloads.
+        (record) => record.payload as ChatMessage
+      );
 
       if (!hasCompletedFirstTurn(messages)) {
         return;
       }
 
-      const userConfig = this.getUserConfig();
-      const provider = await this.resolveProviderForProfile(
+      const provider = await createProviderForProfile(
+        this.db,
         session.profileId,
-        userConfig,
+        this.getUserConfig()
       );
 
       if (!provider) {
         await this.db.updateSessionTitle(sessionId, SESSION_TITLE_FALLBACK);
+
         return;
       }
 
-      const title = await generateSessionTitleFromMessages(messages, { provider });
+      const title = await generateSessionTitleFromMessages(messages, {
+        provider,
+      });
 
-      await this.db.updateSessionTitle(sessionId, title ?? SESSION_TITLE_FALLBACK);
+      await this.db.updateSessionTitle(
+        sessionId,
+        title ?? SESSION_TITLE_FALLBACK
+      );
     } finally {
       this.inFlight.delete(sessionId);
     }
-  }
-
-  private async resolveProviderForProfile(
-    profileId: string,
-    userConfig: UserConfig | null,
-  ) {
-    if (!userConfig) {
-      return null;
-    }
-
-    const profile = await this.db.getProfile(profileId);
-
-    if (!profile) {
-      return null;
-    }
-
-    const selection = resolveProfileProviderSelection({
-      providers: userConfig.providers,
-      defaultProviderId: userConfig.defaultProviderId,
-      profileModel: profile.model,
-    });
-
-    if (!selection) {
-      return null;
-    }
-
-    return createProviderForInstance(selection.instance, selection.model, process.env);
   }
 }
 
 function hasCompletedFirstTurn(messages: readonly ChatMessage[]): boolean {
   const hasUser = messages.some((message) => message.role === "user");
+
   const hasAssistant = messages.some(
-    (message) => message.role === "assistant" && message.content.trim().length > 0,
+    (message) =>
+      message.role === "assistant" && message.content.trim().length > 0
   );
 
   return hasUser && hasAssistant;

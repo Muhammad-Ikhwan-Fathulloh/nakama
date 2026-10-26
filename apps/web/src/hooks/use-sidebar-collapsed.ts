@@ -1,23 +1,52 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { useAuth } from "@/context/use-auth";
 import {
   getInitialSidebarCollapsed,
+  pinnedPluginsStorageKey,
+  readPinnedPluginIds,
   SIDEBAR_COLLAPSED_KEY,
+  subscribePinnedPlugins,
+  togglePinnedPlugin,
 } from "@/lib/sidebar";
 
-export function useSidebarCollapsed() {
-  const [collapsed, setCollapsedState] = useState(getInitialSidebarCollapsed);
+export function useLocalStorageFlag(key: string, getInitial: () => boolean) {
+  const [collapsed, setCollapsed] = useState(getInitial);
 
   useEffect(() => {
     try {
-      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
+      localStorage.setItem(key, String(collapsed));
     } catch {
       // Ignore storage failures (private browsing, etc.)
     }
-  }, [collapsed]);
+  }, [collapsed, key]);
 
-  const toggle = useCallback(() => {
-    setCollapsedState((current) => !current);
-  }, []);
+  return {
+    collapsed,
+    toggle: () => setCollapsed((current) => !current),
+  };
+}
 
-  return { collapsed, toggle };
+export function useSidebarCollapsed() {
+  return useLocalStorageFlag(SIDEBAR_COLLAPSED_KEY, getInitialSidebarCollapsed);
+}
+
+export function usePinnedPlugins() {
+  const { user, activeOrg } = useAuth();
+
+  const key =
+    user && activeOrg ? pinnedPluginsStorageKey(user.id, activeOrg.id) : null;
+
+  // The snapshot is a string so it stays equal between renders.
+  const pinned = useSyncExternalStore(subscribePinnedPlugins, () =>
+    readPinnedPluginIds(key).join("\n")
+  );
+
+  return {
+    pinned: pinned ? pinned.split("\n") : [],
+    toggle: (pluginId: string) => {
+      if (key) {
+        togglePinnedPlugin(key, pluginId);
+      }
+    },
+  };
 }

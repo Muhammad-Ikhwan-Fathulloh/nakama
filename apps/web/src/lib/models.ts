@@ -1,22 +1,25 @@
 import type {
   ConfigureProviderRequest,
   CreateProviderRequest,
+  CustomModelEntry,
+  OllamaHostMode,
   ProviderModelOption,
+  WireApi,
 } from "@nakama/core/contract";
+import {
+  OLLAMA_CLOUD_DEFAULT_BASE_URL,
+  OLLAMA_LOCAL_DEFAULT_BASE_URL,
+  ollamaRequiresApiKey,
+} from "@nakama/core/ollama-provider-config";
+import { isOpenRouterModelSlug } from "@nakama/core/openrouter-model-slug";
 import { formatConfiguredProviderLabel } from "@nakama/core/provider-label";
 import type { UserProviderName } from "@nakama/core/provider-resolution";
 
 export type SelectedProvider = UserProviderName;
 
-export const OPENROUTER_MODEL_SLUG_PATTERN = /^[\w.-]+\/[\w.:-]+$/;
-
-export function isOpenRouterModelSlug(model: string): boolean {
-  return OPENROUTER_MODEL_SLUG_PATTERN.test(model.trim());
-}
-
 export function filterModelsByProvider(
   models: ProviderModelOption[],
-  provider: SelectedProvider | null | undefined,
+  provider: SelectedProvider | null | undefined
 ): ProviderModelOption[] {
   if (!provider) {
     return models;
@@ -27,9 +30,10 @@ export function filterModelsByProvider(
 
 export function defaultModelForProvider(
   models: ProviderModelOption[],
-  provider: SelectedProvider,
+  provider: SelectedProvider
 ): string {
   const providerModels = filterModelsByProvider(models, provider);
+
   return (
     providerModels.find((model) => model.default)?.id ??
     providerModels[0]?.id ??
@@ -39,7 +43,7 @@ export function defaultModelForProvider(
 
 export function formatProviderLabel(
   provider: string | null | undefined,
-  displayName?: string | null,
+  displayName?: string | null
 ): string {
   if (
     provider === "openai" ||
@@ -47,9 +51,32 @@ export function formatProviderLabel(
     provider === "openrouter" ||
     provider === "gemini" ||
     provider === "deepseek" ||
+    provider === "netra" ||
+    provider === "doubao" ||
+    provider === "mistral" ||
+    provider === "perplexity" ||
     provider === "cerebras" ||
+    provider === "cloudflare" ||
+    provider === "fireworks" ||
+    provider === "ollama" ||
     provider === "openai_compatible" ||
-    provider === "opencode_go"
+    provider === "opencode_go" ||
+    provider === "chatgpt" ||
+    provider === "xai_oauth" ||
+    provider === "minimax" ||
+    provider === "minimax_cn" ||
+    provider === "moonshot" ||
+    provider === "moonshot_cn" ||
+    provider === "zhipu" ||
+    provider === "zhipu_cn" ||
+    provider === "xai" ||
+    provider === "groq" ||
+    provider === "together" ||
+    provider === "xiaomi" ||
+    provider === "meta" ||
+    provider === "qwen" ||
+    provider === "qwen_cn" ||
+    provider === "vercel_ai_gateway"
   ) {
     return formatConfiguredProviderLabel(provider, displayName);
   }
@@ -57,25 +84,49 @@ export function formatProviderLabel(
   return provider ?? "Provider";
 }
 
-export const PROVIDER_OPTIONS: Array<{ id: SelectedProvider; label: string }> = [
-  { id: "openai", label: "OpenAI" },
-  { id: "anthropic", label: "Anthropic" },
-  { id: "openrouter", label: "OpenRouter" },
-  { id: "gemini", label: "Gemini" },
-  { id: "deepseek", label: "DeepSeek" },
-  { id: "cerebras", label: "Cerebras" },
-  { id: "opencode_go", label: "OpenCode Go" },
-  { id: "openai_compatible", label: "Custom (OpenAI-compatible)" },
-];
+export const PROVIDER_OPTIONS: Array<{ id: SelectedProvider; label: string }> =
+  [
+    { id: "openai", label: "OpenAI" },
+    { id: "chatgpt", label: "ChatGPT (Plus/Pro)" },
+    { id: "xai_oauth", label: "Grok (SuperGrok / Premium+)" },
+    { id: "anthropic", label: "Anthropic" },
+    { id: "openrouter", label: "OpenRouter" },
+    { id: "gemini", label: "Gemini" },
+    { id: "deepseek", label: "DeepSeek" },
+    { id: "netra", label: "Netra Runtime" },
+    { id: "doubao", label: "Doubao (Volcengine)" },
+    { id: "together", label: "Together AI" },
+    { id: "xiaomi", label: "Xiaomi MiMo" },
+    { id: "meta", label: "Meta Model API" },
+    { id: "vercel_ai_gateway", label: "Vercel AI Gateway" },
+    { id: "mistral", label: "Mistral" },
+    { id: "qwen", label: "Qwen (DashScope)" },
+    { id: "qwen_cn", label: "Qwen (DashScope CN)" },
+    { id: "perplexity", label: "Perplexity Sonar" },
+    { id: "cerebras", label: "Cerebras" },
+    { id: "cloudflare", label: "Cloudflare Worker AI" },
+    { id: "fireworks", label: "Fireworks" },
+    { id: "ollama", label: "Ollama" },
+    { id: "opencode_go", label: "OpenCode Go" },
+    { id: "minimax", label: "MiniMax" },
+    { id: "xai", label: "xAI Grok" },
+    { id: "groq", label: "Groq" },
+    { id: "minimax_cn", label: "MiniMax (CN)" },
+    { id: "moonshot", label: "Moonshot Kimi" },
+    { id: "moonshot_cn", label: "Moonshot Kimi (CN)" },
+    { id: "zhipu", label: "GLM (Z.ai)" },
+    { id: "zhipu_cn", label: "GLM (CN)" },
+    { id: "openai_compatible", label: "Custom (OpenAI-compatible)" },
+  ];
 
 /** Custom OpenAI-compatible endpoints can be added more than once; builtins are one instance each. */
-export function allowsMultipleProviderInstances(provider: SelectedProvider): boolean {
-  return provider === "openai_compatible";
+function allowsMultipleProviderInstances(provider: SelectedProvider): boolean {
+  return provider === "openai_compatible" || provider === "ollama";
 }
 
 export function isProviderTypeAlreadyConfigured(
   provider: SelectedProvider,
-  configuredTypes: ReadonlySet<string>,
+  configuredTypes: ReadonlySet<string>
 ): boolean {
   if (allowsMultipleProviderInstances(provider)) {
     return false;
@@ -86,44 +137,55 @@ export function isProviderTypeAlreadyConfigured(
 
 export function firstAvailableProviderOption(
   configuredTypes: ReadonlySet<string>,
-  preferred: SelectedProvider = "openai",
+  preferred: SelectedProvider = "openai"
 ): SelectedProvider {
   if (!isProviderTypeAlreadyConfigured(preferred, configuredTypes)) {
     return preferred;
   }
 
   const next = PROVIDER_OPTIONS.find(
-    (option) => !isProviderTypeAlreadyConfigured(option.id, configuredTypes),
+    (option) => !isProviderTypeAlreadyConfigured(option.id, configuredTypes)
   );
 
   return next?.id ?? "openai_compatible";
 }
 
 /** OpenCode Zen free catalog — not OpenCode Go (`/zen/go`). */
-export function isOpenCodeZenBaseUrl(baseUrl: string | null | undefined): boolean {
+export function isOpenCodeZenBaseUrl(
+  baseUrl: string | null | undefined
+): boolean {
   const trimmed = baseUrl?.trim();
+
   if (!trimmed) {
     return false;
   }
 
   try {
     const url = new URL(trimmed);
+
     if (url.hostname.toLowerCase() !== "opencode.ai") {
       return false;
     }
 
     const path = url.pathname.toLowerCase();
+
     return /\/zen(\/|$)/.test(path) && !/\/zen\/go(\/|$)/.test(path);
   } catch {
     const normalized = trimmed.toLowerCase();
+
     return (
-      normalized.includes("opencode.ai/zen") && !normalized.includes("opencode.ai/zen/go")
+      normalized.includes("opencode.ai/zen") &&
+      !normalized.includes("opencode.ai/zen/go")
     );
   }
 }
 
 export function hasOpenCodeZenProvider(
-  providers: ReadonlyArray<{ type: string; baseUrl?: string | null; label?: string | null }>,
+  providers: ReadonlyArray<{
+    type: string;
+    baseUrl?: string | null;
+    label?: string | null;
+  }>
 ): boolean {
   return providers.some((provider) => {
     if (provider.type !== "openai_compatible") {
@@ -151,6 +213,18 @@ export function apiKeyPlaceholder(provider: SelectedProvider): string {
     return "csk-…";
   }
 
+  if (provider === "fireworks") {
+    return "fw_…";
+  }
+
+  if (provider === "ollama") {
+    return "Optional for local Ollama";
+  }
+
+  if (provider === "chatgpt") {
+    return "Use Sign in with ChatGPT";
+  }
+
   if (provider === "gemini") {
     return "AIza…";
   }
@@ -169,8 +243,20 @@ export function apiKeyPlaceholder(provider: SelectedProvider): string {
 export function validateApiKeyForProvider(
   apiKey: string,
   provider: SelectedProvider,
+  options?: { ollamaHostMode?: OllamaHostMode }
 ): string | null {
   if (provider === "openai_compatible") {
+    return null;
+  }
+
+  if (provider === "chatgpt" || provider === "xai_oauth") {
+    return null;
+  }
+
+  if (
+    provider === "ollama" &&
+    !ollamaRequiresApiKey(options?.ollamaHostMode ?? "local")
+  ) {
     return null;
   }
 
@@ -200,6 +286,7 @@ export function validateBaseUrlInput(baseUrl: string): string | null {
 
   try {
     const parsed = new URL(trimmed);
+
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return "Base URL must use http or https.";
     }
@@ -211,12 +298,25 @@ export function validateBaseUrlInput(baseUrl: string): string | null {
 }
 
 export function validateCustomModelsInput(
-  models: Array<{ id: string }>,
+  models: Array<{
+    id: string;
+    inputPerMillionUsd?: number;
+    outputPerMillionUsd?: number;
+  }>
 ): string | null {
   const valid = models.filter((model) => model.id.trim());
 
   if (valid.length === 0) {
     return "Add at least one model.";
+  }
+
+  for (const row of valid) {
+    const hasInput = row.inputPerMillionUsd !== undefined;
+    const hasOutput = row.outputPerMillionUsd !== undefined;
+
+    if (hasInput !== hasOutput) {
+      return `Model "${row.id.trim()}" must set both input and output $/1M rates, or leave both blank.`;
+    }
   }
 
   return null;
@@ -227,55 +327,44 @@ export function validateOpenRouterModelsInput(
     id: string;
     inputPerMillionUsd?: number;
     outputPerMillionUsd?: number;
-  }>,
+  }>
 ): string | null {
   const listError = validateCustomModelsInput(models);
+
   if (listError) {
     return listError;
   }
 
   for (const row of models) {
     const slugError = validateCustomOpenRouterModel(row.id);
+
     if (slugError) {
       return slugError;
-    }
-
-    const hasInput = row.inputPerMillionUsd !== undefined;
-    const hasOutput = row.outputPerMillionUsd !== undefined;
-    if (hasInput !== hasOutput) {
-      return `Model "${row.id.trim()}" must set both input and output $/1M rates, or leave both blank.`;
     }
   }
 
   return null;
 }
 
-export function validateCerebrasModelsInput(
+export function validateShortlistCapabilityModelsInput(
   models: Array<{
     id: string;
     inputPerMillionUsd?: number;
     outputPerMillionUsd?: number;
-  }>,
+  }>
 ): string | null {
-  const listError = validateCustomModelsInput(models);
-  if (listError) {
-    return listError;
-  }
+  return validateCustomModelsInput(models);
+}
 
-  for (const row of models) {
-    const hasInput = row.inputPerMillionUsd !== undefined;
-    const hasOutput = row.outputPerMillionUsd !== undefined;
-    if (hasInput !== hasOutput) {
-      return `Model "${row.id.trim()}" must set both input and output $/1M rates, or leave both blank.`;
-    }
-  }
-
-  return null;
+export function defaultOllamaSetupBaseUrl(hostMode: OllamaHostMode): string {
+  return hostMode === "cloud"
+    ? OLLAMA_CLOUD_DEFAULT_BASE_URL
+    : OLLAMA_LOCAL_DEFAULT_BASE_URL;
 }
 
 const OPENCODE_GO_MODEL_ID_PATTERN = /^opencode-go\/[\w.-]+$/;
 
-export function validateOpenCodeGoModelId(model: string): string | null {
+function validateOpenCodeGoModelId(model: string): string | null {
   const trimmed = model.trim();
 
   if (!trimmed) {
@@ -283,22 +372,24 @@ export function validateOpenCodeGoModelId(model: string): string | null {
   }
 
   if (!OPENCODE_GO_MODEL_ID_PATTERN.test(trimmed)) {
-    return 'Use opencode-go/model format, e.g. opencode-go/kimi-k2.7-code';
+    return "Use opencode-go/model format, e.g. opencode-go/kimi-k2.7-code";
   }
 
   return null;
 }
 
 export function validateOpenCodeGoModelsInput(
-  models: Array<{ id: string }>,
+  models: Array<{ id: string }>
 ): string | null {
   const listError = validateCustomModelsInput(models);
+
   if (listError) {
     return listError;
   }
 
   for (const row of models) {
     const idError = validateOpenCodeGoModelId(row.id);
+
     if (idError) {
       return idError;
     }
@@ -307,41 +398,67 @@ export function validateOpenCodeGoModelsInput(
   return null;
 }
 
-export function modelsFromCerebrasRows(
-  rows: Array<{
-    id: string;
-    name?: string;
-    default?: boolean;
-    supportsThinking?: boolean;
-    supportsVision?: boolean;
-    inputPerMillionUsd?: number;
-    outputPerMillionUsd?: number;
-  }>,
+export type ShortlistCapabilityProvider = Extract<
+  SelectedProvider,
+  "cerebras" | "fireworks"
+>;
+
+export function isShortlistCapabilityProvider(
+  provider: SelectedProvider
+): provider is ShortlistCapabilityProvider {
+  return provider === "cerebras" || provider === "fireworks";
+}
+
+type ShortlistModelRow = {
+  id: string;
+  name?: string;
+  default?: boolean;
+  supportsThinking?: boolean;
+  supportsVision?: boolean;
+  inputPerMillionUsd?: number;
+  outputPerMillionUsd?: number;
+};
+
+export function modelsFromShortlistRows(
+  provider: ShortlistCapabilityProvider,
+  rows: ShortlistModelRow[]
 ): ProviderModelOption[] {
   const models: ProviderModelOption[] = [];
 
   for (const row of rows) {
     const id = row.id.trim();
+
     if (!id) {
       continue;
     }
 
-    models.push({
+    const model: ProviderModelOption = {
       id,
       name: row.name?.trim() || id,
-      provider: "cerebras" as const,
-      ...(row.default ? { default: true } : {}),
-      ...(row.supportsThinking !== undefined
-        ? { supportsThinking: row.supportsThinking }
-        : {}),
-      ...(row.supportsVision !== undefined ? { supportsVision: row.supportsVision } : {}),
-      ...(row.inputPerMillionUsd !== undefined
-        ? { inputPerMillionUsd: row.inputPerMillionUsd }
-        : {}),
-      ...(row.outputPerMillionUsd !== undefined
-        ? { outputPerMillionUsd: row.outputPerMillionUsd }
-        : {}),
-    });
+      provider,
+    };
+
+    if (row.default) {
+      model.default = true;
+    }
+
+    if (row.supportsThinking !== undefined) {
+      model.supportsThinking = row.supportsThinking;
+    }
+
+    if (row.supportsVision !== undefined) {
+      model.supportsVision = row.supportsVision;
+    }
+
+    if (row.inputPerMillionUsd !== undefined) {
+      model.inputPerMillionUsd = row.inputPerMillionUsd;
+    }
+
+    if (row.outputPerMillionUsd !== undefined) {
+      model.outputPerMillionUsd = row.outputPerMillionUsd;
+    }
+
+    models.push(model);
   }
 
   return models;
@@ -354,126 +471,69 @@ export function modelsFromOpenRouterRows(
     default?: boolean;
     inputPerMillionUsd?: number;
     outputPerMillionUsd?: number;
-  }>,
+  }>
 ): ProviderModelOption[] {
   const models: ProviderModelOption[] = [];
 
   for (const row of rows) {
     const id = row.id.trim();
+
     if (!id) {
       continue;
     }
 
-    models.push({
+    const model: ProviderModelOption = {
       id,
       name: row.name?.trim() || id,
-      provider: "openrouter" as const,
-      ...(row.default ? { default: true } : {}),
-      ...(row.inputPerMillionUsd !== undefined
-        ? { inputPerMillionUsd: row.inputPerMillionUsd }
-        : {}),
-      ...(row.outputPerMillionUsd !== undefined
-        ? { outputPerMillionUsd: row.outputPerMillionUsd }
-        : {}),
-    });
+      provider: "openrouter",
+    };
+
+    if (row.default) {
+      model.default = true;
+    }
+
+    if (row.inputPerMillionUsd !== undefined) {
+      model.inputPerMillionUsd = row.inputPerMillionUsd;
+    }
+
+    if (row.outputPerMillionUsd !== undefined) {
+      model.outputPerMillionUsd = row.outputPerMillionUsd;
+    }
+
+    models.push(model);
   }
 
   return models;
 }
 
 export function appendOpenRouterModelRow(
-  rows: Array<{
-    id: string;
-    name?: string;
-    default?: boolean;
-    inputPerMillionUsd?: number;
-    outputPerMillionUsd?: number;
-  }>,
+  rows: CustomModelEntry[],
   modelId: string,
   modelName: string,
-  pricing?: { inputPerMillionUsd?: number; outputPerMillionUsd?: number },
-): Array<{
-  id: string;
-  name: string;
-  default?: boolean;
-  inputPerMillionUsd?: number;
-  outputPerMillionUsd?: number;
-}> {
-  const base: Array<{
-    id: string;
-    name: string;
-    default?: boolean;
-    inputPerMillionUsd?: number;
-    outputPerMillionUsd?: number;
-  }> = [];
+  extra?: Partial<CustomModelEntry>
+): CustomModelEntry[] {
+  // Spread rather than copying known keys, so anything the browse row carries
+  // (pricing, context window) survives instead of being silently dropped.
+  const base: CustomModelEntry[] = [];
 
-  for (const row of rows) {
+  for (const { default: _wasDefault, ...row } of rows) {
     if (!row.id.trim()) {
       continue;
     }
 
-    base.push({
-      id: row.id,
-      name: row.name ?? row.id,
-      ...(row.default ? { default: true } : {}),
-      ...(row.inputPerMillionUsd !== undefined
-        ? { inputPerMillionUsd: row.inputPerMillionUsd }
-        : {}),
-      ...(row.outputPerMillionUsd !== undefined
-        ? { outputPerMillionUsd: row.outputPerMillionUsd }
-        : {}),
-    });
+    base.push({ ...row, name: row.name ?? row.id });
   }
 
   if (base.some((row) => row.id === modelId)) {
-    return base.map((row) => ({
-      id: row.id,
-      name: row.name ?? row.id,
-      default: row.id === modelId,
-      ...(row.inputPerMillionUsd !== undefined
-        ? { inputPerMillionUsd: row.inputPerMillionUsd }
-        : {}),
-      ...(row.outputPerMillionUsd !== undefined
-        ? { outputPerMillionUsd: row.outputPerMillionUsd }
-        : {}),
-    }));
+    return base.map((row) => ({ ...row, default: row.id === modelId }));
   }
 
-  return [
-    ...base.map((row) => ({
-      id: row.id,
-      name: row.name ?? row.id,
-      ...(row.inputPerMillionUsd !== undefined
-        ? { inputPerMillionUsd: row.inputPerMillionUsd }
-        : {}),
-      ...(row.outputPerMillionUsd !== undefined
-        ? { outputPerMillionUsd: row.outputPerMillionUsd }
-        : {}),
-    })),
-    {
-      id: modelId,
-      name: modelName,
-      default: true,
-      ...(pricing?.inputPerMillionUsd !== undefined
-        ? { inputPerMillionUsd: pricing.inputPerMillionUsd }
-        : {}),
-      ...(pricing?.outputPerMillionUsd !== undefined
-        ? { outputPerMillionUsd: pricing.outputPerMillionUsd }
-        : {}),
-    },
-  ];
-}
-
-export function resolveCerebrasSetupModel(
-  rows: Array<{ id: string; default?: boolean }>,
-  selectedModel: string,
-): string {
-  return resolveOpenRouterSetupModel(rows, selectedModel);
+  return [...base, { ...extra, default: true, id: modelId, name: modelName }];
 }
 
 export function resolveOpenRouterSetupModel(
   rows: Array<{ id: string; default?: boolean }>,
-  selectedModel: string,
+  selectedModel: string
 ): string {
   const trimmed = selectedModel.trim();
   const valid = rows.filter((row) => row.id.trim());
@@ -485,7 +545,7 @@ export function resolveOpenRouterSetupModel(
   return valid.find((row) => row.default)?.id ?? valid[0]?.id ?? "";
 }
 
-export function validateCustomOpenRouterModel(model: string): string | null {
+function validateCustomOpenRouterModel(model: string): string | null {
   const trimmed = model.trim();
 
   if (!trimmed) {
@@ -501,7 +561,7 @@ export function validateCustomOpenRouterModel(model: string): string | null {
 
 export function getModelDisplayName(
   models: ProviderModelOption[],
-  modelId: string | null | undefined,
+  modelId: string | null | undefined
 ): string {
   if (!modelId) {
     return "Unknown";
@@ -516,82 +576,70 @@ export function buildCreateProviderRequest(options: {
   model?: string;
   displayName?: string;
   baseUrl?: string;
+  hostMode?: OllamaHostMode;
   customModels?: ConfigureProviderRequest["customModels"];
+  openRouterRouting?: CreateProviderRequest["openRouterRouting"];
+  wireApi?: WireApi;
+  chatgptOAuth?: CreateProviderRequest["chatgptOAuth"];
+  xaiOAuth?: CreateProviderRequest["xaiOAuth"];
 }): CreateProviderRequest {
-  const request = buildConfigureProviderRequest(options);
+  const customModels =
+    options.provider === "openai_compatible" ||
+    options.provider === "netra" ||
+    ([
+      "openrouter",
+      "xai_oauth",
+      "chatgpt",
+      "cerebras",
+      "fireworks",
+      "ollama",
+      "opencode_go",
+    ].includes(options.provider) &&
+      options.customModels?.length)
+      ? options.customModels
+      : undefined;
 
   return {
-    type: request.provider,
-    apiKey: request.apiKey,
-    ...(request.model ? { model: request.model } : {}),
-    ...(options.displayName?.trim() ? { label: options.displayName.trim() } : {}),
-    ...(request.baseUrl ? { baseUrl: request.baseUrl } : {}),
-    ...(request.customModels ? { customModels: request.customModels } : {}),
-  };
-}
-
-export function buildConfigureProviderRequest(options: {
-  apiKey: string;
-  provider: SelectedProvider;
-  model?: string;
-  displayName?: string;
-  baseUrl?: string;
-  customModels?: ConfigureProviderRequest["customModels"];
-}): ConfigureProviderRequest {
-  const request: ConfigureProviderRequest = {
     apiKey: options.apiKey,
-    provider: options.provider,
+    type: options.provider,
+    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- This optional field must stay absent when no value exists to preserve the wire payload contract.
+    ...(options.xaiOAuth ? { xaiOAuth: options.xaiOAuth } : {}),
+    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- This optional field must stay absent when no value exists to preserve the wire payload contract.
+    ...(options.chatgptOAuth ? { chatgptOAuth: options.chatgptOAuth } : {}),
+    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- This optional field must stay absent when no value exists to preserve the wire payload contract.
     ...(options.model ? { model: options.model } : {}),
+    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- This optional field must stay absent when no value exists to preserve the wire payload contract.
+    ...(options.displayName?.trim()
+      ? { label: options.displayName.trim() }
+      : {}),
+    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- This optional field must stay absent when no value exists to preserve the wire payload contract.
+    ...(options.baseUrl?.trim() ? { baseUrl: options.baseUrl.trim() } : {}),
+    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- This optional field must stay absent when no value exists to preserve the wire payload contract.
+    ...(options.hostMode ? { hostMode: options.hostMode } : {}),
+    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- This optional field must stay absent when no value exists to preserve the wire payload contract.
+    ...(options.provider === "openrouter" &&
+    options.openRouterRouting &&
+    Object.values(options.openRouterRouting).some(
+      (value) => value !== undefined
+    )
+      ? { openRouterRouting: options.openRouterRouting }
+      : {}),
+    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- This optional field must stay absent when no value exists to preserve the wire payload contract.
+    ...(customModels ? { customModels } : {}),
+    // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- This optional field must stay absent when no value exists to preserve the wire payload contract.
+    ...(options.wireApi === "responses" ? { wireApi: options.wireApi } : {}),
   };
-
-  if (options.provider === "openai_compatible") {
-    return {
-      ...request,
-      displayName: options.displayName?.trim(),
-      baseUrl: options.baseUrl?.trim(),
-      customModels: options.customModels,
-    };
-  }
-
-  if (options.provider === "openrouter" && options.customModels?.length) {
-    return {
-      ...request,
-      customModels: options.customModels,
-    };
-  }
-
-  if (options.provider === "cerebras" && options.customModels?.length) {
-    return {
-      ...request,
-      customModels: options.customModels,
-    };
-  }
-
-  if (options.provider === "opencode_go" && options.customModels?.length) {
-    return {
-      ...request,
-      customModels: options.customModels,
-    };
-  }
-
-  if (options.provider === "opencode_go") {
-    return request;
-  }
-
-  const baseUrl = options.baseUrl?.trim();
-  if (baseUrl) {
-    return { ...request, baseUrl };
-  }
-
-  return request;
 }
 
-export function encodeModelSelection(providerId: string, modelId: string): string {
+export function encodeModelSelection(
+  providerId: string,
+  modelId: string
+): string {
   return `${providerId}::${modelId}`;
 }
 
 export function decodeModelSelection(
-  value: string,
+  value: string
 ): { providerId: string; modelId: string } | null {
   const separator = value.indexOf("::");
 
@@ -600,13 +648,13 @@ export function decodeModelSelection(
   }
 
   return {
-    providerId: value.slice(0, separator),
     modelId: value.slice(separator + 2),
+    providerId: value.slice(0, separator),
   };
 }
 
 export function extractModelId(
-  value: string | null | undefined,
+  value: string | null | undefined
 ): string | null {
   if (!value) {
     return null;
@@ -615,9 +663,7 @@ export function extractModelId(
   return decodeModelSelection(value)?.modelId ?? value;
 }
 
-export function groupModelsByProvider(
-  models: ProviderModelOption[],
-): Array<{
+export function groupModelsByProvider(models: ProviderModelOption[]): Array<{
   providerId: string;
   providerLabel: string;
   models: ProviderModelOption[];
@@ -629,7 +675,10 @@ export function groupModelsByProvider(
 
   for (const model of models) {
     const providerId = model.providerId ?? model.provider;
-    const providerLabel = model.providerLabel ?? formatProviderLabel(model.provider);
+
+    const providerLabel =
+      model.providerLabel ?? formatProviderLabel(model.provider);
+
     const existing = groups.get(providerId);
 
     if (existing) {
@@ -638,25 +687,20 @@ export function groupModelsByProvider(
     }
 
     groups.set(providerId, {
+      models: [model],
       providerId,
       providerLabel,
-      models: [model],
     });
   }
 
   return [...groups.values()];
 }
 
-export const UNSET_MODEL_VALUE = "";
-
-/** Visible rows before a model select list scrolls (~SelectItem py-1 + text-sm). */
-export const MODEL_SELECT_MAX_VISIBLE_ROWS = 25;
-
-export const modelSelectContentMaxHeightClass = `max-h-[min(calc(1.75rem*${MODEL_SELECT_MAX_VISIBLE_ROWS}+0.5rem),var(--available-height))]`;
+const UNSET_MODEL_VALUE = "";
 
 export function profileModelSelectionValue(
   modelId: string | null,
-  groups: ReturnType<typeof groupModelsByProvider>,
+  groups: ReturnType<typeof groupModelsByProvider>
 ): string {
   if (!modelId) {
     return UNSET_MODEL_VALUE;
@@ -665,9 +709,11 @@ export function profileModelSelectionValue(
   const decoded = decodeModelSelection(modelId);
 
   if (decoded && decoded.providerId !== "__unknown__") {
-    const group = groups.find((entry) => entry.providerId === decoded.providerId);
+    const group = groups.find(
+      (entry) => entry.providerId === decoded.providerId
+    );
 
-    if (group?.models.some((model) => model.id === decoded.modelId)) {
+    if (group) {
       return modelId;
     }
   }
@@ -683,9 +729,42 @@ export function profileModelSelectionValue(
   return encodeModelSelection("__unknown__", resolvedModelId);
 }
 
+/**
+ * Drop a remembered selection whose provider or model is gone, so a stale pick
+ * falls back to the profile default instead of a model nobody can pick. An
+ * explicit provider is never remapped onto another one offering the same model
+ * id; empty groups mean the catalog has not loaded yet, so keep the selection.
+ */
+export function knownModelSelection(
+  selection: string | null | undefined,
+  groups: ReturnType<typeof groupModelsByProvider>
+): string | null {
+  if (!selection) {
+    return null;
+  }
+
+  if (groups.length === 0) {
+    return selection;
+  }
+
+  const decoded = decodeModelSelection(selection);
+  const modelId = decoded?.modelId ?? selection;
+
+  const pinnedProvider =
+    decoded && decoded.providerId !== "__unknown__" ? decoded.providerId : null;
+
+  const match = groups.find(
+    (group) =>
+      (!pinnedProvider || group.providerId === pinnedProvider) &&
+      group.models.some((model) => model.id === modelId)
+  );
+
+  return match ? encodeModelSelection(match.providerId, modelId) : null;
+}
+
 export function profileModelLabel(
   modelId: string | null,
-  groups: ReturnType<typeof groupModelsByProvider>,
+  groups: ReturnType<typeof groupModelsByProvider>
 ): string {
   if (!modelId) {
     return "Select model";
@@ -695,7 +774,10 @@ export function profileModelLabel(
   const resolvedModelId = decoded?.modelId ?? modelId;
 
   if (decoded && decoded.providerId !== "__unknown__") {
-    const group = groups.find((entry) => entry.providerId === decoded.providerId);
+    const group = groups.find(
+      (entry) => entry.providerId === decoded.providerId
+    );
+
     const match = group?.models.find((model) => model.id === resolvedModelId);
 
     if (match) {
@@ -705,6 +787,7 @@ export function profileModelLabel(
 
   for (const group of groups) {
     const match = group.models.find((model) => model.id === resolvedModelId);
+
     if (match) {
       return match.name;
     }
@@ -716,20 +799,28 @@ export function profileModelLabel(
 export function effectiveProfileModelSelection(
   profileModel: string | null | undefined,
   groups: ReturnType<typeof groupModelsByProvider>,
+  defaultProviderId?: string | null
 ): string | null {
-  if (!profileModel) {
-    return null;
+  if (profileModel) {
+    return profileModelSelectionValue(profileModel, groups);
   }
 
-  return profileModelSelectionValue(profileModel, groups);
+  const active = groups.find((group) => group.providerId === defaultProviderId);
+
+  const model =
+    active?.models.find((entry) => entry.default) ?? active?.models[0];
+
+  return model && active
+    ? encodeModelSelection(active.providerId, model.id)
+    : null;
 }
 
 export function resolveModelThinkingSupport(
   selection: string | null | undefined,
-  groups: ReturnType<typeof groupModelsByProvider>,
+  groups: ReturnType<typeof groupModelsByProvider>
 ): boolean | undefined {
   if (!selection) {
-    return undefined;
+    return;
   }
 
   const decoded = decodeModelSelection(selection);
@@ -737,8 +828,12 @@ export function resolveModelThinkingSupport(
 
   const findModel = () => {
     if (decoded && decoded.providerId !== "__unknown__") {
-      const group = groups.find((entry) => entry.providerId === decoded.providerId);
+      const group = groups.find(
+        (entry) => entry.providerId === decoded.providerId
+      );
+
       const match = group?.models.find((model) => model.id === resolvedModelId);
+
       if (match) {
         return match;
       }
@@ -746,24 +841,35 @@ export function resolveModelThinkingSupport(
 
     for (const group of groups) {
       const match = group.models.find((model) => model.id === resolvedModelId);
+
       if (match) {
         return match;
       }
     }
-
-    return undefined;
   };
 
   const model = findModel();
+
   if (!model) {
-    return undefined;
+    return;
   }
 
   if (
     model.provider === "openai_compatible" ||
     model.provider === "openrouter" ||
     model.provider === "deepseek" ||
-    model.provider === "cerebras"
+    model.provider === "doubao" ||
+    model.provider === "together" ||
+    model.provider === "xiaomi" ||
+    model.provider === "meta" ||
+    model.provider === "vercel_ai_gateway" ||
+    model.provider === "mistral" ||
+    model.provider === "qwen" ||
+    model.provider === "qwen_cn" ||
+    model.provider === "perplexity" ||
+    model.provider === "cerebras" ||
+    model.provider === "fireworks" ||
+    model.provider === "ollama"
   ) {
     return model.supportsThinking === true;
   }
@@ -773,10 +879,10 @@ export function resolveModelThinkingSupport(
 
 export function resolveModelVisionSupport(
   selection: string | null | undefined,
-  groups: ReturnType<typeof groupModelsByProvider>,
+  groups: ReturnType<typeof groupModelsByProvider>
 ): boolean | undefined {
   if (!selection) {
-    return undefined;
+    return;
   }
 
   const decoded = decodeModelSelection(selection);
@@ -784,8 +890,12 @@ export function resolveModelVisionSupport(
 
   const findModel = () => {
     if (decoded && decoded.providerId !== "__unknown__") {
-      const group = groups.find((entry) => entry.providerId === decoded.providerId);
+      const group = groups.find(
+        (entry) => entry.providerId === decoded.providerId
+      );
+
       const match = group?.models.find((model) => model.id === resolvedModelId);
+
       if (match) {
         return match;
       }
@@ -793,24 +903,63 @@ export function resolveModelVisionSupport(
 
     for (const group of groups) {
       const match = group.models.find((model) => model.id === resolvedModelId);
+
       if (match) {
         return match;
       }
     }
-
-    return undefined;
   };
 
   const model = findModel();
+
   if (!model) {
-    return undefined;
+    return;
   }
 
-  if (model.provider === "openai_compatible" || model.provider === "opencode_go" || model.provider === "deepseek" || model.provider === "cerebras") {
+  if (
+    model.provider === "openai_compatible" ||
+    model.provider === "opencode_go" ||
+    model.provider === "deepseek" ||
+    model.provider === "doubao" ||
+    model.provider === "together" ||
+    model.provider === "xiaomi" ||
+    model.provider === "meta" ||
+    model.provider === "vercel_ai_gateway" ||
+    model.provider === "mistral" ||
+    model.provider === "qwen" ||
+    model.provider === "qwen_cn" ||
+    model.provider === "perplexity" ||
+    model.provider === "cerebras" ||
+    model.provider === "fireworks" ||
+    model.provider === "ollama" ||
+    model.provider === "openrouter"
+  ) {
     return model.supportsVision === true;
   }
 
   return model.supportsVision !== false;
+}
+
+export function filterVisionCapableProviderGroups(
+  groups: ReturnType<typeof groupModelsByProvider>
+): ReturnType<typeof groupModelsByProvider> {
+  const visionGroups: typeof groups = [];
+
+  for (const group of groups) {
+    const models = group.models.filter(
+      (model) =>
+        resolveModelVisionSupport(
+          encodeModelSelection(group.providerId, model.id),
+          groups
+        ) === true
+    );
+
+    if (models.length > 0) {
+      visionGroups.push({ ...group, models });
+    }
+  }
+
+  return visionGroups;
 }
 
 export const TRANSCRIPTION_MODEL_OPTIONS = [
@@ -819,13 +968,29 @@ export const TRANSCRIPTION_MODEL_OPTIONS = [
   { id: "gpt-4o-mini-transcribe", name: "GPT-4o mini Transcribe" },
 ] as const;
 
+/** Sole v1 image-generation model option (matches server allowlist). */
+export const IMAGE_GENERATION_MODEL_OPTIONS = [
+  { id: "gpt-image-2", name: "GPT Image 2" },
+] as const;
+
+/** Workspace selection string accepted by `/v1/settings/image-generation`. */
+export const IMAGE_GENERATION_SELECTION =
+  `openai::${IMAGE_GENERATION_MODEL_OPTIONS[0].id}` as const;
+
 export function modelsFromCustomRows(
-  rows: Array<{ id: string; name?: string; default?: boolean; inputPerMillionUsd?: number; outputPerMillionUsd?: number }>,
+  rows: Array<{
+    id: string;
+    name?: string;
+    default?: boolean;
+    inputPerMillionUsd?: number;
+    outputPerMillionUsd?: number;
+  }>
 ): ProviderModelOption[] {
   const models: ProviderModelOption[] = [];
 
   for (const row of rows) {
     const id = row.id.trim();
+
     if (!id) {
       continue;
     }
@@ -834,6 +999,7 @@ export function modelsFromCustomRows(
       id,
       name: row.name?.trim() || id,
       provider: "openai_compatible" as const,
+      // oxlint-disable-next-line anti-slop/no-conditional-empty-object-spread -- This optional field must stay absent when no value exists to preserve the wire payload contract.
       ...(row.default ? { default: true } : {}),
     });
   }

@@ -1,332 +1,309 @@
-import type { LucideIcon } from "lucide-react";
+import { Button } from "@nakama/ui/button";
+import { TooltipProvider } from "@nakama/ui/tooltip";
+import { cn } from "@nakama/ui/utils";
 import {
-  ChevronsLeftIcon,
-  ChevronsRightIcon,
-} from "lucide-react";
-import type { SVGProps } from "react";
-import { useMemo } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
-import { Button } from "@/components/ui/button";
+  ArrowLeft01Icon,
+  ArrowLeft02Icon,
+  ArrowRight01Icon,
+  Search01Icon,
+} from "hugeicons-react";
+import { lazy, Suspense, useMemo } from "react";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+  Link,
+  Outlet,
+  useLocation,
+  useMatch,
+  useNavigate,
+} from "react-router-dom";
+import { AppSidebar } from "@/components/AppSidebar";
+import { CommandPalette } from "@/components/CommandPalette";
+import { MobileNavDrawer } from "@/components/MobileNavDrawer";
+import { ProfileRail } from "@/components/ProfileRail";
+import { RouteBoundary } from "@/components/RouteBoundary";
+import { useBtwChatStore } from "@/context/btw-chat-store";
 import { useAppContext } from "@/context/use-app-context";
-import { useAuth } from "@/context/use-auth";
-import { OrgSwitcher } from "@/components/OrgSwitcher";
-import { SidebarUserMenu } from "@/components/SidebarUserMenu";
-import { usePrefetchAppData } from "@/hooks/use-app-queries";
-import { useAutomationUnreadTotal } from "@/hooks/use-automations";
-import { useSidebarCollapsed } from "@/hooks/use-sidebar-collapsed";
-import { cn } from "@/lib/utils";
-import { chatProfileIdFromPath } from "@/lib/chat-history";
+import { useAgentGroupQuery } from "@/hooks/use-agent-groups";
+import { useOrgPlugins } from "@/hooks/use-plugins";
 import {
+  useHistorySessionsQuery,
+  useSessionSummaryQuery,
+} from "@/hooks/use-resource-mutations";
+import {
+  enabledPluginNavEntries,
   findNavItem,
-  navHrefForPage,
-  NAV_GROUPS,
-  NAV_ITEM_ICONS,
-  canAccessSystemPage,
-  canAccessIntegrationsPage,
+  groupRouteFromPath,
   PAGE_PATHS,
-  PLATFORM_ADMIN_PAGE_IDS,
+  type PageId,
   pageIdFromPath,
-  type NavItem,
+  pluginIdFromPath,
+  SIDEBAR_PAGE_IDS,
+  sidebarPageId,
 } from "@/lib/navigation";
 
-const GITHUB_REPO_URL = "https://github.com/ahmadrosid/nakama";
+const BtwChatHost = lazy(() =>
+  import("@/components/chat/btw-chat").then((module) => ({
+    default: module.BtwChatHost,
+  }))
+);
 
 export function Layout() {
-  const location = useLocation();
-  const page = pageIdFromPath(location.pathname) ?? "chat";
-  const chatProfileId = chatProfileIdFromPath(location.pathname);
-  const { error } = useAppContext();
-  const { user, activeOrg } = useAuth();
-  const prefetchAppData = usePrefetchAppData();
-  const { data: automationUnreadTotal = 0 } = useAutomationUnreadTotal();
-  const { collapsed, toggle } = useSidebarCollapsed();
-  const activeNav = findNavItem(page);
-  const navGroups = useMemo(() => {
-    const groups: typeof NAV_GROUPS = [];
-
-    for (const group of NAV_GROUPS) {
-      const items = group.items.filter((item) => {
-        if (item.id === "soul") {
-          return canAccessSystemPage(user?.isPlatformAdmin === true, activeOrg?.role);
-        }
-
-        if (item.id === "integrations") {
-          return canAccessIntegrationsPage(activeOrg?.role);
-        }
-
-        return (
-          !PLATFORM_ADMIN_PAGE_IDS.has(item.id) || user?.isPlatformAdmin === true
-        );
-      });
-
-      if (items.length > 0) {
-        groups.push({ ...group, items });
-      }
-    }
-
-    return groups;
-  }, [activeOrg?.role, user?.isPlatformAdmin]);
+  const shell = useAppShell();
+  const btwOpen = useBtwChatStore((store) => store.chat !== null);
 
   return (
     <TooltipProvider delay={0}>
-      <div className="flex h-svh overflow-hidden bg-background">
-        <aside
-          aria-label="Main navigation"
-          data-collapsed={collapsed || undefined}
-          className={cn(
-            "flex h-full shrink-0 flex-col overflow-hidden border-r border-border/50 bg-sidebar transition-[width] duration-200 ease-out motion-reduce:transition-none",
-            collapsed ? "w-14" : "w-60",
-          )}
-        >
+      <div className="flex h-svh flex-col overflow-hidden bg-background">
+        <DesktopTitleBar />
+        <div className="flex min-h-0 flex-1 overflow-hidden pl-[env(safe-area-inset-left)]">
+          {/* The rail and sidebar cost a fixed 296px, so on a phone they live
+            in MobileNavDrawer instead of the layout. */}
+          <div className="hidden h-full sm:flex">
+            <ProfileRail />
+            <AppSidebar />
+          </div>
           <div
-            className={cn(
-              "app-shell-header",
-              collapsed ? "h-auto min-h-14 flex-col gap-2 px-2 py-3" : "gap-2.5 px-3",
-            )}
+            className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden pr-[env(safe-area-inset-right)]"
+            data-app-shell-content=""
           >
-            <img
-              src="/nakama.png"
-              alt="Nakama"
-              className="size-8 shrink-0 rounded-lg object-contain"
+            <AppShellHeader
+              hideDesktop={
+                shell.pathname === PAGE_PATHS.profiles ||
+                shell.pathname.startsWith(`${PAGE_PATHS.profiles}/skills/`) ||
+                // A group chat takes the full desktop column, like agent chat.
+                groupRouteFromPath(shell.pathname) !== null
+              }
+              label={shell.headerLabel}
+              page={shell.page}
             />
-            {!collapsed ? (
-              <p className="type-brand min-w-0 flex-1 truncate">Nakama</p>
-            ) : null}
-            {!collapsed ? <GitHubRepoButton /> : null}
-            <SidebarCollapseButton collapsed={collapsed} onToggle={toggle} />
+            <AppShellError error={shell.error} />
+            <main className={appShellMainClassName(shell.page, shell.pathname)}>
+              <RouteBoundary resetKey={shell.pathname}>
+                <Outlet />
+              </RouteBoundary>
+            </main>
           </div>
-
-          <div className={cn("shrink-0 pt-4", collapsed ? "px-2 pb-2" : "px-3 pb-3")}>
-            <OrgSwitcher collapsed={collapsed} />
-          </div>
-
-          <nav
-            className={cn(
-              "no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto",
-              collapsed ? "p-2" : "p-3",
-            )}
-          >
-            {navGroups.map((group, groupIndex) => (
-              <div key={group.id}>
-                {groupIndex > 0 ? (
-                  <div className="sidebar-nav-divider" aria-hidden="true" />
-                ) : null}
-                <div
-                  className="sidebar-nav-group"
-                  role="group"
-                  aria-label={group.label}
-                >
-                  {!collapsed ? (
-                    <p className="sidebar-nav-group-label">{group.label}</p>
-                  ) : null}
-                  <div className="sidebar-nav-group-items">
-                    {group.items.map((item) => (
-                      <SidebarNavButton
-                        key={item.id}
-                        item={item}
-                        icon={NAV_ITEM_ICONS[item.id]}
-                        active={item.id === page}
-                        collapsed={collapsed}
-                        badge={item.id === "automations" ? automationUnreadTotal : undefined}
-                        to={
-                          item.id === "soul"
-                            ? `${navHrefForPage(item.id, chatProfileId)}?tab=tools`
-                            : navHrefForPage(item.id, chatProfileId)
-                        }
-                        onPrefetch={
-                          item.id === "automations" ? prefetchAppData : undefined
-                        }
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </nav>
-
-          <div
-            className={cn(
-              "sidebar-nav-footer flex shrink-0 flex-col border-t border-border/50",
-              collapsed ? "justify-center px-2 py-2.5" : "px-3 py-3",
-            )}
-          >
-            <SidebarUserMenu collapsed={collapsed} />
-          </div>
-        </aside>
-
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          {page !== "chat" ? (
-            <header className="app-shell-header gap-4 bg-card px-6">
-              <h1 className="type-brand min-w-0 truncate">{activeNav?.label}</h1>
-            </header>
-          ) : null}
-
-          {error ? (
-            <div className="shrink-0 border-b border-red-200 bg-red-50 px-6 py-3 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-200">
-              {error}
-            </div>
-          ) : null}
-
-          <main
-            className={
-              page === "chat" ||
-              page === "tasks" ||
-              page === "automations" ||
-              location.pathname.startsWith(`${PAGE_PATHS.soul}/playground/`)
-                ? "flex min-h-0 flex-1 flex-col overflow-hidden"
-                : "min-h-0 flex-1 overflow-y-auto p-6"
-            }
-          >
-            <Outlet />
-          </main>
         </div>
       </div>
+      <CommandPalette />
+      {btwOpen ? (
+        <Suspense fallback={null}>
+          <BtwChatHost />
+        </Suspense>
+      ) : null}
     </TooltipProvider>
   );
 }
 
-function GitHubRepoButton() {
+/**
+ * The desktop app's window title bar. CSS shows it only under
+ * `html[data-desktop]`, which the Electron preload sets.
+ */
+function DesktopTitleBar() {
+  const navigate = useNavigate();
+  const shortcut = navigator.userAgent.includes("Mac") ? "⌘K" : "Ctrl K";
+
   return (
-    <a
-      href={GITHUB_REPO_URL}
-      target="_blank"
-      rel="noreferrer"
-      aria-label="Open GitHub repository"
-      title="Open GitHub repository"
-      className="inline-flex size-7 shrink-0 items-center justify-center rounded-[min(var(--radius-md),12px)] text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
-    >
-      <GitHubMark className="sidebar-nav-icon" aria-hidden="true" />
-    </a>
+    <div className="desktop-title-bar">
+      <Button
+        aria-label="Back"
+        className="text-muted-foreground hover:text-foreground"
+        onClick={() => navigate(-1)}
+        size="icon-sm"
+        title="Back"
+        variant="ghost"
+      >
+        <ArrowLeft01Icon aria-hidden="true" className="size-4" />
+      </Button>
+      <Button
+        aria-label="Forward"
+        className="text-muted-foreground hover:text-foreground"
+        onClick={() => navigate(1)}
+        size="icon-sm"
+        title="Forward"
+        variant="ghost"
+      >
+        <ArrowRight01Icon aria-hidden="true" className="size-4" />
+      </Button>
+      <button
+        className="desktop-title-bar-search"
+        // CommandPalette owns its open state and listens for this shortcut.
+        onClick={() =>
+          window.dispatchEvent(
+            new KeyboardEvent("keydown", { ctrlKey: true, key: "k" })
+          )
+        }
+        type="button"
+      >
+        <Search01Icon aria-hidden="true" className="size-3.5" />
+        <span className="flex-1 text-left">Search</span>
+        <kbd className="font-sans text-2xs">{shortcut}</kbd>
+      </button>
+    </div>
   );
 }
 
-function GitHubMark(props: SVGProps<SVGSVGElement>) {
+function useAppShell() {
+  const location = useLocation();
+  const page = pageIdFromPath(location.pathname) ?? "chat";
+  const { error } = useAppContext();
+  const chatRoute = useMatch("/chat/:profileId/:sessionId");
+  const chatProfileId = chatRoute?.params.profileId ?? "";
+  const chatSessionId = chatRoute?.params.sessionId ?? null;
+
+  const { data: sessions, hasNextPage } =
+    useHistorySessionsQuery(chatProfileId);
+
+  const listedChat = sessions.find((session) => session.id === chatSessionId);
+
+  // An old chat opened by URL can sit on a page the sidebar has not loaded.
+  const { data: unlistedChat } = useSessionSummaryQuery(
+    chatProfileId,
+    listedChat || !hasNextPage ? null : chatSessionId
+  );
+
+  const chatTitle = (listedChat ?? unlistedChat)?.title?.trim();
+
+  // On a phone the header names the group.
+  const groupRoute = groupRouteFromPath(location.pathname);
+  const { data: group } = useAgentGroupQuery(groupRoute?.groupId ?? "");
+  const groupTitle = group?.name;
+
+  const { data: orgPlugins = [] } = useOrgPlugins();
+
+  const pluginNav = useMemo(
+    () => enabledPluginNavEntries(orgPlugins),
+    [orgPlugins]
+  );
+
+  const activePluginId = pluginIdFromPath(location.pathname);
+
+  const activePlugin = pluginNav.find(
+    (entry) => entry.pluginId === activePluginId
+  );
+
+  return {
+    error,
+    headerLabel:
+      chatTitle ||
+      groupTitle ||
+      (activePlugin?.label ??
+        findNavItem(sidebarPageId(page))?.label ??
+        activePluginId ??
+        undefined),
+    page,
+    pathname: location.pathname,
+  };
+}
+
+function isFlushContentPage(page: PageId, pathname: string): boolean {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
-      <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.38 7.86 10.9.58.11.79-.25.79-.56v-2.02c-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.2 1.77 1.2 1.03 1.76 2.69 1.25 3.34.96.1-.75.4-1.25.72-1.54-2.56-.29-5.24-1.28-5.24-5.71 0-1.26.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.19 1.18a11.1 11.1 0 0 1 5.8 0c2.22-1.49 3.18-1.18 3.18-1.18.64 1.58.24 2.75.12 3.04.74.8 1.19 1.82 1.19 3.08 0 4.44-2.69 5.42-5.25 5.71.41.36.77 1.07.77 2.16v3.2c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
-    </svg>
+    page === "chat" ||
+    page === "automations" ||
+    page === "files" ||
+    page === "plugins" ||
+    pathname.startsWith(`${PAGE_PATHS.groups}/`) ||
+    pathname.startsWith(`${PAGE_PATHS.profiles}/skills/`) ||
+    pathname.startsWith(`${PAGE_PATHS.soul}/playground/`)
   );
 }
 
-function SidebarCollapseButton({
-  collapsed,
-  onToggle,
+function appShellMainClassName(page: PageId, pathname: string): string {
+  const flush = isFlushContentPage(page, pathname);
+  const skillDetail = pathname.startsWith(`${PAGE_PATHS.profiles}/skills/`);
+
+  return cn(
+    "min-h-0 flex-1",
+    flush
+      ? "flex flex-col overflow-hidden"
+      : "overflow-y-auto overflow-x-hidden",
+    flush || skillDetail ? null : "p-4 sm:p-6"
+  );
+}
+
+function AppShellHeader({
+  hideDesktop,
+  label,
+  page,
 }: {
-  collapsed: boolean;
-  onToggle: () => void;
+  hideDesktop: boolean;
+  label: string | undefined;
+  page: PageId;
 }) {
-  const CollapseIcon = collapsed ? ChevronsRightIcon : ChevronsLeftIcon;
+  const hideTitle = page === "soul";
+
+  const showCustomizeBack =
+    page !== "notifications" && !SIDEBAR_PAGE_IDS.includes(sidebarPageId(page));
+
+  // SAFETY: PageId is a string union; the lookup falls back when the key is absent.
+  const backLabel =
+    {
+      customize: "Back to Chat",
+      plugins: "Back to Plugins",
+    }[page as string] ?? "Back to Control center";
+
+  // SAFETY: PageId is a string union; the lookup falls back when the key is absent.
+  const backPath =
+    {
+      customize: PAGE_PATHS.chat,
+      plugins: PAGE_PATHS["plugin-management"],
+    }[page as string] ?? PAGE_PATHS.customize;
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-      aria-expanded={!collapsed}
-      title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-      onClick={onToggle}
+    <header
       className={cn(
-        "shrink-0 text-muted-foreground/70 hover:text-foreground",
-        collapsed && "size-9 rounded-md hover:bg-sidebar-accent/60",
-        !collapsed && "ml-auto",
+        "app-shell-header gap-2 bg-card px-3 sm:gap-4 sm:px-6",
+        // Standalone on iOS the shell owns the status bar, so the bar grows by
+        // the top inset and paints its own background under the notch.
+        "h-[calc(3.5rem+env(safe-area-inset-top))] pt-[env(safe-area-inset-top)]",
+        // Chat uses the full desktop column; phones still need the header
+        // to reach navigation.
+        (page === "chat" || hideDesktop) && "sm:hidden"
       )}
     >
-      <CollapseIcon className="sidebar-nav-icon" strokeWidth={1.75} />
-    </Button>
+      <MobileNavDrawer className="sm:hidden" />
+      {(showCustomizeBack || page === "customize") && (
+        <Button
+          aria-label={backLabel}
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          nativeButton={false}
+          render={<Link to={backPath} />}
+          size="icon-sm"
+          title={backLabel}
+          variant="ghost"
+        >
+          <ArrowLeft02Icon
+            aria-hidden="true"
+            className="size-4"
+            strokeWidth={1.75}
+          />
+        </Button>
+      )}
+      {hideTitle ? null : (
+        <h1 className="min-w-0 truncate font-normal text-base text-foreground tracking-tight">
+          {label}
+        </h1>
+      )}
+      <div
+        className={cn(
+          // Below sm the actions share the row with the menu button, so they
+          // give way and scroll instead of pushing the header wider.
+          "flex h-full min-w-0 items-stretch gap-2 sm:shrink-0",
+          !hideTitle && "ml-auto"
+        )}
+        data-page-header-actions
+      />
+    </header>
   );
 }
 
-function SidebarNavButton({
-  item,
-  icon: Icon,
-  active,
-  collapsed,
-  to,
-  onPrefetch,
-  badge,
-  className,
-}: {
-  item: NavItem;
-  icon: LucideIcon;
-  active: boolean;
-  collapsed: boolean;
-  to: string;
-  onPrefetch?: () => void;
-  badge?: number;
-  className?: string;
-}) {
-  const showBadge = Boolean(badge && badge > 0);
-  const badgeLabel = badge && badge > 99 ? "99+" : String(badge ?? "");
-
-  const link = (
-    <Link
-      to={to}
-      title={collapsed ? undefined : item.description}
-      aria-label={
-        showBadge ? `${item.label}, ${badge} unread automation run${badge === 1 ? "" : "s"}` : item.label
-      }
-      aria-current={active ? "page" : undefined}
-      onMouseEnter={onPrefetch}
-      onFocus={onPrefetch}
-      data-active={active || undefined}
-      className={cn(
-        "sidebar-nav-link",
-        collapsed && "sidebar-nav-link--collapsed",
-        className,
-      )}
-    >
-      <span className="relative shrink-0">
-        <Icon
-          className="sidebar-nav-icon"
-          strokeWidth={1.75}
-          aria-hidden="true"
-        />
-        {showBadge && collapsed ? (
-          <span
-            className="absolute right-0 top-0 inline-flex h-[18px] min-w-[18px] translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-sidebar bg-primary px-1.5 text-[10px] font-bold leading-none tabular-nums text-primary-foreground shadow-sm"
-            aria-hidden
-          >
-            {badgeLabel}
-          </span>
-        ) : null}
-      </span>
-      {!collapsed ? (
-        <>
-          <span className="min-w-0 truncate">{item.label}</span>
-          {showBadge ? (
-            <span
-              className="ml-auto inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary-foreground"
-              aria-hidden
-            >
-              {badgeLabel}
-            </span>
-          ) : null}
-        </>
-      ) : null}
-    </Link>
-  );
-
-  if (!collapsed) {
-    return link;
+function AppShellError({ error }: { error: string | null | undefined }) {
+  if (!error) {
+    return null;
   }
 
-  const tooltipLabel = showBadge
-    ? `${item.label} (${badge} unread)`
-    : item.label;
-
   return (
-    <Tooltip>
-      <TooltipTrigger render={link} />
-      <TooltipContent side="right" sideOffset={8}>
-        {tooltipLabel}
-      </TooltipContent>
-    </Tooltip>
+    <div className="shrink-0 border-red-200 border-b bg-red-50 px-4 py-3 text-red-800 text-sm sm:px-6 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-200">
+      {error}
+    </div>
   );
 }

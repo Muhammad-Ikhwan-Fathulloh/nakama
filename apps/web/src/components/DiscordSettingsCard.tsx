@@ -1,36 +1,147 @@
-import { useEffect, useRef, useState } from "react";
 import type { UpdateDiscordSettingsRequest } from "@nakama/core/contract";
+import { useEffect, useRef, useState } from "react";
 import {
-  DiscordAllowedUsersDialog,
   type AllowedDiscordUser,
+  DiscordAllowedUsersDialog,
 } from "@/components/DiscordAllowedUsersDialog";
 import { DiscordSettingsCardContent } from "@/components/discord-settings-card-content";
 import { SETTINGS_CARD_LOADING_SKELETON } from "@/components/integration-settings.shared";
-import { Card, CardContent } from "@/components/ui/card";
-import { useProfilesQuery } from "@/hooks/use-app-queries";
-import { useSystemStatusQuery } from "@/hooks/use-system-status";
 import {
+  useChannelProfileId,
+  useDiscordSettings,
   useRegenerateDiscordHandshake,
   useSaveDiscordSettings,
-  useDiscordSettings,
-} from "@/hooks/use-discord-settings";
+} from "@/hooks/use-app-queries";
+import { useSystemStatusQuery } from "@/hooks/use-system-status";
+import { useStartWorker } from "@/hooks/use-worker-actions";
 import { formatError } from "@/lib/client";
 
 interface DiscordSettingsCardProps {
   embedded?: boolean;
-  submitLabel?: string;
   onSaveSuccess?: () => void;
+  submitLabel?: string;
 }
 
-export function DiscordSettingsCard({
-  embedded = false,
-  submitLabel = "Save",
-  onSaveSuccess,
-}: DiscordSettingsCardProps) {
-  const { data: settings, isLoading, error: loadError } = useDiscordSettings();
+function hydrateAllowedUsers(
+  current: AllowedDiscordUser[],
+  allowedUserIds: Array<string | number>
+): AllowedDiscordUser[] {
+  const existing = new Map(current.map((user) => [user.id, user]));
+
+  return allowedUserIds.map((id) => {
+    const stringId = String(id);
+
+    return existing.get(stringId) ?? { id: stringId };
+  });
+}
+
+function formatAllowedUserSummary(count: number): string {
+  if (count === 0) {
+    return "No manual users";
+  }
+
+  return `${count} user${count === 1 ? "" : "s"}`;
+}
+
+function settingsStatusLine(
+  hint: string | null,
+  formError: string | null,
+  loadError: Error | null
+): string | null {
+  if (hint) {
+    return hint;
+  }
+
+  if (formError) {
+    return formError;
+  }
+
+  if (loadError) {
+    return formatError(loadError);
+  }
+
+  return null;
+}
+
+function discordStatusBadge(input: {
+  configured: boolean;
+  hasLinkedUsers: boolean;
+  running: boolean;
+  connected: boolean;
+}): string {
+  if (!input.configured) {
+    return "Not set up";
+  }
+
+  if (input.hasLinkedUsers && input.running && input.connected) {
+    return "Connected";
+  }
+
+  if (input.hasLinkedUsers) {
+    return "Offline";
+  }
+
+  return "Awaiting link";
+}
+
+function channelSaveHint(saved: {
+  allowedUserIds: unknown[];
+  handshakeCode?: string | null;
+  pairedUserIds: unknown[];
+}): string {
+  const savedHasLinkedUsers =
+    saved.pairedUserIds.length > 0 || saved.allowedUserIds.length > 0;
+
+  if (saved.handshakeCode && !savedHasLinkedUsers) {
+    return "Saved. Send the pairing code to your bot.";
+  }
+
+  if (savedHasLinkedUsers) {
+    return "Saved.";
+  }
+
+  return "Saved. Get a pairing code if you still need to link.";
+}
+
+function buildDiscordSaveRequest(
+  allowedUsers: AllowedDiscordUser[],
+  profileId: string,
+  botToken: string
+): UpdateDiscordSettingsRequest {
+  const request: UpdateDiscordSettingsRequest = {
+    allowedUserIds: allowedUsers.map((user) => user.id).join(","),
+    profileId: profileId.trim() || "default",
+  };
+
+  if (botToken.trim()) {
+    request.botToken = botToken.trim();
+  }
+
+  return request;
+}
+
+function DiscordSettingsLoading({ embedded }: { embedded: boolean }) {
+  if (embedded) {
+    return SETTINGS_CARD_LOADING_SKELETON;
+  }
+
+  return <div className="py-3">{SETTINGS_CARD_LOADING_SKELETON}</div>;
+}
+
+function useDiscordSettingsCard(onSaveSuccess?: () => void) {
+  const ownerProfileId = useChannelProfileId();
+
+  const {
+    data: settings,
+    isLoading,
+    error: loadError,
+    refetch,
+  } = useDiscordSettings();
+
   const { data: status } = useSystemStatusQuery();
-  const { data: profiles = [] } = useProfilesQuery();
   const saveMutation = useSaveDiscordSettings();
+  const startMutation = useStartWorker();
+  const savingRef = useRef(false);
   const regenerateMutation = useRegenerateDiscordHandshake();
 
   const [botToken, setBotToken] = useState("");
@@ -48,16 +159,12 @@ export function DiscordSettingsCard({
       return;
     }
 
-    setProfileId(settings.profileId);
+    setProfileId(ownerProfileId ?? settings.profileId);
     setBotToken("");
-    setAllowedUsers((current) => {
-      const existing = new Map(current.map((user) => [user.id, user]));
-      return settings.allowedUserIds.map((id) => {
-        const stringId = String(id);
-        return existing.get(stringId) ?? { id: stringId };
-      });
-    });
-  }, [settings]);
+    setAllowedUsers((current) =>
+      hydrateAllowedUsers(current, settings.allowedUserIds)
+    );
+  }, [settings, ownerProfileId]);
 
   const pairingCode = settings?.handshakeCode ?? null;
 
@@ -65,13 +172,14 @@ export function DiscordSettingsCard({
     setCopied(false);
   }, [pairingCode]);
 
-  useEffect(() => {
-    return () => {
+  useEffect(
+    () => () => {
       if (copyTimeoutRef.current) {
         clearTimeout(copyTimeoutRef.current);
       }
-    };
-  }, []);
+    },
+    []
+  );
 
   const configured = settings?.configured === true;
   const isPaired = (settings?.pairedUserIds.length ?? 0) > 0;
@@ -79,32 +187,11 @@ export function DiscordSettingsCard({
   const hasLinkedUsers = isPaired || hasAllowedUsers;
   const worker = status?.discordWorker;
   const running = worker?.running === true;
-  const canSave = configured || botToken.trim().length > 0;
-  const allowedUserSummary =
-    allowedUsers.length === 0
-      ? "No manual users"
-      : `${allowedUsers.length} user${allowedUsers.length === 1 ? "" : "s"}`;
-
-  const statusLine =
-    hint ?? (formError ? formError : null) ?? (loadError ? formatError(loadError) : null);
-
-  const headerSubtitle = !configured
-    ? "Step 1: paste a bot token from Discord Developer Portal"
-    : hasLinkedUsers && running
-      ? "Your Discord is connected to Nakama"
-      : hasLinkedUsers
-        ? "Linked. Start the bridge to receive messages"
-        : pairingCode
-          ? "Step 2: send your pairing code to the bot in Discord"
-          : "Step 2: generate a pairing code and send it to your bot";
-
-  const statusBadge = !configured
-    ? "Not set up"
-    : hasLinkedUsers && running
-      ? "Connected"
-      : hasLinkedUsers
-        ? "Paired"
-        : "Awaiting link";
+  useEffect(() => {
+    if (worker?.paired && !hasLinkedUsers) {
+      void refetch();
+    }
+  }, [worker?.paired, hasLinkedUsers, refetch]);
 
   async function copyHandshakeCode() {
     if (!pairingCode) {
@@ -114,9 +201,11 @@ export function DiscordSettingsCard({
     try {
       await navigator.clipboard.writeText(pairingCode);
       setCopied(true);
+
       if (copyTimeoutRef.current) {
         clearTimeout(copyTimeoutRef.current);
       }
+
       copyTimeoutRef.current = setTimeout(() => {
         setCopied(false);
         copyTimeoutRef.current = null;
@@ -126,39 +215,33 @@ export function DiscordSettingsCard({
     }
   }
 
-  function handleSave(afterSuccess?: () => void) {
+  async function handleSave(token = botToken) {
+    if (savingRef.current || !token.trim()) {
+      return;
+    }
+
+    savingRef.current = true;
     setFormError(null);
     setHint(null);
 
-    const request: UpdateDiscordSettingsRequest = {
-      allowedUserIds: allowedUsers.map((user) => user.id).join(","),
-      profileId: profileId.trim() || "default",
-    };
+    try {
+      const saved = await saveMutation.mutateAsync(
+        buildDiscordSaveRequest(allowedUsers, profileId, token)
+      );
 
-    if (botToken.trim()) {
-      request.botToken = botToken.trim();
+      setBotToken("");
+
+      if (!configured && worker?.process?.managed) {
+        await startMutation.mutateAsync("discord");
+      }
+
+      setHint(channelSaveHint(saved));
+      onSaveSuccess?.();
+    } catch (err) {
+      setFormError(formatError(err));
+    } finally {
+      savingRef.current = false;
     }
-
-    saveMutation.mutate(request, {
-      onSuccess: (saved) => {
-        setBotToken("");
-        const savedHasLinkedUsers =
-          saved.pairedUserIds.length > 0 || saved.allowedUserIds.length > 0;
-
-        if (saved.handshakeCode && !savedHasLinkedUsers) {
-          setHint("Saved. Send the pairing code to your bot.");
-        } else if (savedHasLinkedUsers) {
-          setHint("Saved.");
-        } else {
-          setHint("Saved. Get a pairing code if you still need to link.");
-        }
-        afterSuccess?.();
-        onSaveSuccess?.();
-      },
-      onError: (err) => {
-        setFormError(formatError(err));
-      },
-    });
   }
 
   function handleRegenerateHandshake() {
@@ -166,106 +249,147 @@ export function DiscordSettingsCard({
     setHint(null);
 
     regenerateMutation.mutate(undefined, {
-      onSuccess: () => {
-        setHint("New code ready — send it to your bot in Discord.");
-      },
       onError: (err) => {
         setFormError(formatError(err));
+      },
+      onSuccess: () => {
+        setHint("New code ready — send it to your bot in Discord.");
       },
     });
   }
 
-  if (isLoading) {
-    if (embedded) {
-      return SETTINGS_CARD_LOADING_SKELETON;
-    }
+  return {
+    allowedUserSummary: formatAllowedUserSummary(allowedUsers.length),
+    allowedUsers,
+    allowedUsersOpen,
+    botToken,
+    canSave: botToken.trim().length > 0,
+    configured,
+    copied,
+    copyHandshakeCode,
+    formError,
+    handleRegenerateHandshake,
+    handleSave,
+    hasLinkedUsers,
+    isLoading,
+    isPaired,
+    loadError,
+    pairingCode,
+    profileId,
+    regeneratePending: regenerateMutation.isPending,
+    running,
+    savePending: saveMutation.isPending || startMutation.isPending,
+    setAllowedUsers,
+    setAllowedUsersOpen,
+    setBotToken,
+    setFormError,
+    setHint,
+    setShowBotToken,
+    settings,
+    showBotToken,
+    statusBadge: discordStatusBadge({
+      configured,
+      connected: worker?.connected === true,
+      hasLinkedUsers,
+      running,
+    }),
+    statusLine: settingsStatusLine(hint, formError, loadError),
+    worker,
+  };
+}
 
-    return (
-      <Card className="w-full shadow-none">
-        <CardContent className="py-3">{SETTINGS_CARD_LOADING_SKELETON}</CardContent>
-      </Card>
-    );
-  }
-
+function DiscordSettingsCardLoaded({
+  card,
+  embedded,
+  submitLabel,
+}: {
+  card: ReturnType<typeof useDiscordSettingsCard>;
+  embedded: boolean;
+  submitLabel: string;
+}) {
   const content = (
     <DiscordSettingsCardContent
-      view={{
-        embedded,
-        configured,
-        hasLinkedUsers,
-        running,
-        showBotToken,
-        savePending: saveMutation.isPending,
-        isPaired,
-        copied,
-        regeneratePending: regenerateMutation.isPending,
-        canSave,
-      }}
-      headerSubtitle={headerSubtitle}
-      statusBadge={statusBadge}
-      settings={settings}
-      botToken={botToken}
+      allowedUserSummary={card.allowedUserSummary}
+      botToken={card.botToken}
+      formError={card.formError}
+      loadError={card.loadError}
       onBotTokenChange={(value) => {
-        setBotToken(value);
-        setHint(null);
-        if (formError) {
-          setFormError(null);
+        card.setBotToken(value);
+        card.setHint(null);
+
+        if (card.formError) {
+          card.setFormError(null);
         }
       }}
-      onToggleShowBotToken={() => setShowBotToken((current) => !current)}
-      pairingCode={pairingCode}
-      onCopyHandshakeCode={() => void copyHandshakeCode()}
-      onRegenerateHandshake={handleRegenerateHandshake}
-      allowedUserSummary={allowedUserSummary}
-      onManageAllowedUsers={() => setAllowedUsersOpen(true)}
-      profileId={profileId}
-      profiles={profiles}
-      onProfileChange={(value) => {
-        setProfileId(value);
-        setHint(null);
+      onBotTokenPaste={(value) => {
+        card.setBotToken(value);
+        void card.handleSave(value);
       }}
-      worker={worker}
-      statusLine={statusLine}
-      formError={formError}
-      loadError={loadError}
+      onCopyHandshakeCode={() => void card.copyHandshakeCode()}
+      onManageAllowedUsers={() => card.setAllowedUsersOpen(true)}
+      onRegenerateHandshake={card.handleRegenerateHandshake}
+      onSave={() => void card.handleSave()}
+      onToggleShowBotToken={() => card.setShowBotToken((current) => !current)}
+      pairingCode={card.pairingCode}
+      settings={card.settings}
+      statusBadge={card.statusBadge}
+      statusLine={card.statusLine}
       submitLabel={submitLabel}
-      onSave={() => handleSave()}
+      view={{
+        canSave: card.canSave,
+        configured: card.configured,
+        copied: card.copied,
+        embedded,
+        hasLinkedUsers: card.hasLinkedUsers,
+        isPaired: card.isPaired,
+        regeneratePending: card.regeneratePending,
+        running: card.running,
+        savePending: card.savePending,
+        showBotToken: card.showBotToken,
+      }}
+      worker={card.worker}
     />
   );
 
   const allowedUsersDialog = (
     <DiscordAllowedUsersDialog
-      open={allowedUsersOpen}
-      onOpenChange={setAllowedUsersOpen}
-      allowedUsers={allowedUsers}
-      onAllowedUsersChange={setAllowedUsers}
-      profileId={profileId}
+      allowedUsers={card.allowedUsers}
+      onAllowedUsersChange={card.setAllowedUsers}
+      onError={card.setFormError}
+      onOpenChange={card.setAllowedUsersOpen}
       onSaved={() => {
-        setHint("Allowed users saved.");
-        setFormError(null);
+        card.setHint("Allowed users saved.");
+        card.setFormError(null);
       }}
-      onError={setFormError}
+      open={card.allowedUsersOpen}
+      profileId={card.profileId}
     />
   );
 
-  if (embedded) {
-    return (
-      <>
-        <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">{headerSubtitle}</p>
-          {content}
-        </div>
-        {allowedUsersDialog}
-      </>
-    );
+  return (
+    <>
+      {content}
+      {allowedUsersDialog}
+    </>
+  );
+}
+
+export function DiscordSettingsCard({
+  embedded = false,
+  submitLabel = "Save changes",
+  onSaveSuccess,
+}: DiscordSettingsCardProps) {
+  const card = useDiscordSettingsCard(onSaveSuccess);
+
+  if (card.isLoading) {
+    return <DiscordSettingsLoading embedded={embedded} />;
   }
 
   return (
-    <>
-      <Card className="w-full shadow-none">
-        <CardContent className="p-0">{content}</CardContent>
-      </Card>
-      {allowedUsersDialog}
-    </>
+    <DiscordSettingsCardLoaded
+      card={card}
+      embedded={embedded}
+      submitLabel={card.configured ? submitLabel : "Connect Discord"}
+    />
   );
 }

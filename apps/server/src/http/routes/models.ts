@@ -1,590 +1,2070 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import {
-  resetWhatsAppSessionForReconnect,
-  type ConfigureProviderRequest,
+  type AgentBrowserStatusResponse,
+  type ComposioSettingsResponse,
   type ConfigureProviderResponse,
-  type CreateProviderRequest,
   type CreateProviderResponse,
   type DeleteProviderResponse,
-  type DiscoverModelsRequest,
+  type DiscordSettingsResponse,
+  type EmailSettingsResponse,
+  type ErrorTrackingSettingsResponse,
+  formatServerError,
+  type GenerateImageResponse,
+  type ImageGenerationSettingsResponse,
   type ListProvidersResponse,
   type ListTimezonesResponse,
   type ModelsResponse,
-  type TelegramSettingsResponse,
-  type DiscordSettingsResponse,
-  type ComposioSettingsResponse,
-  type CodingHarnessSettingsResponse,
-  type CodingHarnessInstallRequest,
-  type AgentBrowserStatusResponse,
-  type EmailSettingsResponse,
+  NakamaApiError,
+  reportError,
+  resetWhatsAppSessionForReconnect,
   type SendEmailTestRequest,
   type SendEmailTestResponse,
-  type VerifyCodingHarnessRequest,
-  type VerifyCodingHarnessResponse,
+  type SendErrorTrackingTestResponse,
+  type SlackSettingsResponse,
+  type TelegramAccessRequestsResponse,
+  type TelegramPairingStartResponse,
+  type TelegramPairingStatusResponse,
+  type TelegramSettingsResponse,
   type ThinkingSettingsResponse,
   type TimezoneSettingsResponse,
-  type UpdateProviderRequest,
-  type UpdateProviderResponse,
-  type UpdateTelegramSettingsRequest,
-  type UpdateDiscordSettingsRequest,
-  type UpdateComposioSettingsRequest,
-  type UpdateEmailSettingsRequest,
-  type UpdateCodingHarnessSettingsRequest,
-  type UpdateThinkingRequest,
-  type UpdateTimezoneRequest,
-  type UpdateVisionRequest,
-  type UpdateTranscriptionRequest,
-  type TranscribeAudioRequest,
   type TranscribeAudioResponse,
   type TranscriptionSettingsResponse,
-  type UpdateWhatsAppSettingsRequest,
+  type UpdateProviderResponse,
+  type UpdateSlackSettingsRequest,
   type VisionSettingsResponse,
+  WEB_SEARCH_PROVIDERS,
+  type WebSearchProvider,
+  type WebSearchSettingsResponse,
   type WhatsAppSettingsResponse,
 } from "@nakama/core";
-import { NakamaApiError } from "@nakama/core";
-import { getTimezoneCatalog } from "../../services/timezone-catalog-service";
-import type { HonoApp } from "../types";
-import type { ServerOptions } from "../context";
-import { errorResponse, json, readJson, getRequestAuth } from "../shared";
-import { requireOrgAdminFromContext } from "../org-guards";
-import { installCodingAgentHarness } from "../../services/coding-agent-harness-service";
+import { USER_PROVIDER_NAMES } from "@nakama/core/provider-resolution";
+import {
+  checkSlackTokensMatch,
+  checkSlackWorkspaceAccess,
+  loadSlackConfigFile,
+  loadSlackSettingsPublic,
+  regenerateSlackHandshake,
+  saveSlackConfig,
+  validateSlackTokens,
+} from "@nakama/core/slack-config";
+import type { Context, MiddlewareHandler } from "hono";
+import {
+  completeChatgptOAuthDeviceSession,
+  fetchChatgptCodexModels,
+  startChatgptOAuthDeviceSession,
+} from "../../providers/chatgpt/oauth";
+import {
+  completeXaiOAuthDeviceSession,
+  fetchXaiOAuthModels,
+  startXaiOAuthDeviceSession,
+} from "../../providers/xai-oauth/oauth";
 import { installAgentBrowser } from "../../services/agent-browser-service";
-import { streamAgentBrowserInstall, streamCodingHarnessInstall } from "../coding-harness-install-stream";
+import {
+  getExternalModelCatalog,
+  isExternalModelCatalogId,
+} from "../../services/external-model-catalog-service";
+import { getTimezoneCatalog } from "../../services/timezone-catalog-service";
+import { streamAgentBrowserInstall } from "../coding-harness-install-stream";
+import type { ServerOptions } from "../context";
+import {
+  requireActiveOrgIdFromContext,
+  requireOrgAdminFromContext,
+  requireOrgAdminOrPlatformAdminFromContext,
+  requireOrgMemberFromContext,
+  requirePlatformAdminFromContext,
+  requireProfileManageFromContext,
+} from "../org-guards";
+import {
+  errorResponse,
+  getRequestAuth,
+  json,
+  readJson,
+  readOptionalJson,
+} from "../shared";
+import type { AppEnv, HonoApp } from "../types";
 
-export function registerModelRoutes(app: HonoApp, options: ServerOptions): void {
-  const { agent, workerManager, databaseAdapter } = options;
-  const errorSchema = z.object({ error: z.string() }).openapi("ApiErrorResponse");
-  const providerIdParam = z.object({
-    providerId: z.string().openapi({ param: { name: "providerId", in: "path" } }),
+export function registerModelRoutes(
+  app: HonoApp,
+  options: ServerOptions
+): void {
+  const { agent, workerManager } = options;
+
+  const errorSchema = z
+    .object({ error: z.string() })
+    .openapi("ApiErrorResponse");
+
+  const xaiOAuthSchema = z.object({
+    accessToken: z.string(),
+    refreshToken: z.string(),
+    expiresAt: z.string(),
   });
-  const modelsResponseSchema = z.object({ models: z.array(z.object({}).passthrough()) }).passthrough().openapi("ModelsResponse");
-  const providersResponseSchema = z.object({ providers: z.array(z.object({}).passthrough()) }).passthrough().openapi("ListProvidersResponse");
-  const createProviderResponseSchema = z.object({}).passthrough().openapi("CreateProviderResponse");
-  const updateProviderResponseSchema = z.object({}).passthrough().openapi("UpdateProviderResponse");
-  const deleteProviderResponseSchema = z.object({}).passthrough().openapi("DeleteProviderResponse");
-  const configureProviderResponseSchema = z.object({}).passthrough().openapi("ConfigureProviderResponse");
-  const timezonesResponseSchema = z.object({ timezones: z.array(z.object({}).passthrough()) }).passthrough().openapi("ListTimezonesResponse");
-  const timezoneSettingsSchema = z.object({ timezone: z.string() }).openapi("TimezoneSettingsResponse");
-  const thinkingSettingsSchema = z.object({}).passthrough().openapi("ThinkingSettingsResponse");
-  const visionSettingsSchema = z.object({}).passthrough().openapi("VisionSettingsResponse");
+
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      path: "/v1/xai-oauth/device/start",
+      operationId: "startXaiOAuthDevice",
+      tags: ["Models"],
+      summary: "Start Grok subscription sign-in",
+      responses: {
+        200: {
+          description: "Device sign-in code",
+          content: {
+            "application/json": {
+              schema: z.object({
+                sessionId: z.string(),
+                userCode: z.string(),
+                verificationUri: z.string(),
+                intervalSeconds: z.number(),
+              }),
+            },
+          },
+        },
+        400: {
+          description: "Sign-in failed",
+          content: { "application/json": { schema: errorSchema } },
+        },
+      },
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      path: "/v1/xai-oauth/device/complete",
+      operationId: "completeXaiOAuthDevice",
+      tags: ["Models"],
+      summary: "Complete Grok subscription sign-in",
+      request: {
+        body: {
+          required: true,
+          content: {
+            "application/json": { schema: z.object({ sessionId: z.string() }) },
+          },
+        },
+      },
+      responses: {
+        200: {
+          description: "Grok credentials and language models",
+          content: {
+            "application/json": {
+              schema: z.object({
+                xaiOAuth: xaiOAuthSchema,
+                models: z.array(
+                  z.object({ id: z.string(), name: z.string().optional() })
+                ),
+              }),
+            },
+          },
+        },
+        400: {
+          description: "Sign-in failed",
+          content: { "application/json": { schema: errorSchema } },
+        },
+      },
+    })
+  );
+
+  const providerIdParam = z.object({
+    providerId: z
+      .string()
+      .openapi({ param: { in: "path", name: "providerId" } }),
+  });
+
+  const modelsResponseSchema = z
+    .object({ models: z.array(z.object({}).passthrough()) })
+    .passthrough()
+    .openapi("ModelsResponse");
+
+  const providersResponseSchema = z
+    .object({ providers: z.array(z.object({}).passthrough()) })
+    .passthrough()
+    .openapi("ListProvidersResponse");
+
+  const createProviderResponseSchema = z
+    .object({})
+    .passthrough()
+    .openapi("CreateProviderResponse");
+
+  const updateProviderResponseSchema = z
+    .object({})
+    .passthrough()
+    .openapi("UpdateProviderResponse");
+
+  const deleteProviderResponseSchema = z
+    .object({})
+    .passthrough()
+    .openapi("DeleteProviderResponse");
+
+  const configureProviderResponseSchema = z
+    .object({})
+    .passthrough()
+    .openapi("ConfigureProviderResponse");
+
+  const timezonesResponseSchema = z
+    .object({ timezones: z.array(z.object({}).passthrough()) })
+    .passthrough()
+    .openapi("ListTimezonesResponse");
+
+  const timezoneSettingsSchema = z
+    .object({ timezone: z.string() })
+    .openapi("TimezoneSettingsResponse");
+
+  const thinkingSettingsSchema = z
+    .object({})
+    .passthrough()
+    .openapi("ThinkingSettingsResponse");
+
+  const visionSettingsSchema = z
+    .object({})
+    .passthrough()
+    .openapi("VisionSettingsResponse");
+
   const transcriptionSettingsSchema = z
     .object({})
     .passthrough()
     .openapi("TranscriptionSettingsResponse");
-  const transcribeAudioRequestSchema = z
+
+  const imageGenerationSettingsSchema = z
     .object({})
     .passthrough()
+    .openapi("ImageGenerationSettingsResponse");
+
+  const generateImageRequestSchema = z
+    .object({ prompt: z.string(), size: z.string().optional() })
+    .passthrough()
+    .openapi("GenerateImageRequest");
+
+  const generateImageResponseSchema = z
+    .object({})
+    .passthrough()
+    .openapi("GenerateImageResponse");
+
+  const transcribeAudioRequestSchema = z
+    .object({
+      data: z.string(),
+      filename: z.string().optional(),
+      mediaType: z.string(),
+    })
+    .passthrough()
     .openapi("TranscribeAudioRequest");
+
   const transcribeAudioResponseSchema = z
     .object({})
     .passthrough()
     .openapi("TranscribeAudioResponse");
-  const telegramSettingsSchema = z.object({}).passthrough().openapi("TelegramSettingsResponse");
-  const discordSettingsSchema = z.object({}).passthrough().openapi("DiscordSettingsResponse");
-  const composioSettingsSchema = z.object({}).passthrough().openapi("ComposioSettingsResponse");
-  const emailSettingsSchema = z.object({}).passthrough().openapi("EmailSettingsResponse");
-  const codingHarnessSettingsSchema = z
+
+  const telegramSettingsSchema = z
     .object({})
     .passthrough()
-    .openapi("CodingHarnessSettingsResponse");
-  const codingHarnessInstallRequestSchema = z
-    .object({ harnessId: z.string() })
-    .openapi("CodingHarnessInstallRequest");
-  const codingHarnessInstallEventSchema = z
+    .openapi("TelegramSettingsResponse");
+
+  const telegramPairingStartSchema = z
     .object({})
     .passthrough()
-    .openapi("CodingHarnessInstallEvent");
+    .openapi("TelegramPairingStartResponse");
+
+  const telegramPairingStatusSchema = z
+    .object({})
+    .passthrough()
+    .openapi("TelegramPairingStatusResponse");
+
+  const startTelegramPairingSchema = z
+    .object({ profileId: z.string() })
+    .openapi("StartTelegramPairingRequest");
+
+  const applyTelegramPairingSchema = z
+    .object({ profileId: z.string() })
+    .openapi("ApplyTelegramPairingRequest");
+
+  const discordSettingsSchema = z
+    .object({})
+    .passthrough()
+    .openapi("DiscordSettingsResponse");
+
+  const slackMemberIds = z
+    .array(z.string())
+    .openapi({ example: ["U01ABCDEF"] });
+
+  const slackSettingsSchema = z
+    .object({
+      allowedUserIds: slackMemberIds.describe(
+        "Member IDs allowed without pairing."
+      ),
+      allowWorkspace: z
+        .boolean()
+        .describe(
+          "Every full member of the workspace may chat. Guests and people from other orgs still need pairing."
+        ),
+      appTokenMasked: z
+        .string()
+        .nullable()
+        .describe("Last characters of the saved app token (xapp-)."),
+      botTokenMasked: z
+        .string()
+        .nullable()
+        .describe("Last characters of the saved bot token (xoxb-)."),
+      configured: z.boolean().describe("True once both tokens are saved."),
+      handshakeCode: z
+        .string()
+        .nullable()
+        .describe(
+          "Pairing code to send to the app in Slack, if one is active."
+        ),
+      pairedUserIds: slackMemberIds.describe("Members linked by pairing."),
+      profileId: z.string().describe("Agent this connection belongs to."),
+    })
+    .openapi("SlackSettingsResponse");
+
+  const updateSlackRequestSchema = z
+    .object({
+      allowedUserIds: z
+        .string()
+        .optional()
+        .describe("Comma separated member IDs. Replaces the saved list."),
+      allowWorkspace: z
+        .boolean()
+        .optional()
+        .describe("Turning it on requires the users:read bot scope."),
+      appToken: z
+        .string()
+        .optional()
+        .describe("App-level token with connections:write. Omit to keep."),
+      botToken: z
+        .string()
+        .optional()
+        .describe("Bot User OAuth Token. Omit to keep the saved one."),
+    })
+    .openapi("UpdateSlackSettingsRequest");
+
+  const composioSettingsSchema = z
+    .object({})
+    .passthrough()
+    .openapi("ComposioSettingsResponse");
+
+  const errorTrackingSettingsSchema = z
+    .object({})
+    .passthrough()
+    .openapi("ErrorTrackingSettingsResponse");
+
+  const updateErrorTrackingRequestSchema = z
+    .object({ dsn: z.string().optional() })
+    .passthrough()
+    .openapi("UpdateErrorTrackingSettingsRequest");
+
+  const sendErrorTrackingTestSchema = z
+    .object({})
+    .passthrough()
+    .openapi("SendErrorTrackingTestResponse");
+
+  const emailSettingsSchema = z
+    .object({})
+    .passthrough()
+    .openapi("EmailSettingsResponse");
+
+  const webSearchSettingsSchema = z
+    .object({})
+    .passthrough()
+    .openapi("WebSearchSettingsResponse");
+
+  const updateWebSearchRequestSchema = z
+    .object({
+      apiKey: z.string().optional(),
+      endpoint: z.string().optional(),
+      // Derived from the vendor list so a back-end the tool supports cannot be
+      // refused here.
+      provider: z.enum(WEB_SEARCH_PROVIDERS).nullable().optional(),
+    })
+    .openapi("UpdateWebSearchSettingsRequest");
+
   const agentBrowserStatusSchema = z
     .object({})
     .passthrough()
     .openapi("AgentBrowserStatusResponse");
+
+  const updateAgentBrowserRequestSchema = z
+    .object({
+      apiKey: z.string().optional(),
+      provider: z.enum(["kernel"]).nullable().optional(),
+    })
+    .openapi("UpdateAgentBrowserSettingsRequest");
+
   const agentBrowserInstallEventSchema = z
     .object({})
     .passthrough()
     .openapi("AgentBrowserInstallEvent");
-  const sendEmailTestRequestSchema = z.object({ to: z.string().optional() }).openapi("SendEmailTestRequest");
-  const sendEmailTestResponseSchema = z.object({ ok: z.literal(true), to: z.string(), messageId: z.string() }).openapi("SendEmailTestResponse");
-  const updateEmailRequestSchema = z.object({}).passthrough().openapi("UpdateEmailSettingsRequest");
-  const updateCodingHarnessRequestSchema = z
+
+  const sendEmailTestRequestSchema = z
+    .object({ to: z.string().optional() })
+    .openapi("SendEmailTestRequest");
+
+  const sendEmailTestResponseSchema = z
+    .object({ messageId: z.string(), ok: z.literal(true), to: z.string() })
+    .openapi("SendEmailTestResponse");
+
+  const updateEmailRequestSchema = z
     .object({})
     .passthrough()
-    .openapi("UpdateCodingHarnessSettingsRequest");
-  const verifyCodingHarnessRequestSchema = z
+    .openapi("UpdateEmailSettingsRequest");
+
+  const whatsappSettingsSchema = z
     .object({})
     .passthrough()
-    .openapi("VerifyCodingHarnessRequest");
-  const verifyCodingHarnessResponseSchema = z
-    .object({})
-    .passthrough()
-    .openapi("VerifyCodingHarnessResponse");
-  const whatsappSettingsSchema = z.object({}).passthrough().openapi("WhatsAppSettingsResponse");
+    .openapi("WhatsAppSettingsResponse");
+
   const discoverModelsRequestSchema = z
     .object({
-      baseUrl: z.string().optional(),
       apiKey: z.string().optional(),
+      baseUrl: z.string().optional(),
       providerId: z.string().optional(),
     })
     .openapi("DiscoverModelsRequest");
-  const createProviderRequestSchema = z.object({}).passthrough().openapi("CreateProviderRequest");
-  const updateProviderRequestSchema = z.object({}).passthrough().openapi("UpdateProviderRequest");
-  const configureProviderRequestSchema = z.object({}).passthrough().openapi("ConfigureProviderRequest");
-  const updateTimezoneRequestSchema = z.object({ timezone: z.string() }).openapi("UpdateTimezoneRequest");
-  const updateThinkingRequestSchema = z.object({}).passthrough().openapi("UpdateThinkingRequest");
-  const updateVisionRequestSchema = z.object({ model: z.string().nullable() }).openapi("UpdateVisionRequest");
-  const updateTelegramRequestSchema = z.object({}).passthrough().openapi("UpdateTelegramSettingsRequest");
-  const updateDiscordRequestSchema = z.object({}).passthrough().openapi("UpdateDiscordSettingsRequest");
-  const updateComposioRequestSchema = z.object({}).passthrough().openapi("UpdateComposioSettingsRequest");
-  const updateWhatsappRequestSchema = z.object({}).passthrough().openapi("UpdateWhatsAppSettingsRequest");
-  const modelQuerySchema = z.object({ source: z.enum(["catalog", "remote"]).optional() });
 
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/models",
-    tags: ["Models"],
-    summary: "List available models",
-    operationId: "listModels",
-    request: { query: modelQuerySchema },
-    responses: { 200: { description: "Model catalog", content: { "application/json": { schema: modelsResponseSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/models/discover",
-    tags: ["Models"],
-    summary: "Discover models from a provider base URL",
-    operationId: "discoverModels",
-    request: { body: { required: true, content: { "application/json": { schema: discoverModelsRequestSchema } } } },
-    responses: { 200: { description: "Model catalog", content: { "application/json": { schema: modelsResponseSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/providers",
-    tags: ["Models"],
-    summary: "List configured provider instances",
-    operationId: "listProviders",
-    responses: { 200: { description: "Provider instances", content: { "application/json": { schema: providersResponseSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/providers",
-    tags: ["Models"],
-    summary: "Add a provider instance",
-    operationId: "createProvider",
-    request: { body: { required: true, content: { "application/json": { schema: createProviderRequestSchema } } } },
-    responses: { 200: { description: "Provider created", content: { "application/json": { schema: createProviderResponseSchema } } }, 500: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "patch",
-    path: "/v1/providers/{providerId}",
-    tags: ["Models"],
-    summary: "Update a provider instance",
-    operationId: "updateProvider",
-    request: { params: providerIdParam, body: { required: true, content: { "application/json": { schema: updateProviderRequestSchema } } } },
-    responses: { 200: { description: "Provider updated", content: { "application/json": { schema: updateProviderResponseSchema } } }, 500: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "delete",
-    path: "/v1/providers/{providerId}",
-    tags: ["Models"],
-    summary: "Remove a provider instance",
-    operationId: "deleteProvider",
-    request: { params: providerIdParam },
-    responses: { 200: { description: "Provider removed", content: { "application/json": { schema: deleteProviderResponseSchema } } }, 500: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "put",
-    path: "/v1/settings/provider",
-    tags: ["Models"],
-    summary: "Configure the LLM provider and API key",
-    operationId: "configureProvider",
-    request: { body: { required: true, content: { "application/json": { schema: configureProviderRequestSchema } } } },
-    responses: { 200: { description: "Provider configured", content: { "application/json": { schema: configureProviderResponseSchema } } }, 500: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/timezones",
-    tags: ["Models"],
-    summary: "List available timezones",
-    operationId: "listTimezones",
-    responses: { 200: { description: "Timezone catalog", content: { "application/json": { schema: timezonesResponseSchema } } }, 500: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/settings/timezone",
-    tags: ["Models"],
-    summary: "Get the user timezone",
-    operationId: "getTimezone",
-    responses: { 200: { description: "Timezone settings", content: { "application/json": { schema: timezoneSettingsSchema } } }, 500: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "put",
-    path: "/v1/settings/timezone",
-    tags: ["Models"],
-    summary: "Update the user timezone",
-    operationId: "setTimezone",
-    request: { body: { required: true, content: { "application/json": { schema: updateTimezoneRequestSchema } } } },
-    responses: { 200: { description: "Timezone settings", content: { "application/json": { schema: timezoneSettingsSchema } } }, 500: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/settings/thinking",
-    tags: ["Models"],
-    summary: "Get thinking settings",
-    operationId: "getThinkingSettings",
-    responses: { 200: { description: "Thinking settings", content: { "application/json": { schema: thinkingSettingsSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "put",
-    path: "/v1/settings/thinking",
-    tags: ["Models"],
-    summary: "Update thinking settings",
-    operationId: "setThinkingSettings",
-    request: { body: { required: true, content: { "application/json": { schema: updateThinkingRequestSchema } } } },
-    responses: { 200: { description: "Thinking settings", content: { "application/json": { schema: thinkingSettingsSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/settings/vision",
-    tags: ["Models"],
-    summary: "Get vision settings",
-    operationId: "getVisionSettings",
-    responses: { 200: { description: "Vision settings", content: { "application/json": { schema: visionSettingsSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "put",
-    path: "/v1/settings/vision",
-    tags: ["Models"],
-    summary: "Update vision settings",
-    operationId: "setVisionSettings",
-    request: { body: { required: true, content: { "application/json": { schema: updateVisionRequestSchema } } } },
-    responses: {
-      200: { description: "Vision settings", content: { "application/json": { schema: visionSettingsSchema } } },
-      400: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-    },
-  }));
+  const createProviderRequestSchema = z
+    .object({
+      apiKey: z.string().default(""),
+      type: z.enum(USER_PROVIDER_NAMES),
+    })
+    .passthrough()
+    .openapi("CreateProviderRequest");
+
+  const updateProviderRequestSchema = z
+    .object({})
+    .passthrough()
+    .openapi("UpdateProviderRequest");
+
+  const configureProviderRequestSchema = z
+    .object({
+      apiKey: z.string().default(""),
+      provider: z.enum(USER_PROVIDER_NAMES),
+    })
+    .passthrough()
+    .openapi("ConfigureProviderRequest");
+
+  const updateTimezoneRequestSchema = z
+    .object({ timezone: z.string() })
+    .openapi("UpdateTimezoneRequest");
+
+  const updateThinkingRequestSchema = z
+    .object({
+      enabled: z.boolean(),
+      effort: z.enum(["low", "medium", "high"]).optional(),
+    })
+    .passthrough()
+    .openapi("UpdateThinkingRequest");
+
+  const updateVisionRequestSchema = z
+    .object({ model: z.string().nullable() })
+    .openapi("UpdateVisionRequest");
+
+  const updateTelegramRequestSchema = z
+    .object({})
+    .passthrough()
+    .openapi("UpdateTelegramSettingsRequest");
+
+  const updateDiscordRequestSchema = z
+    .object({})
+    .passthrough()
+    .openapi("UpdateDiscordSettingsRequest");
+
+  const updateComposioRequestSchema = z
+    .object({})
+    .passthrough()
+    .openapi("UpdateComposioSettingsRequest");
+
+  const updateWhatsappRequestSchema = z
+    .object({})
+    .passthrough()
+    .openapi("UpdateWhatsAppSettingsRequest");
+
+  const modelQuerySchema = z.object({
+    source: z.enum(["catalog", "remote"]).optional(),
+  });
+
+  const externalModelCatalogParam = z.object({
+    catalogId: z.string().openapi({ param: { in: "path", name: "catalogId" } }),
+  });
+
+  const externalModelCatalogResponseSchema = z
+    .object({})
+    .passthrough()
+    .openapi("ExternalModelCatalogResponse");
+
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getExternalModelCatalog",
+      path: "/v1/model-catalogs/{catalogId}",
+      request: { params: externalModelCatalogParam },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: externalModelCatalogResponseSchema },
+          },
+          description: "Upstream model catalog payload",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+        502: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Upstream error",
+        },
+      },
+      summary: "Fetch a public upstream model catalog",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "listModels",
+      path: "/v1/models",
+      request: { query: modelQuerySchema },
+      responses: {
+        200: {
+          content: { "application/json": { schema: modelsResponseSchema } },
+          description: "Model catalog",
+        },
+      },
+      summary: "List available models",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "discoverModels",
+      path: "/v1/models/discover",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: discoverModelsRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: modelsResponseSchema } },
+          description: "Model catalog",
+        },
+      },
+      summary: "Discover models from a provider base URL",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "listProviders",
+      path: "/v1/providers",
+      responses: {
+        200: {
+          content: { "application/json": { schema: providersResponseSchema } },
+          description: "Provider instances",
+        },
+      },
+      summary: "List configured provider instances",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "createProvider",
+      path: "/v1/providers",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: createProviderRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: createProviderResponseSchema },
+          },
+          description: "Provider created",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Add a provider instance",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "patch",
+      operationId: "updateProvider",
+      path: "/v1/providers/{providerId}",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: updateProviderRequestSchema },
+          },
+          required: true,
+        },
+        params: providerIdParam,
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: updateProviderResponseSchema },
+          },
+          description: "Provider updated",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Update a provider instance",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "delete",
+      operationId: "deleteProvider",
+      path: "/v1/providers/{providerId}",
+      request: { params: providerIdParam },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: deleteProviderResponseSchema },
+          },
+          description: "Provider removed",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Remove a provider instance",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setProviderSecret",
+      path: "/v1/providers/{providerId}/secret",
+      request: {
+        params: providerIdParam,
+        body: {
+          content: {
+            "application/json": { schema: z.object({ apiKey: z.string() }) },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: updateProviderResponseSchema },
+          },
+          description: "Provider key saved",
+        },
+      },
+      summary: "Save a provider API key",
+      tags: ["Models"],
+    })
+  );
+
+  for (const [method, suffix, operationId] of [
+    ["delete", "", "clearProviderSecret"],
+    ["post", "/use-stored", "useStoredProviderSecret"],
+  ] as const) {
+    app.openAPIRegistry.registerPath(
+      createRoute({
+        method,
+        operationId,
+        path: `/v1/providers/{providerId}/secret${suffix}`,
+        request: { params: providerIdParam },
+        responses: {
+          200: {
+            content: {
+              "application/json": { schema: updateProviderResponseSchema },
+            },
+            description: "Provider key status",
+          },
+        },
+        tags: ["Models"],
+      })
+    );
+  }
+
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "configureProvider",
+      path: "/v1/settings/provider",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: configureProviderRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: configureProviderResponseSchema },
+          },
+          description: "Provider configured",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Configure the LLM provider and API key",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "listTimezones",
+      path: "/v1/timezones",
+      responses: {
+        200: {
+          content: { "application/json": { schema: timezonesResponseSchema } },
+          description: "Timezone catalog",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "List available timezones",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getTimezone",
+      path: "/v1/settings/timezone",
+      responses: {
+        200: {
+          content: { "application/json": { schema: timezoneSettingsSchema } },
+          description: "Timezone settings",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Get the user timezone",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setTimezone",
+      path: "/v1/settings/timezone",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: updateTimezoneRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: timezoneSettingsSchema } },
+          description: "Timezone settings",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Update the user timezone",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getThinkingSettings",
+      path: "/v1/settings/thinking",
+      responses: {
+        200: {
+          content: { "application/json": { schema: thinkingSettingsSchema } },
+          description: "Thinking settings",
+        },
+      },
+      summary: "Get thinking settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setThinkingSettings",
+      path: "/v1/settings/thinking",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: updateThinkingRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: thinkingSettingsSchema } },
+          description: "Thinking settings",
+        },
+      },
+      summary: "Update thinking settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getVisionSettings",
+      path: "/v1/settings/vision",
+      responses: {
+        200: {
+          content: { "application/json": { schema: visionSettingsSchema } },
+          description: "Vision settings",
+        },
+      },
+      summary: "Get vision settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setVisionSettings",
+      path: "/v1/settings/vision",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: updateVisionRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: visionSettingsSchema } },
+          description: "Vision settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Update vision settings",
+      tags: ["Models"],
+    })
+  );
+
   const updateTranscriptionRequestSchema = z
     .object({ model: z.string().nullable() })
     .openapi("UpdateTranscriptionRequest");
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/settings/transcription",
-    tags: ["Models"],
-    summary: "Get transcription settings",
-    operationId: "getTranscriptionSettings",
-    responses: {
-      200: {
-        description: "Transcription settings",
-        content: { "application/json": { schema: transcriptionSettingsSchema } },
+
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getTranscriptionSettings",
+      path: "/v1/settings/transcription",
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: transcriptionSettingsSchema },
+          },
+          description: "Transcription settings",
+        },
       },
-    },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "put",
-    path: "/v1/settings/transcription",
-    tags: ["Models"],
-    summary: "Update transcription settings",
-    operationId: "setTranscriptionSettings",
-    request: {
-      body: {
-        required: true,
-        content: { "application/json": { schema: updateTranscriptionRequestSchema } },
+      summary: "Get transcription settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setTranscriptionSettings",
+      path: "/v1/settings/transcription",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: updateTranscriptionRequestSchema },
+          },
+          required: true,
+        },
       },
-    },
-    responses: {
-      200: {
-        description: "Transcription settings",
-        content: { "application/json": { schema: transcriptionSettingsSchema } },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: transcriptionSettingsSchema },
+          },
+          description: "Transcription settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
       },
-      400: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-    },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/audio/transcribe",
-    tags: ["Models"],
-    summary: "Transcribe audio with configured Whisper model",
-    operationId: "transcribeAudio",
-    request: {
-      body: {
-        required: true,
-        content: { "application/json": { schema: transcribeAudioRequestSchema } },
+      summary: "Update transcription settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "transcribeAudio",
+      path: "/v1/audio/transcribe",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: transcribeAudioRequestSchema },
+          },
+          required: true,
+        },
       },
-    },
-    responses: {
-      200: {
-        description: "Transcription result",
-        content: { "application/json": { schema: transcribeAudioResponseSchema } },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: transcribeAudioResponseSchema },
+          },
+          description: "Transcription result",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+        502: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Upstream error",
+        },
       },
-      400: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-      502: { description: "Upstream error", content: { "application/json": { schema: errorSchema } } },
+      summary: "Transcribe audio with configured Whisper model",
+      tags: ["Models"],
+    })
+  );
+
+  const updateImageGenerationRequestSchema = z
+    .object({ model: z.string().nullable() })
+    .openapi("UpdateImageGenerationRequest");
+
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getImageGenerationSettings",
+      path: "/v1/settings/image-generation",
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: imageGenerationSettingsSchema },
+          },
+          description: "Image generation settings",
+        },
+      },
+      summary: "Get image generation settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setImageGenerationSettings",
+      path: "/v1/settings/image-generation",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: updateImageGenerationRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: imageGenerationSettingsSchema },
+          },
+          description: "Image generation settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Update image generation settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "generateImage",
+      path: "/v1/images/generate",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: generateImageRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: generateImageResponseSchema },
+          },
+          description: "Generated image",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+        502: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Upstream error",
+        },
+      },
+      summary: "Generate an image with configured gpt-image-2 model",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getTelegramSettings",
+      path: "/v1/settings/telegram",
+      request: { query: z.object({ profileId: z.string().min(1) }) },
+      responses: {
+        200: {
+          content: { "application/json": { schema: telegramSettingsSchema } },
+          description: "Telegram settings",
+        },
+      },
+      summary: "Get Telegram settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setTelegramSettings",
+      path: "/v1/settings/telegram",
+      request: {
+        query: z.object({ profileId: z.string().min(1) }),
+        body: {
+          content: {
+            "application/json": { schema: updateTelegramRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: telegramSettingsSchema } },
+          description: "Telegram settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Update Telegram settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "regenerateTelegramHandshake",
+      path: "/v1/settings/telegram/handshake",
+      request: { query: z.object({ profileId: z.string().min(1) }) },
+      responses: {
+        200: {
+          content: { "application/json": { schema: telegramSettingsSchema } },
+          description: "Telegram settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Regenerate Telegram handshake",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "startTelegramPairing",
+      path: "/v1/settings/telegram/pairing",
+      request: {
+        query: z.object({ profileId: z.string().min(1) }),
+        body: {
+          content: {
+            "application/json": { schema: startTelegramPairingSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: telegramPairingStartSchema },
+          },
+          description: "Telegram pairing",
+        },
+      },
+      summary: "Start Telegram QR pairing",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getTelegramPairingStatus",
+      path: "/v1/settings/telegram/pairing/{pairingId}",
+      request: {
+        query: z.object({ profileId: z.string().min(1) }),
+        params: z.object({ pairingId: z.string() }),
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: telegramPairingStatusSchema },
+          },
+          description: "Telegram pairing status",
+        },
+      },
+      summary: "Get Telegram QR pairing status",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "cancelTelegramPairing",
+      path: "/v1/settings/telegram/pairing/{pairingId}/cancel",
+      request: {
+        query: z.object({ profileId: z.string().min(1) }),
+        params: z.object({ pairingId: z.string() }),
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: telegramPairingStatusSchema },
+          },
+          description: "Telegram pairing status",
+        },
+      },
+      summary: "Cancel Telegram QR pairing",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "applyTelegramPairing",
+      path: "/v1/settings/telegram/pairing/{pairingId}/apply",
+      request: {
+        query: z.object({ profileId: z.string().min(1) }),
+        params: z.object({ pairingId: z.string() }),
+        body: {
+          content: {
+            "application/json": { schema: applyTelegramPairingSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: telegramPairingStatusSchema },
+          },
+          description: "Telegram pairing status",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Apply Telegram QR pairing",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getDiscordSettings",
+      path: "/v1/settings/discord",
+      request: { query: z.object({ profileId: z.string().min(1) }) },
+      responses: {
+        200: {
+          content: { "application/json": { schema: discordSettingsSchema } },
+          description: "Discord settings",
+        },
+      },
+      summary: "Get Discord settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setDiscordSettings",
+      path: "/v1/settings/discord",
+      request: {
+        query: z.object({ profileId: z.string().min(1) }),
+        body: {
+          content: {
+            "application/json": { schema: updateDiscordRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: discordSettingsSchema } },
+          description: "Discord settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Update Discord settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "regenerateDiscordHandshake",
+      path: "/v1/settings/discord/handshake",
+      request: { query: z.object({ profileId: z.string().min(1) }) },
+      responses: {
+        200: {
+          content: { "application/json": { schema: discordSettingsSchema } },
+          description: "Discord settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Regenerate Discord handshake",
+      tags: ["Models"],
+    })
+  );
+
+  const slackResponses = {
+    200: {
+      content: { "application/json": { schema: slackSettingsSchema } },
+      description: "Slack settings",
     },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/settings/telegram",
-    tags: ["Models"],
-    summary: "Get Telegram settings",
-    operationId: "getTelegramSettings",
-    responses: { 200: { description: "Telegram settings", content: { "application/json": { schema: telegramSettingsSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "put",
-    path: "/v1/settings/telegram",
-    tags: ["Models"],
-    summary: "Update Telegram settings",
-    operationId: "setTelegramSettings",
-    request: { body: { required: true, content: { "application/json": { schema: updateTelegramRequestSchema } } } },
-    responses: { 200: { description: "Telegram settings", content: { "application/json": { schema: telegramSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/settings/telegram/handshake",
-    tags: ["Models"],
-    summary: "Regenerate Telegram handshake",
-    operationId: "regenerateTelegramHandshake",
-    responses: { 200: { description: "Telegram settings", content: { "application/json": { schema: telegramSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/settings/discord",
-    tags: ["Models"],
-    summary: "Get Discord settings",
-    operationId: "getDiscordSettings",
-    responses: { 200: { description: "Discord settings", content: { "application/json": { schema: discordSettingsSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "put",
-    path: "/v1/settings/discord",
-    tags: ["Models"],
-    summary: "Update Discord settings",
-    operationId: "setDiscordSettings",
-    request: { body: { required: true, content: { "application/json": { schema: updateDiscordRequestSchema } } } },
-    responses: { 200: { description: "Discord settings", content: { "application/json": { schema: discordSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/settings/discord/handshake",
-    tags: ["Models"],
-    summary: "Regenerate Discord handshake",
-    operationId: "regenerateDiscordHandshake",
-    responses: { 200: { description: "Discord settings", content: { "application/json": { schema: discordSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/settings/composio",
-    tags: ["Models"],
-    summary: "Get Composio settings",
-    operationId: "getComposioSettings",
-    responses: { 200: { description: "Composio settings", content: { "application/json": { schema: composioSettingsSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "put",
-    path: "/v1/settings/composio",
-    tags: ["Models"],
-    summary: "Update Composio settings",
-    operationId: "setComposioSettings",
-    request: { body: { required: true, content: { "application/json": { schema: updateComposioRequestSchema } } } },
-    responses: { 200: { description: "Composio settings", content: { "application/json": { schema: composioSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/settings/email",
-    tags: ["Models"],
-    summary: "Get email settings",
-    operationId: "getEmailSettings",
-    responses: { 200: { description: "Email settings", content: { "application/json": { schema: emailSettingsSchema } } }, 403: { description: "Forbidden", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "put",
-    path: "/v1/settings/email",
-    tags: ["Models"],
-    summary: "Update email settings",
-    operationId: "setEmailSettings",
-    request: { body: { required: true, content: { "application/json": { schema: updateEmailRequestSchema } } } },
-    responses: { 200: { description: "Email settings", content: { "application/json": { schema: emailSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } }, 403: { description: "Forbidden", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/settings/email/test",
-    tags: ["Models"],
-    summary: "Send test email",
-    operationId: "sendEmailTest",
-    request: { body: { required: false, content: { "application/json": { schema: sendEmailTestRequestSchema } } } },
-    responses: { 200: { description: "Test email sent", content: { "application/json": { schema: sendEmailTestResponseSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } }, 403: { description: "Forbidden", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/settings/coding-harnesses",
-    tags: ["Models"],
-    summary: "Get coding harness settings",
-    operationId: "getCodingHarnessSettings",
-    responses: { 200: { description: "Coding harness settings", content: { "application/json": { schema: codingHarnessSettingsSchema } } }, 403: { description: "Forbidden", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "put",
-    path: "/v1/settings/coding-harnesses",
-    tags: ["Models"],
-    summary: "Update coding harness settings",
-    operationId: "setCodingHarnessSettings",
-    request: { body: { required: true, content: { "application/json": { schema: updateCodingHarnessRequestSchema } } } },
-    responses: { 200: { description: "Coding harness settings", content: { "application/json": { schema: codingHarnessSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } }, 403: { description: "Forbidden", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/settings/coding-harnesses/verify",
-    tags: ["Models"],
-    summary: "Verify a coding harness",
-    operationId: "verifyCodingHarness",
-    request: { body: { required: false, content: { "application/json": { schema: verifyCodingHarnessRequestSchema } } } },
-    responses: { 200: { description: "Coding harness verification", content: { "application/json": { schema: verifyCodingHarnessResponseSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } }, 403: { description: "Forbidden", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/settings/coding-harnesses/install",
-    tags: ["Models"],
-    summary: "Install a coding harness",
-    operationId: "installCodingHarness",
-    request: { body: { required: true, content: { "application/json": { schema: codingHarnessInstallRequestSchema } } } },
-    responses: { 200: { description: "Coding harness install stream", content: { "application/json": { schema: codingHarnessInstallEventSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } }, 403: { description: "Forbidden", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/settings/agent-browser",
-    tags: ["Models"],
-    summary: "Get agent-browser readiness",
-    operationId: "getAgentBrowserStatus",
-    responses: { 200: { description: "Agent-browser status", content: { "application/json": { schema: agentBrowserStatusSchema } } }, 403: { description: "Forbidden", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/settings/agent-browser/install",
-    tags: ["Models"],
-    summary: "Install agent-browser CLI and Chrome",
-    operationId: "installAgentBrowser",
-    responses: { 200: { description: "Agent-browser install stream", content: { "application/json": { schema: agentBrowserInstallEventSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } }, 403: { description: "Forbidden", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/settings/whatsapp",
-    tags: ["Models"],
-    summary: "Get WhatsApp settings",
-    operationId: "getWhatsAppSettings",
-    responses: { 200: { description: "WhatsApp settings", content: { "application/json": { schema: whatsappSettingsSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "put",
-    path: "/v1/settings/whatsapp",
-    tags: ["Models"],
-    summary: "Update WhatsApp settings",
-    operationId: "setWhatsAppSettings",
-    request: { body: { required: true, content: { "application/json": { schema: updateWhatsappRequestSchema } } } },
-    responses: { 200: { description: "WhatsApp settings", content: { "application/json": { schema: whatsappSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/settings/whatsapp/pairing-code",
-    tags: ["Models"],
-    summary: "Regenerate WhatsApp pairing code",
-    operationId: "regenerateWhatsAppPairingCode",
-    responses: { 200: { description: "WhatsApp settings", content: { "application/json": { schema: whatsappSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/settings/whatsapp/reconnect",
-    tags: ["Models"],
-    summary: "Reconnect WhatsApp session",
-    operationId: "reconnectWhatsApp",
-    responses: { 200: { description: "WhatsApp settings", content: { "application/json": { schema: whatsappSettingsSchema } } }, 400: { description: "Error", content: { "application/json": { schema: errorSchema } } } },
-  }));
+    400: {
+      content: { "application/json": { schema: errorSchema } },
+      description: "Invalid token, member ID, or Slack error",
+    },
+  };
+
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      description:
+        "Saved Slack bridge settings. Tokens come back masked; the pairing code is included.",
+      method: "get",
+      operationId: "getSlackSettings",
+      path: "/v1/settings/slack",
+      responses: slackResponses,
+      summary: "Get Slack settings",
+      tags: ["Slack"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      description:
+        "Checks new tokens with Slack (auth.test, apps.connections.open) before saving. The first save issues a pairing code. Restart the Slack worker after changing a token.",
+      method: "put",
+      operationId: "setSlackSettings",
+      path: "/v1/settings/slack",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: updateSlackRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: slackResponses,
+      summary: "Update Slack settings",
+      tags: ["Slack"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      description:
+        "Issues a new pairing code. Send it to the app's Messages tab in Slack to link a member.",
+      method: "post",
+      operationId: "regenerateSlackHandshake",
+      path: "/v1/settings/slack/handshake",
+      responses: slackResponses,
+      summary: "New Slack pairing code",
+      tags: ["Slack"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getComposioSettings",
+      path: "/v1/settings/composio",
+      responses: {
+        200: {
+          content: { "application/json": { schema: composioSettingsSchema } },
+          description: "Composio settings",
+        },
+      },
+      summary: "Get Composio settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getErrorTrackingSettings",
+      path: "/v1/settings/error-tracking",
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: errorTrackingSettingsSchema },
+          },
+          description: "Error tracking settings",
+        },
+      },
+      summary: "Get error tracking settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setErrorTrackingSettings",
+      path: "/v1/settings/error-tracking",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: updateErrorTrackingRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: errorTrackingSettingsSchema },
+          },
+          description: "Error tracking settings",
+        },
+      },
+      summary: "Set error tracking settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "sendErrorTrackingTest",
+      path: "/v1/settings/error-tracking/test",
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: sendErrorTrackingTestSchema },
+          },
+          description: "Test event result",
+        },
+      },
+      summary: "Send a test event",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setComposioSettings",
+      path: "/v1/settings/composio",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: updateComposioRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: composioSettingsSchema } },
+          description: "Composio settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Update Composio settings",
+      tags: ["Models"],
+    })
+  );
+
+  for (const [kind, requestSchema, responseSchema] of [
+    ["email", z.object({ password: z.string() }), emailSettingsSchema],
+    [
+      "web-search",
+      z.object({ provider: z.enum(WEB_SEARCH_PROVIDERS), apiKey: z.string() }),
+      webSearchSettingsSchema,
+    ],
+    ["composio", z.object({ apiKey: z.string() }), composioSettingsSchema],
+  ] as const) {
+    app.openAPIRegistry.registerPath(
+      createRoute({
+        method: "put",
+        operationId: `set${kind.replace("-", "")}Secret`,
+        path: `/v1/settings/${kind}/secret`,
+        request: {
+          body: {
+            content: { "application/json": { schema: requestSchema } },
+            required: true,
+          },
+        },
+        responses: {
+          200: {
+            content: { "application/json": { schema: responseSchema } },
+            description: "Secret status",
+          },
+        },
+        tags: ["Models"],
+      })
+    );
+  }
+
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getEmailSettings",
+      path: "/v1/settings/email",
+      responses: {
+        200: {
+          content: { "application/json": { schema: emailSettingsSchema } },
+          description: "Email settings",
+        },
+        403: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Forbidden",
+        },
+      },
+      summary: "Get email settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setEmailSettings",
+      path: "/v1/settings/email",
+      request: {
+        body: {
+          content: { "application/json": { schema: updateEmailRequestSchema } },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: emailSettingsSchema } },
+          description: "Email settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+        403: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Forbidden",
+        },
+      },
+      summary: "Update email settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "sendEmailTest",
+      path: "/v1/settings/email/test",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: sendEmailTestRequestSchema },
+          },
+          required: false,
+        },
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: sendEmailTestResponseSchema },
+          },
+          description: "Test email sent",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+        403: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Forbidden",
+        },
+      },
+      summary: "Send test email",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getWebSearchSettings",
+      path: "/v1/settings/web-search",
+      responses: {
+        200: {
+          content: { "application/json": { schema: webSearchSettingsSchema } },
+          description: "Web search settings",
+        },
+        403: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Forbidden",
+        },
+      },
+      summary: "Get web search settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setWebSearchSettings",
+      path: "/v1/settings/web-search",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: updateWebSearchRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: webSearchSettingsSchema } },
+          description: "Web search settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+        403: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Forbidden",
+        },
+      },
+      summary: "Update web search settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getAgentBrowserStatus",
+      path: "/v1/settings/agent-browser",
+      responses: {
+        200: {
+          content: { "application/json": { schema: agentBrowserStatusSchema } },
+          description: "Agent-browser status",
+        },
+        403: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Forbidden",
+        },
+      },
+      summary: "Get agent-browser readiness",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setAgentBrowserSettings",
+      path: "/v1/settings/agent-browser",
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: updateAgentBrowserRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: agentBrowserStatusSchema } },
+          description: "Agent-browser status",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+        403: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Forbidden",
+        },
+      },
+      summary: "Set the agent-browser runtime",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "installAgentBrowser",
+      path: "/v1/settings/agent-browser/install",
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: agentBrowserInstallEventSchema },
+          },
+          description: "Agent-browser install stream",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+        403: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Forbidden",
+        },
+      },
+      summary: "Install agent-browser CLI and Chrome",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getWhatsAppSettings",
+      path: "/v1/settings/whatsapp",
+      request: { query: z.object({ profileId: z.string().min(1) }) },
+      responses: {
+        200: {
+          content: { "application/json": { schema: whatsappSettingsSchema } },
+          description: "WhatsApp settings",
+        },
+      },
+      summary: "Get WhatsApp settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "put",
+      operationId: "setWhatsAppSettings",
+      path: "/v1/settings/whatsapp",
+      request: {
+        query: z.object({ profileId: z.string().min(1) }),
+        body: {
+          content: {
+            "application/json": { schema: updateWhatsappRequestSchema },
+          },
+          required: true,
+        },
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: whatsappSettingsSchema } },
+          description: "WhatsApp settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Update WhatsApp settings",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "regenerateWhatsAppPairingCode",
+      path: "/v1/settings/whatsapp/pairing-code",
+      request: { query: z.object({ profileId: z.string().min(1) }) },
+      responses: {
+        200: {
+          content: { "application/json": { schema: whatsappSettingsSchema } },
+          description: "WhatsApp settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Regenerate WhatsApp pairing code",
+      tags: ["Models"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "reconnectWhatsApp",
+      path: "/v1/settings/whatsapp/reconnect",
+      request: { query: z.object({ profileId: z.string().min(1) }) },
+      responses: {
+        200: {
+          content: { "application/json": { schema: whatsappSettingsSchema } },
+          description: "WhatsApp settings",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Reconnect WhatsApp session",
+      tags: ["Models"],
+    })
+  );
+
+  app.get("/v1/model-catalogs/:catalogId", async (c) => {
+    getRequestAuth(c);
+    const catalogId = decodeURIComponent(c.req.param("catalogId"));
+
+    if (!isExternalModelCatalogId(catalogId)) {
+      return errorResponse("Unknown model catalog.", 400);
+    }
+
+    try {
+      return json(await getExternalModelCatalog(catalogId));
+    } catch (error) {
+      void reportError(error, { kind: "http", source: "server" });
+
+      return errorResponse(formatServerError(error), 502);
+    }
+  });
 
   app.get("/v1/models", async (c) => {
     getRequestAuth(c);
     const source = c.req.query("source");
-    const modelsSource = source === "remote" ? ("remote" as const) : ("catalog" as const);
-    return json<ModelsResponse>(await agent.getModels({ source: modelsSource }));
+
+    const modelsSource =
+      source === "remote" ? ("remote" as const) : ("catalog" as const);
+
+    return json<ModelsResponse>(
+      await agent.getModels({ source: modelsSource })
+    );
   });
 
   app.post("/v1/models/discover", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<DiscoverModelsRequest>(c.req.raw);
+    requireOrgAdminOrPlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, discoverModelsRequestSchema);
+    const result = await agent.discoverModels(body);
+
+    return json<ModelsResponse>(result);
+  });
+
+  app.get("/v1/providers", async (c) => {
+    const auth = getRequestAuth(c);
+
+    const result = await agent.listProviders();
+
+    // The sibling provider endpoints are platform-admin-only. Non-admin
+    // callers still see the provider list in the UI, so they get the
+    // identifying fields only — no baseUrl, key status, custom model
+    // inventory, or routing details.
+    const providers = auth.isPlatformAdmin
+      ? result.providers
+      : result.providers.map((provider) => ({
+          createdAt: provider.createdAt,
+          id: provider.id,
+          label: provider.label,
+          modelCount: provider.modelCount,
+          type: provider.type,
+        }));
+
+    return json<ListProvidersResponse>({
+      defaultProviderId: result.defaultProviderId,
+      providers,
+    });
+  });
+
+  app.post("/v1/providers", async (c) => {
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, createProviderRequestSchema);
 
     try {
-      const result = await agent.discoverModels(body);
-      return json<ModelsResponse>(result);
+      return json<CreateProviderResponse>(await agent.createProvider(body));
     } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
       const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
-  app.get("/v1/providers", async (c) => {
-    getRequestAuth(c);
-    return json<ListProvidersResponse>(await agent.listProviders());
-  });
-
-  app.post("/v1/providers", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<CreateProviderRequest>(c.req.raw);
-    return json<CreateProviderResponse>(await agent.createProvider(body));
-  });
-
   app.patch("/v1/providers/:providerId", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<UpdateProviderRequest>(c.req.raw);
-    return json<UpdateProviderResponse>(
-      await agent.updateProvider(decodeURIComponent(c.req.param("providerId")), body),
-    );
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, updateProviderRequestSchema);
+
+    try {
+      return json<UpdateProviderResponse>(
+        await agent.updateProvider(
+          decodeURIComponent(c.req.param("providerId")),
+          body
+        )
+      );
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
   });
 
   app.delete("/v1/providers/:providerId", async (c) => {
-    getRequestAuth(c);
+    requirePlatformAdminFromContext(c);
+
     return json<DeleteProviderResponse>(
-      await agent.deleteProvider(decodeURIComponent(c.req.param("providerId"))),
+      await agent.deleteProvider(decodeURIComponent(c.req.param("providerId")))
     );
   });
 
+  app.put("/v1/providers/:providerId/secret", async (c) => {
+    requirePlatformAdminFromContext(c);
+    const body = await readJson<{ apiKey: string }>(c.req.raw);
+
+    try {
+      return json<UpdateProviderResponse>(
+        await agent.setProviderSecret(
+          decodeURIComponent(c.req.param("providerId")),
+          body.apiKey
+        )
+      );
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      return errorResponse(
+        error instanceof Error ? error.message : String(error),
+        400
+      );
+    }
+  });
+
+  for (const [method, suffix, action] of [
+    ["delete", "", "clear"],
+    ["post", "/use-stored", "use-stored"],
+  ] as const) {
+    app[method](`/v1/providers/:providerId/secret${suffix}`, async (c) => {
+      requirePlatformAdminFromContext(c);
+
+      return json<UpdateProviderResponse>(
+        await agent.manageProviderSecret(c.req.param("providerId"), action)
+      );
+    });
+  }
+
+  app.post("/v1/xai-oauth/device/start", async (c) => {
+    const auth = requirePlatformAdminFromContext(c);
+    const owner = JSON.stringify([auth.user.id, auth.activeOrgId]);
+
+    try {
+      return json(await startXaiOAuthDeviceSession(owner));
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.post("/v1/xai-oauth/device/complete", async (c) => {
+    const auth = requirePlatformAdminFromContext(c);
+    const owner = JSON.stringify([auth.user.id, auth.activeOrgId]);
+
+    const body = await readJson(
+      c.req.raw,
+      z.object({ sessionId: z.string().optional() })
+    );
+
+    const sessionId = body.sessionId?.trim() ?? "";
+
+    if (!sessionId) {
+      return errorResponse("sessionId is required.", 400);
+    }
+
+    try {
+      const xaiOAuth = await completeXaiOAuthDeviceSession(
+        sessionId,
+        owner,
+        c.req.raw.signal
+      );
+
+      const models = await fetchXaiOAuthModels(xaiOAuth).catch(() => []);
+
+      return json(
+        { xaiOAuth, models },
+        200,
+        new Headers({ "Cache-Control": "no-store" })
+      );
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.post("/v1/chatgpt-oauth/device/start", async (c) => {
+    requirePlatformAdminFromContext(c);
+
+    try {
+      return json(await startChatgptOAuthDeviceSession());
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.post("/v1/chatgpt-oauth/device/complete", async (c) => {
+    requirePlatformAdminFromContext(c);
+
+    const body = await readJson(
+      c.req.raw,
+      z.object({ sessionId: z.string().optional() })
+    );
+
+    const sessionId = body.sessionId?.trim();
+
+    if (!sessionId) {
+      return errorResponse("sessionId is required.", 400);
+    }
+
+    try {
+      const chatgptOAuth = await completeChatgptOAuthDeviceSession(sessionId);
+
+      const models = await fetchChatgptCodexModels(chatgptOAuth).catch(
+        () => []
+      );
+
+      return json({ chatgptOAuth, models });
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
   app.put("/v1/settings/provider", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<ConfigureProviderRequest>(c.req.raw);
-    const result = await agent.configureProvider(body);
-    return json<ConfigureProviderResponse>(result);
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, configureProviderRequestSchema);
+
+    try {
+      return json<ConfigureProviderResponse>(
+        await agent.configureProvider(body)
+      );
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
   });
 
   app.get("/v1/timezones", async (c) => {
     getRequestAuth(c);
+
     return json<ListTimezonesResponse>(await getTimezoneCatalog());
   });
 
   app.get("/v1/settings/timezone", async (c) => {
     getRequestAuth(c);
-    return json<TimezoneSettingsResponse>({ timezone: await agent.getUserTimezone() });
+
+    return json<TimezoneSettingsResponse>({
+      timezone: await agent.getUserTimezone(),
+    });
   });
 
   app.put("/v1/settings/timezone", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<UpdateTimezoneRequest>(c.req.raw);
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, updateTimezoneRequestSchema);
     const timezone = await agent.setUserTimezone(body.timezone);
+
     return json<TimezoneSettingsResponse>({ timezone });
   });
 
   app.get("/v1/settings/thinking", async (c) => {
     getRequestAuth(c);
+
     return json<ThinkingSettingsResponse>(await agent.getThinkingSettings());
   });
 
   app.put("/v1/settings/thinking", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<UpdateThinkingRequest>(c.req.raw);
-    return json<ThinkingSettingsResponse>(await agent.setThinkingSettings(body));
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, updateThinkingRequestSchema);
+
+    return json<ThinkingSettingsResponse>(
+      await agent.setThinkingSettings(body)
+    );
   });
 
   app.get("/v1/settings/vision", async (c) => {
     getRequestAuth(c);
+
     return json<VisionSettingsResponse>(await agent.getVisionSettings());
   });
 
   app.put("/v1/settings/vision", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<UpdateVisionRequest>(c.req.raw);
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, updateVisionRequestSchema);
 
     try {
       return json<VisionSettingsResponse>(await agent.setVisionSettings(body));
@@ -594,55 +2074,120 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
       }
 
       const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
   app.get("/v1/settings/transcription", async (c) => {
     getRequestAuth(c);
-    return json<TranscriptionSettingsResponse>(await agent.getTranscriptionSettings());
+
+    return json<TranscriptionSettingsResponse>(
+      await agent.getTranscriptionSettings()
+    );
   });
 
   app.put("/v1/settings/transcription", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<UpdateTranscriptionRequest>(c.req.raw);
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, updateTranscriptionRequestSchema);
 
     try {
-      return json<TranscriptionSettingsResponse>(await agent.setTranscriptionSettings(body));
+      return json<TranscriptionSettingsResponse>(
+        await agent.setTranscriptionSettings(body)
+      );
     } catch (error) {
       if (error instanceof NakamaApiError) {
         return errorResponse(error.message, error.status);
       }
 
       const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
   app.post("/v1/audio/transcribe", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<TranscribeAudioRequest>(c.req.raw);
+    requireOrgMemberFromContext(c);
+    const body = await readJson(c.req.raw, transcribeAudioRequestSchema);
 
     try {
       return json<TranscribeAudioResponse>(await agent.transcribeAudio(body));
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        if (error.status >= 500) {
+          void reportError(error, { kind: "http", source: "server" });
+        }
+
+        return errorResponse(error.message, error.status);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.get("/v1/settings/image-generation", async (c) => {
+    getRequestAuth(c);
+
+    return json<ImageGenerationSettingsResponse>(
+      await agent.getImageGenerationSettings()
+    );
+  });
+
+  app.put("/v1/settings/image-generation", async (c) => {
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, updateImageGenerationRequestSchema);
+
+    try {
+      return json<ImageGenerationSettingsResponse>(
+        await agent.setImageGenerationSettings(body)
+      );
     } catch (error) {
       if (error instanceof NakamaApiError) {
         return errorResponse(error.message, error.status);
       }
 
       const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.post("/v1/images/generate", async (c) => {
+    requireOrgMemberFromContext(c);
+    const body = await readJson(c.req.raw, generateImageRequestSchema);
+
+    const auth = getRequestAuth(c);
+
+    try {
+      return json<GenerateImageResponse>(
+        await agent.generateImage(body, auth.activeOrgId ?? null, auth.user.id)
+      );
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        if (error.status >= 500) {
+          void reportError(error, { kind: "http", source: "server" });
+        }
+
+        return errorResponse(error.message, error.status);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
   app.get("/v1/settings/email", async (c) => {
     requireOrgAdminFromContext(c);
+
     return json<EmailSettingsResponse>(await agent.getEmailSettings());
   });
 
   app.put("/v1/settings/email", async (c) => {
-    requireOrgAdminFromContext(c);
-    const body = await readJson<UpdateEmailSettingsRequest>(c.req.raw);
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, updateEmailRequestSchema);
 
     try {
       return json<EmailSettingsResponse>(await agent.setEmailSettings(body));
@@ -650,246 +2195,712 @@ export function registerModelRoutes(app: HonoApp, options: ServerOptions): void 
       if (error instanceof NakamaApiError) {
         return errorResponse(error.message, error.status);
       }
+
       const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
-  app.post("/v1/settings/email/test", async (c) => {
-    const auth = requireOrgAdminFromContext(c);
-    const body = await readJson<SendEmailTestRequest>(c.req.raw).catch(() => ({} as SendEmailTestRequest));
+  app.put("/v1/settings/email/secret", async (c) => {
+    requirePlatformAdminFromContext(c);
+    const body = await readJson<{ password: string }>(c.req.raw);
 
     try {
-      return json<SendEmailTestResponse>(
-        await agent.sendEmailTest(body.to?.trim() || auth.user.email),
+      return json<EmailSettingsResponse>(
+        await agent.setEmailSecret(body.password)
       );
     } catch (error) {
       if (error instanceof NakamaApiError) {
         return errorResponse(error.message, error.status);
       }
-      const message = error instanceof Error ? error.message : String(error);
-      return errorResponse(message, 400);
+
+      return errorResponse(
+        error instanceof Error ? error.message : String(error),
+        400
+      );
     }
   });
 
-  app.get("/v1/settings/coding-harnesses", async (c) => {
-    requireOrgAdminFromContext(c);
-    return json<CodingHarnessSettingsResponse>(await agent.getCodingHarnessSettings());
-  });
-
-  app.put("/v1/settings/coding-harnesses", async (c) => {
-    requireOrgAdminFromContext(c);
-    const body = await readJson<UpdateCodingHarnessSettingsRequest>(c.req.raw);
+  app.post("/v1/settings/email/test", async (c) => {
+    const auth = requirePlatformAdminFromContext(c);
+    const body = await readOptionalJson<SendEmailTestRequest>(c.req.raw, {});
 
     try {
-      return json<CodingHarnessSettingsResponse>(await agent.setCodingHarnessSettings(body));
+      return json<SendEmailTestResponse>(
+        await agent.sendEmailTest(body.to?.trim() || auth.user.email)
+      );
     } catch (error) {
       if (error instanceof NakamaApiError) {
         return errorResponse(error.message, error.status);
       }
+
       const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
-  app.post("/v1/settings/coding-harnesses/verify", async (c) => {
-    requireOrgAdminFromContext(c);
-    const body = await readJson<VerifyCodingHarnessRequest>(c.req.raw).catch(
-      () => ({} as VerifyCodingHarnessRequest),
-    );
+  app.get("/v1/settings/web-search", async (c) => {
+    requirePlatformAdminFromContext(c);
+
+    return json<WebSearchSettingsResponse>(await agent.getWebSearchSettings());
+  });
+
+  app.put("/v1/settings/web-search", async (c) => {
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, updateWebSearchRequestSchema);
 
     try {
-      return json<VerifyCodingHarnessResponse>(await agent.verifyCodingHarness(body.harnessId));
+      return json<WebSearchSettingsResponse>(
+        await agent.setWebSearchSettings(body)
+      );
     } catch (error) {
       if (error instanceof NakamaApiError) {
         return errorResponse(error.message, error.status);
       }
+
       const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
-  app.post("/v1/settings/coding-harnesses/install", async (c) => {
-    requireOrgAdminFromContext(c);
-    const body = await readJson<CodingHarnessInstallRequest>(c.req.raw);
+  app.put("/v1/settings/web-search/secret", async (c) => {
+    requirePlatformAdminFromContext(c);
 
-    if (!databaseAdapter) {
-      return errorResponse("Database adapter is not configured.", 500);
+    const body = await readJson<{
+      provider: WebSearchProvider;
+      apiKey: string;
+    }>(c.req.raw);
+
+    try {
+      return json<WebSearchSettingsResponse>(
+        await agent.setWebSearchSecret(body.provider, body.apiKey)
+      );
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      return errorResponse(
+        error instanceof Error ? error.message : String(error),
+        400
+      );
     }
-
-    return streamCodingHarnessInstall(async (send) => {
-      const status = await installCodingAgentHarness(databaseAdapter, body.harnessId, (progress) => {
-        send({
-          type: "progress",
-          harnessId: progress.harnessId,
-          name: progress.name,
-          message: progress.message,
-        });
-      });
-
-      send({
-        type: "done",
-        status,
-      });
-    }, {
-      timeoutMessage: "Install timed out while waiting for the coding harness installer.",
-    });
   });
 
   app.get("/v1/settings/agent-browser", async (c) => {
     requireOrgAdminFromContext(c);
-    return json<AgentBrowserStatusResponse>(await agent.getAgentBrowserStatus());
+
+    return json<AgentBrowserStatusResponse>(
+      await agent.getAgentBrowserStatus()
+    );
   });
 
-  app.post("/v1/settings/agent-browser/install", async (c) => {
-    requireOrgAdminFromContext(c);
-
-    return streamAgentBrowserInstall(async (send) => {
-      const status = await installAgentBrowser((progress) => {
-        send({
-          type: "progress",
-          message: progress.message,
-        });
-      });
-
-      send({
-        type: "done",
-        status,
-      });
-    }, {
-      timeoutMessage: "Install timed out while waiting for the agent-browser installer.",
-    });
-  });
-
-  app.get("/v1/settings/telegram", async (c) => {
-    getRequestAuth(c);
-    return json<TelegramSettingsResponse>(await agent.getTelegramSettings());
-  });
-
-  app.put("/v1/settings/telegram", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<UpdateTelegramSettingsRequest>(c.req.raw);
+  app.put("/v1/settings/agent-browser", async (c) => {
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, updateAgentBrowserRequestSchema);
 
     try {
-      return json<TelegramSettingsResponse>(await agent.setTelegramSettings(body));
+      return json<AgentBrowserStatusResponse>(
+        await agent.saveAgentBrowserSettings(body)
+      );
     } catch (error) {
       if (error instanceof NakamaApiError) {
         return errorResponse(error.message, error.status);
       }
+
+      throw error;
+    }
+  });
+
+  app.post("/v1/settings/agent-browser/install", async (c) => {
+    requirePlatformAdminFromContext(c);
+
+    return streamAgentBrowserInstall(
+      async (send, signal) => {
+        const status = await installAgentBrowser(
+          (progress) => {
+            send({
+              message: progress.message,
+              type: "progress",
+            });
+          },
+          { signal }
+        );
+
+        send({
+          status,
+          type: "done",
+        });
+      },
+      {
+        timeoutMessage:
+          "Install timed out while waiting for the agent-browser installer.",
+      }
+    );
+  });
+
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      path: "/v1/settings/channel-legacy",
+      operationId: "listLegacyChannels",
+      responses: {
+        200: {
+          description: "Connections awaiting an owner",
+          content: {
+            "application/json": {
+              schema: z.array(
+                z.object({
+                  platform: z.enum(["telegram", "discord", "whatsapp"]),
+                  global: z.boolean(),
+                })
+              ),
+            },
+          },
+        },
+      },
+      tags: ["Workers"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      path: "/v1/settings/channel-legacy/claim",
+      operationId: "claimLegacyChannel",
+      request: {
+        query: z.object({ profileId: z.string().min(1) }),
+        body: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: z.object({
+                platform: z.enum(["telegram", "discord", "whatsapp"]),
+                global: z.boolean().optional(),
+              }),
+            },
+          },
+        },
+      },
+      responses: {
+        200: {
+          description: "Connection assigned",
+          content: {
+            "application/json": { schema: z.object({ ok: z.boolean() }) },
+          },
+        },
+      },
+      tags: ["Workers"],
+    })
+  );
+  app.get("/v1/settings/channel-legacy", async (c) => {
+    requireOrgAdminOrPlatformAdminFromContext(c);
+
+    return json(
+      await workerManager.legacyChannels(
+        requireActiveOrgIdFromContext(c),
+        getRequestAuth(c).isPlatformAdmin === true
+      )
+    );
+  });
+  app.post("/v1/settings/channel-legacy/claim", async (c) => {
+    const owner = await channelOwner(c);
+
+    const body = await readJson(
+      c.req.raw,
+      z
+        .object({
+          platform: z.enum(["telegram", "discord", "whatsapp"]),
+          global: z.boolean().optional(),
+        })
+        .strict()
+    );
+
+    if (!["telegram", "discord", "whatsapp"].includes(body.platform)) {
+      throw new NakamaApiError("Unknown channel", 400);
+    }
+
+    if (body.global) {
+      requirePlatformAdminFromContext(c);
+    }
+
+    if (!options.databaseAdapter) {
+      throw new NakamaApiError("Database unavailable", 503);
+    }
+
+    await workerManager.claimLegacyChannel(
+      // SAFETY: The validated value satisfies the contract checked by this assertion.
+      body.platform as "telegram" | "discord" | "whatsapp",
+      body.global ? null : owner.orgId,
+      owner,
+      options.databaseAdapter
+    );
+
+    return json({ ok: true });
+  });
+
+  async function channelOwner(c: Context<AppEnv>) {
+    const orgId = requireActiveOrgIdFromContext(c);
+    const profileId = c.req.query("profileId")?.trim();
+
+    if (!profileId) {
+      // Without an agent there is nothing a member could own.
+      requireOrgAdminOrPlatformAdminFromContext(c);
+
+      throw new NakamaApiError(
+        "Choose an agent to manage this connection.",
+        400
+      );
+    }
+
+    // Admins manage any agent's connections. Members manage their own agent's.
+    await requireProfileManageFromContext(c, agent, {
+      allowOrgAdmin: true,
+      profileId,
+    });
+
+    const { profile } = await agent.getProfile(orgId, profileId);
+
+    // A channel worker talks to the server as the local client, and the server
+    // refuses that client for Super Nakama, so such a bridge can never answer.
+    if (profile.isSuper) {
+      throw new NakamaApiError(
+        "Super Nakama cannot be connected to a channel. Choose another agent.",
+        400
+      );
+    }
+
+    return { orgId, profileId };
+  }
+
+  // Check access before any handler reads a body or catches errors into a 400.
+  for (const channel of ["telegram", "discord", "whatsapp", "slack"]) {
+    const requireChannelAccess: MiddlewareHandler<AppEnv> = async (c, next) => {
+      await channelOwner(c);
+      await next();
+    };
+
+    app.use(`/v1/settings/${channel}`, requireChannelAccess);
+    app.use(`/v1/settings/${channel}/*`, requireChannelAccess);
+  }
+
+  app.get("/v1/settings/telegram", async (c) =>
+    json<TelegramSettingsResponse>(
+      await agent.getTelegramSettings(await channelOwner(c))
+    )
+  );
+
+  app.put("/v1/settings/telegram", async (c) => {
+    const orgId = await channelOwner(c);
+    const body = await readJson(c.req.raw, updateTelegramRequestSchema);
+
+    try {
+      return json<TelegramSettingsResponse>(
+        await agent.setTelegramSettings(orgId, body)
+      );
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
       const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
   app.post("/v1/settings/telegram/handshake", async (c) => {
-    getRequestAuth(c);
+    const orgId = await channelOwner(c);
+
     try {
-      return json<TelegramSettingsResponse>(await agent.regenerateTelegramHandshake());
+      return json<TelegramSettingsResponse>(
+        await agent.regenerateTelegramHandshake(orgId)
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+  app.get("/v1/settings/telegram/requests", async (c) =>
+    json<TelegramAccessRequestsResponse>(
+      await agent.getTelegramAccessRequests(await channelOwner(c))
+    )
+  );
+
+  app.post("/v1/settings/telegram/requests/:userId/approve", async (c) => {
+    const userId = Number(c.req.param("userId"));
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return errorResponse("Invalid Telegram user ID.", 400);
+    }
+
+    try {
+      return json<TelegramSettingsResponse>(
+        await agent.approveTelegramAccessRequest(await channelOwner(c), userId)
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.post("/v1/settings/telegram/requests/:userId/deny", async (c) => {
+    const userId = Number(c.req.param("userId"));
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return errorResponse("Invalid Telegram user ID.", 400);
+    }
+
+    return json<TelegramAccessRequestsResponse>(
+      await agent.denyTelegramAccessRequest(await channelOwner(c), userId)
+    );
+  });
+
+  app.post("/v1/settings/telegram/pairing", async (c) => {
+    const owner = await channelOwner(c);
+    const orgId = owner.orgId;
+    const body = await readJson(c.req.raw, startTelegramPairingSchema);
+
+    try {
+      return json<TelegramPairingStartResponse>(
+        await agent.startTelegramPairing(orgId, getRequestAuth(c).user.id, {
+          ...body,
+          profileId: owner.profileId,
+        })
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.get("/v1/settings/telegram/pairing/:pairingId", async (c) => {
+    try {
+      return json<TelegramPairingStatusResponse>(
+        await agent.getTelegramPairingStatus(
+          requireActiveOrgIdFromContext(c),
+          getRequestAuth(c).user.id,
+          c.req.param("pairingId"),
+          (await channelOwner(c)).profileId
+        )
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.post("/v1/settings/telegram/pairing/:pairingId/cancel", async (c) => {
+    try {
+      return json<TelegramPairingStatusResponse>(
+        await agent.cancelTelegramPairing(
+          requireActiveOrgIdFromContext(c),
+          getRequestAuth(c).user.id,
+          c.req.param("pairingId"),
+          (await channelOwner(c)).profileId
+        )
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.post("/v1/settings/telegram/pairing/:pairingId/apply", async (c) => {
+    const body = await readJson(c.req.raw, applyTelegramPairingSchema);
+
+    try {
+      return json<TelegramPairingStatusResponse>(
+        await agent.applyTelegramPairing(
+          requireActiveOrgIdFromContext(c),
+          getRequestAuth(c).user.id,
+          c.req.param("pairingId"),
+          { ...body, profileId: (await channelOwner(c)).profileId }
+        )
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
   app.get("/v1/settings/discord", async (c) => {
     getRequestAuth(c);
-    return json<DiscordSettingsResponse>(await agent.getDiscordSettings());
+
+    return json<DiscordSettingsResponse>(
+      await agent.getDiscordSettings(await channelOwner(c))
+    );
   });
 
   app.put("/v1/settings/discord", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<UpdateDiscordSettingsRequest>(c.req.raw);
+    const body = await readJson(c.req.raw, updateDiscordRequestSchema);
 
     try {
-      return json<DiscordSettingsResponse>(await agent.setDiscordSettings(body));
+      return json<DiscordSettingsResponse>(
+        await agent.setDiscordSettings(body, await channelOwner(c))
+      );
     } catch (error) {
       if (error instanceof NakamaApiError) {
         return errorResponse(error.message, error.status);
       }
+
       const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
   app.post("/v1/settings/discord/handshake", async (c) => {
-    getRequestAuth(c);
     try {
-      return json<DiscordSettingsResponse>(await agent.regenerateDiscordHandshake());
+      return json<DiscordSettingsResponse>(
+        await agent.regenerateDiscordHandshake(await channelOwner(c))
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  // Slack settings belong to one agent connection, like Discord's.
+  app.get("/v1/settings/slack", async (c) =>
+    json<SlackSettingsResponse>(
+      await loadSlackSettingsPublic(await channelOwner(c))
+    )
+  );
+
+  app.put("/v1/settings/slack", async (c) => {
+    const owner = await channelOwner(c);
+
+    // Typed at the boundary: a string "false" must never read as a yes.
+    const parsed = updateSlackRequestSchema.safeParse(
+      await readJson(c.req.raw, z.unknown())
+    );
+
+    if (!parsed.success) {
+      return errorResponse("Invalid Slack settings.", 400);
+    }
+
+    const body: UpdateSlackSettingsRequest = parsed.data;
+    const botToken = body.botToken?.trim() || undefined;
+    const appToken = body.appToken?.trim() || undefined;
+
+    try {
+      await validateSlackTokens({ appToken, botToken });
+      const saved = await loadSlackConfigFile(owner);
+
+      const pair = {
+        appToken: appToken ?? saved?.appToken,
+        botToken: botToken ?? saved?.botToken,
+      };
+
+      if ((appToken || botToken) && pair.appToken && pair.botToken) {
+        await checkSlackTokensMatch({
+          appToken: pair.appToken,
+          botToken: pair.botToken,
+        });
+      }
+
+      if (body.allowWorkspace === true && pair.botToken) {
+        await checkSlackWorkspaceAccess(pair.botToken);
+      }
+
+      return json<SlackSettingsResponse>(
+        await saveSlackConfig(owner, { ...body, appToken, botToken })
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.post("/v1/settings/slack/handshake", async (c) => {
+    const owner = await channelOwner(c);
+
+    try {
+      return json<SlackSettingsResponse>(await regenerateSlackHandshake(owner));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
   app.get("/v1/settings/composio", async (c) => {
     getRequestAuth(c);
+
     return json<ComposioSettingsResponse>(await agent.getComposioSettings());
   });
 
   app.put("/v1/settings/composio", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<UpdateComposioSettingsRequest>(c.req.raw);
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, updateComposioRequestSchema);
 
     try {
-      return json<ComposioSettingsResponse>(await agent.setComposioSettings(body));
+      return json<ComposioSettingsResponse>(
+        await agent.setComposioSettings(body)
+      );
     } catch (error) {
       if (error instanceof NakamaApiError) {
         return errorResponse(error.message, error.status);
       }
+
       const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
-  app.get("/v1/settings/whatsapp", async (c) => {
-    getRequestAuth(c);
-    return json<WhatsAppSettingsResponse>(await agent.getWhatsAppSettings());
-  });
-
-  app.put("/v1/settings/whatsapp", async (c) => {
-    getRequestAuth(c);
-    const body = await readJson<UpdateWhatsAppSettingsRequest>(c.req.raw);
+  app.put("/v1/settings/composio/secret", async (c) => {
+    requirePlatformAdminFromContext(c);
+    const body = await readJson<{ apiKey: string }>(c.req.raw);
 
     try {
-      return json<WhatsAppSettingsResponse>(await agent.setWhatsAppSettings(body));
+      return json<ComposioSettingsResponse>(
+        await agent.setComposioSecret(body.apiKey)
+      );
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      return errorResponse(
+        error instanceof Error ? error.message : String(error),
+        400
+      );
+    }
+  });
+
+  for (const kind of ["email", "web-search", "composio"] as const) {
+    for (const [method, suffix, action] of [
+      ["delete", "", "clear"],
+      ["post", "/use-stored", "use-stored"],
+    ] as const) {
+      app.openAPIRegistry.registerPath(
+        createRoute({
+          method,
+          operationId: `${action === "clear" ? "clear" : "useStored"}${kind.replace("-", "")}Secret`,
+          path: `/v1/settings/${kind}/secret${suffix}`,
+          responses: { 200: { description: "Secret status" } },
+          tags: ["Settings"],
+        })
+      );
+      app[method](`/v1/settings/${kind}/secret${suffix}`, async (c) => {
+        requirePlatformAdminFromContext(c);
+
+        return json(await agent.manageSettingSecret(kind, action));
+      });
+    }
+  }
+
+  app.get("/v1/settings/error-tracking", async (c) => {
+    getRequestAuth(c);
+
+    return json<ErrorTrackingSettingsResponse>(
+      await agent.getErrorTrackingSettings()
+    );
+  });
+
+  app.put("/v1/settings/error-tracking", async (c) => {
+    // Workspace-global config, so there is no org to scope it to and a role guard is
+    // the only thing standing between an org member and the whole install's error routing.
+    requirePlatformAdminFromContext(c);
+    const body = await readJson(c.req.raw, updateErrorTrackingRequestSchema);
+
+    try {
+      return json<ErrorTrackingSettingsResponse>(
+        await agent.setErrorTrackingSettings(body)
+      );
     } catch (error) {
       if (error instanceof NakamaApiError) {
         return errorResponse(error.message, error.status);
       }
 
       const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.post("/v1/settings/error-tracking/test", async (c) => {
+    requirePlatformAdminFromContext(c);
+
+    try {
+      return json<SendErrorTrackingTestResponse>(
+        await agent.sendErrorTrackingTest()
+      );
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+
+      return errorResponse(message, 400);
+    }
+  });
+
+  app.get("/v1/settings/whatsapp", async (c) => {
+    getRequestAuth(c);
+
+    return json<WhatsAppSettingsResponse>(
+      await agent.getWhatsAppSettings(await channelOwner(c))
+    );
+  });
+
+  app.put("/v1/settings/whatsapp", async (c) => {
+    const body = await readJson(c.req.raw, updateWhatsappRequestSchema);
+
+    try {
+      return json<WhatsAppSettingsResponse>(
+        await agent.setWhatsAppSettings(await channelOwner(c), body)
+      );
+    } catch (error) {
+      if (error instanceof NakamaApiError) {
+        return errorResponse(error.message, error.status);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
   app.post("/v1/settings/whatsapp/pairing-code", async (c) => {
-    getRequestAuth(c);
     try {
-      return json<WhatsAppSettingsResponse>(await agent.regenerateWhatsAppPairingCode());
+      return json<WhatsAppSettingsResponse>(
+        await agent.regenerateWhatsAppPairingCode(await channelOwner(c))
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });
 
   app.post("/v1/settings/whatsapp/reconnect", async (c) => {
-    getRequestAuth(c);
     try {
-      await workerManager.stopWorker("whatsapp").catch(() => {});
-      const settings = await resetWhatsAppSessionForReconnect();
+      const orgId = await channelOwner(c);
 
-      try {
-        await workerManager.startWorker("whatsapp");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return errorResponse(
-          `Session reset, but the WhatsApp worker could not start: ${message}. Start it manually from Settings.`,
-          400,
-        );
-      }
+      const settings = await workerManager.saveChannelConfig(
+        "whatsapp",
+        orgId,
+        () => resetWhatsAppSessionForReconnect(orgId),
+        true
+      );
 
       return json<WhatsAppSettingsResponse>(settings);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+
       return errorResponse(message, 400);
     }
   });

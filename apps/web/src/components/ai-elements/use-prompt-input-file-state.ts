@@ -1,5 +1,3 @@
-import type { FileUIPart } from "ai";
-import { nanoid } from "nanoid";
 import type { ChangeEventHandler, RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -7,6 +5,9 @@ import type {
   PromptInputControllerProps,
 } from "@/components/ai-elements/prompt-input-context";
 import { useOptionalPromptInputController } from "@/components/ai-elements/prompt-input-context";
+import type { FileUIPart } from "@/lib/ai-ui-types";
+import { fileMatchesAccept } from "@/lib/chat-images";
+import { createClientId } from "@/lib/client-id";
 
 type FileErrorCode = "max_files" | "max_file_size" | "accept";
 
@@ -64,34 +65,8 @@ export function usePromptInputFileState({
   }, []);
 
   const matchesAccept = useCallback(
-    (f: File) => {
-      if (!accept || accept.trim() === "") {
-        return true;
-      }
-
-      const fileType = f.type.split(";")[0]?.trim().toLowerCase() ?? "";
-      const fileName = f.name.toLowerCase();
-      const patterns = accept
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-      return patterns.some((pattern) => {
-        const normalizedPattern = pattern.toLowerCase();
-
-        if (pattern.endsWith("/*")) {
-          const prefix = pattern.slice(0, -1);
-          return fileType.startsWith(prefix);
-        }
-
-        if (pattern.startsWith(".")) {
-          return fileName.endsWith(normalizedPattern);
-        }
-
-        return fileType === normalizedPattern;
-      });
-    },
-    [accept],
+    (f: File) => fileMatchesAccept(f, accept),
+    [accept]
   );
 
   const addLocal = useCallback(
@@ -106,71 +81,92 @@ export function usePromptInputFileState({
             onError?.({
               code: "max_file_size",
               message:
-                error instanceof Error ? error.message : "Could not process the selected files.",
+                error instanceof Error
+                  ? error.message
+                  : "Could not process the selected files.",
             });
+
             return;
           }
         }
 
         const accepted = incoming.filter((f) => matchesAccept(f));
+
         if (incoming.length && accepted.length === 0) {
           onError?.({
             code: "accept",
             message: "No files match the accepted types.",
           });
+
           return;
         }
+
         const withinSize = (f: File) =>
           maxFileSize ? f.size <= maxFileSize : true;
+
         const sized = accepted.filter(withinSize);
+
         if (accepted.length > 0 && sized.length === 0) {
           onError?.({
             code: "max_file_size",
             message: "All files exceed the maximum size.",
           });
+
           return;
         }
 
+        const remainingCapacity =
+          maxFiles === undefined
+            ? undefined
+            : Math.max(0, maxFiles - filesRef.current.length);
+
+        const capped =
+          remainingCapacity === undefined
+            ? sized
+            : sized.slice(0, remainingCapacity);
+
+        if (
+          remainingCapacity !== undefined &&
+          sized.length > remainingCapacity
+        ) {
+          onError?.({
+            code: "max_files",
+            message: "Too many files. Some were not added.",
+          });
+        }
+
         setItems((prev) => {
-          const capacity =
-            typeof maxFiles === "number"
-              ? Math.max(0, maxFiles - prev.length)
-              : undefined;
-          const capped =
-            typeof capacity === "number" ? sized.slice(0, capacity) : sized;
-          if (typeof capacity === "number" && sized.length > capacity) {
-            onError?.({
-              code: "max_files",
-              message: "Too many files. Some were not added.",
-            });
-          }
           const next: (FileUIPart & { id: string })[] = [];
+
           for (const file of capped) {
             next.push({
               filename: file.name,
-              id: nanoid(),
+              id: createClientId(),
               mediaType: file.type,
               type: "file",
               url: URL.createObjectURL(file),
             });
           }
+
           return [...prev, ...next];
         });
       })();
     },
-    [matchesAccept, maxFiles, maxFileSize, onError, prepareFiles],
+    [matchesAccept, maxFiles, maxFileSize, onError, prepareFiles]
   );
 
   const removeLocal = useCallback(
     (id: string) =>
       setItems((prev) => {
         const found = prev.find((file) => file.id === id);
+
         if (found?.url) {
           URL.revokeObjectURL(found.url);
         }
+
         return prev.filter((file) => file.id !== id);
       }),
-    [],
+    []
   );
 
   const addWithProviderValidation = useCallback(
@@ -185,39 +181,51 @@ export function usePromptInputFileState({
             onError?.({
               code: "max_file_size",
               message:
-                error instanceof Error ? error.message : "Could not process the selected files.",
+                error instanceof Error
+                  ? error.message
+                  : "Could not process the selected files.",
             });
+
             return;
           }
         }
 
         const accepted = incoming.filter((f) => matchesAccept(f));
+
         if (incoming.length && accepted.length === 0) {
           onError?.({
             code: "accept",
             message: "No files match the accepted types.",
           });
+
           return;
         }
+
         const withinSize = (f: File) =>
           maxFileSize ? f.size <= maxFileSize : true;
+
         const sized = accepted.filter(withinSize);
+
         if (accepted.length > 0 && sized.length === 0) {
           onError?.({
             code: "max_file_size",
             message: "All files exceed the maximum size.",
           });
+
           return;
         }
 
         const currentCount = files.length;
+
         const capacity =
-          typeof maxFiles === "number"
-            ? Math.max(0, maxFiles - currentCount)
-            : undefined;
+          maxFiles === undefined
+            ? undefined
+            : Math.max(0, maxFiles - currentCount);
+
         const capped =
-          typeof capacity === "number" ? sized.slice(0, capacity) : sized;
-        if (typeof capacity === "number" && sized.length > capacity) {
+          capacity === undefined ? sized : sized.slice(0, capacity);
+
+        if (capacity !== undefined && sized.length > capacity) {
           onError?.({
             code: "max_files",
             message: "Too many files. Some were not added.",
@@ -229,7 +237,15 @@ export function usePromptInputFileState({
         }
       })();
     },
-    [matchesAccept, maxFileSize, maxFiles, onError, prepareFiles, files.length, controller],
+    [
+      matchesAccept,
+      maxFileSize,
+      maxFiles,
+      onError,
+      prepareFiles,
+      files.length,
+      controller,
+    ]
   );
 
   const clearAttachments = useCallback(
@@ -242,13 +258,15 @@ export function usePromptInputFileState({
                 URL.revokeObjectURL(file.url);
               }
             }
+
             return [];
           }),
-    [usingProvider, controller],
+    [usingProvider, controller]
   );
 
   const add = usingProvider ? addWithProviderValidation : addLocal;
   const remove = usingProvider ? controller.attachments.remove : removeLocal;
+
   const openFileDialog = usingProvider
     ? controller.attachments.openFileDialog
     : openFileDialogLocal;
@@ -261,6 +279,7 @@ export function usePromptInputFileState({
     if (!usingProvider) {
       return;
     }
+
     controller.__registerFileInput(inputRef, () => inputRef.current?.click());
   }, [usingProvider, controller]);
 
@@ -272,9 +291,11 @@ export function usePromptInputFileState({
 
   useEffect(() => {
     const form = formRef.current;
+
     if (!form) {
       return;
     }
+
     if (globalDrop) {
       return;
     }
@@ -284,16 +305,20 @@ export function usePromptInputFileState({
         e.preventDefault();
       }
     };
+
     const onDrop = (e: DragEvent) => {
       if (e.dataTransfer?.types?.includes("Files")) {
         e.preventDefault();
       }
+
       if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
         add(e.dataTransfer.files);
       }
     };
+
     form.addEventListener("dragover", onDragOver);
     form.addEventListener("drop", onDrop);
+
     return () => {
       form.removeEventListener("dragover", onDragOver);
       form.removeEventListener("drop", onDrop);
@@ -310,16 +335,20 @@ export function usePromptInputFileState({
         e.preventDefault();
       }
     };
+
     const onDrop = (e: DragEvent) => {
       if (e.dataTransfer?.types?.includes("Files")) {
         e.preventDefault();
       }
+
       if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
         add(e.dataTransfer.files);
       }
     };
+
     document.addEventListener("dragover", onDragOver);
     document.addEventListener("drop", onDrop);
+
     return () => {
       document.removeEventListener("dragover", onDragOver);
       document.removeEventListener("drop", onDrop);
@@ -336,7 +365,7 @@ export function usePromptInputFileState({
         }
       }
     },
-    [usingProvider],
+    [usingProvider]
   );
 
   const handleChange: ChangeEventHandler<HTMLInputElement> = useCallback(
@@ -344,9 +373,10 @@ export function usePromptInputFileState({
       if (event.currentTarget.files) {
         add(event.currentTarget.files);
       }
+
       event.currentTarget.value = "";
     },
-    [add],
+    [add]
   );
 
   const attachmentsCtx = useMemo<AttachmentsContext>(
@@ -358,21 +388,21 @@ export function usePromptInputFileState({
       openFileDialog,
       remove,
     }),
-    [files, add, remove, clearAttachments, openFileDialog],
+    [files, add, remove, clearAttachments, openFileDialog]
   );
 
   return {
-    usingProvider,
+    add,
+    attachmentsCtx,
+    clear,
+    clearAttachments,
     controller,
     files,
-    inputRef,
     formRef,
-    add,
-    remove,
-    clearAttachments,
-    clear,
-    openFileDialog,
     handleChange,
-    attachmentsCtx,
+    inputRef,
+    openFileDialog,
+    remove,
+    usingProvider,
   };
 }

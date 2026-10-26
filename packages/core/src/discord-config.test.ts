@@ -1,26 +1,28 @@
-import { mkdir, writeFile, mkdtemp, rm } from "node:fs/promises";
-import * as os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { asTestFetch } from "./channel-test-helpers";
 import {
   buildDiscordInviteUrl,
-  generateHandshakeCode,
   isDiscordUserAuthorized,
   loadDiscordConfigFile,
   loadDiscordSettingsPublic,
   maskBotToken,
-  normalizeHandshakeInput,
   parseAllowedUserIds,
+  regenerateDiscordHandshake,
   resolveDiscordApplicationId,
   resolveDiscordConfigFromSources,
   saveDiscordConfig,
   verifyAndPairDiscordUser,
 } from "./discord-config";
+import {
+  describeSharedChannelConfigTests,
+  withTempHomedir,
+  writeChannelIniConfig,
+} from "./testing/channel-config-fixtures";
 
 describe("buildDiscordInviteUrl", () => {
   test("builds an oauth invite link with bot scopes and permissions", () => {
     expect(buildDiscordInviteUrl("1525937133096013954")).toBe(
-      "https://discord.com/oauth2/authorize?client_id=1525937133096013954&permissions=68608&scope=bot+applications.commands",
+      "https://discord.com/oauth2/authorize?client_id=1525937133096013954&permissions=101376&scope=bot+applications.commands"
     );
   });
 });
@@ -33,64 +35,127 @@ describe("resolveDiscordApplicationId", () => {
   });
 
   test("returns the application id from Discord", async () => {
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ id: "1525937133096013954" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      })) as typeof fetch;
+    globalThis.fetch = asTestFetch(
+      async () =>
+        new Response(JSON.stringify({ id: "1525937133096013954" }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        })
+    );
 
-    await expect(resolveDiscordApplicationId("test-token")).resolves.toBe("1525937133096013954");
-    await expect(resolveDiscordApplicationId("test-token")).resolves.toBe("1525937133096013954");
+    await expect(resolveDiscordApplicationId("test-token")).resolves.toBe(
+      "1525937133096013954"
+    );
+    await expect(resolveDiscordApplicationId("test-token")).resolves.toBe(
+      "1525937133096013954"
+    );
   });
 
   test("returns null when Discord rejects the token", async () => {
-    globalThis.fetch = (async () => new Response(null, { status: 401 })) as typeof fetch;
+    globalThis.fetch = asTestFetch(
+      async () => new Response(null, { status: 401 })
+    );
 
     await expect(resolveDiscordApplicationId("bad-token")).resolves.toBeNull();
+  });
+
+  test("returns null for invalid payloads and request failures", async () => {
+    globalThis.fetch = asTestFetch(
+      async () =>
+        new Response(JSON.stringify({ id: "not-a-snowflake" }), {
+          status: 200,
+        })
+    );
+
+    await expect(
+      resolveDiscordApplicationId("invalid-id-token")
+    ).resolves.toBeNull();
+
+    globalThis.fetch = asTestFetch(async () => {
+      throw new Error("network failure");
+    });
+
+    await expect(
+      resolveDiscordApplicationId("network-failure-token")
+    ).resolves.toBeNull();
+  });
+
+  test("force refresh revalidates and evicts a cached application id", async () => {
+    let requestCount = 0;
+    globalThis.fetch = asTestFetch(async () => {
+      requestCount += 1;
+
+      return new Response(JSON.stringify({ id: "1525937133096013954" }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    });
+
+    await expect(resolveDiscordApplicationId("cached-token")).resolves.toBe(
+      "1525937133096013954"
+    );
+
+    globalThis.fetch = asTestFetch(async () => {
+      requestCount += 1;
+
+      return new Response(null, { status: 401 });
+    });
+
+    await expect(
+      resolveDiscordApplicationId("cached-token", { forceRefresh: true })
+    ).resolves.toBeNull();
+
+    globalThis.fetch = asTestFetch(async () => {
+      requestCount += 1;
+
+      return new Response(JSON.stringify({ id: "1525937133096013955" }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    });
+
+    await expect(resolveDiscordApplicationId("cached-token")).resolves.toBe(
+      "1525937133096013955"
+    );
+    expect(requestCount).toBe(3);
   });
 });
 
 describe("loadDiscordSettingsPublic", () => {
-  let tempHome = "";
-  let homedirSpy: ReturnType<typeof spyOn<typeof os, "homedir">> | null = null;
   const originalFetch = globalThis.fetch;
 
-  afterEach(async () => {
+  afterEach(() => {
     globalThis.fetch = originalFetch;
-    homedirSpy?.mockRestore();
-    homedirSpy = null;
-
-    if (tempHome) {
-      await rm(tempHome, { recursive: true, force: true });
-      tempHome = "";
-    }
   });
 
   test("includes an invite URL when Discord returns the application id", async () => {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-discord-home-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-    await writeDiscordConfig(tempHome, { botToken: "discord-bot-token" });
+    await withTempHomedir("nakama-core-discord-home-", async (tempHome) => {
+      await writeChannelIniConfig(tempHome, "discord", {
+        botToken: "discord-bot-token",
+      });
 
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ id: "1525937133096013954" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      })) as typeof fetch;
+      globalThis.fetch = asTestFetch(
+        async () =>
+          new Response(JSON.stringify({ id: "1525937133096013954" }), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          })
+      );
 
-    const settings = await loadDiscordSettingsPublic();
+      const settings = await loadDiscordSettingsPublic();
 
-    expect(settings.inviteUrl).toBe(
-      "https://discord.com/oauth2/authorize?client_id=1525937133096013954&permissions=68608&scope=bot+applications.commands",
-    );
+      expect(settings.inviteUrl).toBe(
+        "https://discord.com/oauth2/authorize?client_id=1525937133096013954&permissions=101376&scope=bot+applications.commands"
+      );
+    });
   });
 });
 
 describe("parseAllowedUserIds", () => {
   test("parses comma-separated snowflake ids", () => {
-    expect(parseAllowedUserIds("123456789012345678, 987654321098765432")).toEqual([
-      "123456789012345678",
-      "987654321098765432",
-    ]);
+    expect(
+      parseAllowedUserIds("123456789012345678, 987654321098765432")
+    ).toEqual(["123456789012345678", "987654321098765432"]);
   });
 
   test("rejects invalid ids", () => {
@@ -99,220 +164,70 @@ describe("parseAllowedUserIds", () => {
   });
 });
 
-describe("maskBotToken", () => {
-  test("masks long tokens", () => {
-    expect(maskBotToken("12345678901234567890")).toBe("••••••••••••7890");
-  });
-
-  test("returns null for empty", () => {
-    expect(maskBotToken("")).toBeNull();
-  });
-});
-
-describe("normalizeHandshakeInput", () => {
-  test("strips spaces and uppercases", () => {
-    expect(normalizeHandshakeInput(" ab cd12 ")).toBe("ABCD12");
-  });
-});
-
-describe("isDiscordUserAuthorized", () => {
-  test("accepts paired or allowlisted users", () => {
-    expect(
-      isDiscordUserAuthorized("1001", { pairedUserIds: ["1001"], allowedUserIds: [] }),
-    ).toBe(true);
-    expect(
-      isDiscordUserAuthorized("1002", { pairedUserIds: [], allowedUserIds: ["1002"] }),
-    ).toBe(true);
-    expect(
-      isDiscordUserAuthorized("1003", { pairedUserIds: [], allowedUserIds: [] }),
-    ).toBe(false);
-  });
-});
-
-describe("generateHandshakeCode", () => {
-  test("returns 8 uppercase hex chars", () => {
-    expect(generateHandshakeCode()).toMatch(/^[0-9A-F]{8}$/);
-  });
-});
-
-describe("verifyAndPairDiscordUser", () => {
-  let tempHome = "";
-  let homedirSpy: ReturnType<typeof spyOn<typeof os, "homedir">> | null = null;
-
-  afterEach(async () => {
-    homedirSpy?.mockRestore();
-    homedirSpy = null;
-
-    if (tempHome) {
-      await rm(tempHome, { recursive: true, force: true });
-      tempHome = "";
-    }
-  });
-
-  async function useTempDiscordHome(
-    config: Parameters<typeof writeDiscordConfig>[1],
-    run: () => Promise<void>,
-  ): Promise<void> {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-discord-home-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-    await writeDiscordConfig(tempHome, config);
-    await run();
-  }
-
-  test("pairs a user and clears the handshake code", async () => {
-    await useTempDiscordHome(
-      {
-        botToken: "discord-bot-token",
-        handshakeCode: "AABBCCDD",
-      },
-      async () => {
-        const result = await verifyAndPairDiscordUser("aa bb cc dd", "900100000000000001");
-
-        expect(result).toEqual({
-          ok: true,
-          message: "Linked successfully. You can chat with Nakama now.",
-        });
-
-        const config = await loadDiscordConfigFile();
-        expect(config?.pairedUserIds).toEqual(["900100000000000001"]);
-        expect(config?.handshakeCode).toBeNull();
-      },
-    );
-  });
-
-  test("rejects invalid pairing codes", async () => {
-    await useTempDiscordHome(
-      {
-        botToken: "discord-bot-token",
-        handshakeCode: "AABBCCDD",
-      },
-      async () => {
-        const result = await verifyAndPairDiscordUser("DEADBEEF", "900100000000000001");
-
-        expect(result).toEqual({
-          ok: false,
-          message: "Invalid pairing code. Copy it from Integrations → Discord and try again.",
-        });
-
-        const config = await loadDiscordConfigFile();
-        expect(config?.pairedUserIds).toEqual([]);
-        expect(config?.handshakeCode).toBe("AABBCCDD");
-      },
-    );
-  });
-
-  test("rejects pairing when discord is not configured", async () => {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-discord-home-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-
-    const result = await verifyAndPairDiscordUser("AABBCCDD", "900100000000000001");
-
-    expect(result).toEqual({
-      ok: false,
-      message: "Discord is not configured on the server yet.",
-    });
-  });
-});
-
-describe("saveDiscordConfig", () => {
-  let tempHome = "";
-  let homedirSpy: ReturnType<typeof spyOn<typeof os, "homedir">> | null = null;
-
-  afterEach(async () => {
-    homedirSpy?.mockRestore();
-    homedirSpy = null;
-
-    if (tempHome) {
-      await rm(tempHome, { recursive: true, force: true });
-      tempHome = "";
-    }
-  });
-
-  async function useTempDiscordHome(run: () => Promise<void>): Promise<void> {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-discord-home-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-    await run();
-  }
-
-  test("generates a handshake code for a new unrestricted config", async () => {
-    await useTempDiscordHome(async () => {
-      const result = await saveDiscordConfig({ botToken: "discord-bot-token" });
-
-      expect(result.handshakeCode).toMatch(/^[0-9A-F]{8}$/);
-
-      const saved = await loadDiscordConfigFile();
-      expect(saved?.handshakeCode).toBe(result.handshakeCode);
-      expect(saved?.allowedUserIds).toEqual([]);
-    });
-  });
-});
-
-describe("resolveDiscordConfigFromSources", () => {
-  test("returns null when no bot token is available", () => {
-    expect(
-      resolveDiscordConfigFromSources({
-        env: {},
-        file: null,
-      }),
-    ).toBeNull();
-  });
-
-  test("prefers env bot token and allowlist over file config", () => {
-    const resolved = resolveDiscordConfigFromSources({
-      env: {
-        DISCORD_BOT_TOKEN: "env-token",
-        DISCORD_ALLOWED_USER_IDS: "123456789012345678, 987654321098765432",
-      },
-      file: {
-        botToken: "file-token",
-        profileId: "profile_from_file",
-        handshakeCode: "ABCD1234",
-        pairedUserIds: ["111111111111111111"],
-        allowedUserIds: ["999999999999999999"],
-      },
-    });
-
-    expect(resolved).toEqual({
-      botToken: "env-token",
-      profileId: "profile_from_file",
-      handshakeCode: "ABCD1234",
-      pairedUserIds: ["111111111111111111"],
-      allowedUserIds: ["123456789012345678", "987654321098765432"],
-    });
-  });
-});
-
-async function writeDiscordConfig(
-  homeDir: string,
-  config: {
-    botToken: string;
-    profileId?: string;
-    handshakeCode?: string | null;
-    pairedUserIds?: string[];
-    allowedUserIds?: string[];
+describeSharedChannelConfigTests({
+  allowlistInput: "123456789012345678, 987654321098765432",
+  allowlistParsed: ["123456789012345678", "987654321098765432"],
+  authorize: {
+    allowlisted: "1002",
+    paired: "1001",
+    unauthorized: "1003",
   },
-): Promise<void> {
-  const dir = path.join(homeDir, ".nakama", "discord");
-  await mkdir(dir, { recursive: true });
+  botToken: "discord-bot-token",
+  env: {
+    allowlistKey: "DISCORD_ALLOWED_USER_IDS",
+    allowlistParsed: ["123456789012345678", "987654321098765432"],
+    allowlistValue: "123456789012345678, 987654321098765432",
+    botTokenKey: "DISCORD_BOT_TOKEN",
+  },
+  isUserAuthorized: isDiscordUserAuthorized,
+  loadConfigFile: loadDiscordConfigFile,
+  mask: maskBotToken,
+  name: "discord",
+  regenerate: () => regenerateDiscordHandshake(null),
+  resolveConfigFromSources: resolveDiscordConfigFromSources,
+  resolveFile: {
+    allowedUserIds: ["999999999999999999"],
+    pairedUserIds: ["111111111111111111"],
+  },
+  sampleId: "900100000000000001",
+  saveConfig: saveDiscordConfig,
+  verifyAndPair: verifyAndPairDiscordUser,
+});
 
-  const lines = [
-    "# Nakama Discord bridge",
-    `bot_token=${config.botToken}`,
-    `profile_id=${config.profileId ?? "default"}`,
-  ];
+describe("per-owner Discord config", () => {
+  const originalFetch = globalThis.fetch;
 
-  if (config.handshakeCode) {
-    lines.push(`handshake_code=${config.handshakeCode}`);
-  }
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
 
-  if (config.pairedUserIds?.length) {
-    lines.push(`paired_user_ids=${config.pairedUserIds.join(",")}`);
-  }
+  test("claims one application ID across concurrent owners", async () => {
+    await withTempHomedir("nakama-discord-claim-race-", async () => {
+      globalThis.fetch = asTestFetch(
+        async () =>
+          new Response(JSON.stringify({ id: "1525937133096013954" }), {
+            headers: { "Content-Type": "application/json" },
+            status: 200,
+          })
+      );
 
-  if (config.allowedUserIds?.length) {
-    lines.push(`allowed_user_ids=${config.allowedUserIds.join(",")}`);
-  }
+      const results = await Promise.allSettled([
+        saveDiscordConfig(
+          { botToken: "discord-token-a" },
+          { orgId: "org_a", profileId: "a" }
+        ),
+        saveDiscordConfig(
+          { botToken: "discord-token-b" },
+          { orgId: "org_b", profileId: "b" }
+        ),
+      ]);
 
-  lines.push("");
-  await writeFile(path.join(dir, "config.ini"), lines.join("\n"), "utf8");
-}
+      expect(
+        results.filter((result) => result.status === "fulfilled")
+      ).toHaveLength(1);
+      expect(
+        results.filter((result) => result.status === "rejected")
+      ).toHaveLength(1);
+    });
+  });
+});

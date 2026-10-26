@@ -1,25 +1,61 @@
 import { hasActiveAgentTodos } from "@nakama/core/agent-todo";
 import type { AgentTodo } from "@nakama/core/contract";
-import {
-  CheckCircle2Icon,
-  ChevronRightIcon,
-  CircleIcon,
-  LoaderCircleIcon,
-  XCircleIcon,
-} from "lucide-react";
+import { Matrix } from "@nakama/ui/matrix";
+import { type Frame, snake3x2 } from "@nakama/ui/matrix-frames";
+import { cn } from "@nakama/ui/utils";
+import { ArrowDown01Icon, ListViewIcon } from "hugeicons-react";
 import { useState } from "react";
-import { cn } from "@/lib/utils";
+import {
+  type ComposerStackEdge,
+  composerShelfPanelClass,
+} from "@/lib/chat-stream";
 
 interface AgentTodoPanelProps {
-  todos: AgentTodo[];
   embedded?: boolean;
   stack?: boolean;
+  stackEdge?: ComposerStackEdge;
+  todos: AgentTodo[];
 }
+
+const TODO_MATRIX_ROWS = 3;
+
+const TODO_MATRIX_COLS = 2;
+
+const TODO_MATRIX_SIZE = 3;
+
+const TODO_MATRIX_GAP = 1;
+
+const pendingPattern: Frame = [
+  [0, 0],
+  [0, 0],
+  [0, 0],
+];
+
+const completedPattern: Frame = [
+  [1, 1],
+  [1, 1],
+  [1, 1],
+];
+
+const cancelledPattern: Frame = [
+  [0, 0],
+  [0, 0],
+  [0, 0],
+];
+
+const todoMatrixStaticProps = {
+  className: "inline-flex h-4 w-auto shrink-0 items-center justify-center",
+  cols: TODO_MATRIX_COLS,
+  gap: TODO_MATRIX_GAP,
+  rows: TODO_MATRIX_ROWS,
+  size: TODO_MATRIX_SIZE,
+};
 
 export function AgentTodoPanel({
   todos,
   embedded = false,
   stack = false,
+  stackEdge = "start",
 }: AgentTodoPanelProps) {
   const [expanded, setExpanded] = useState(true);
 
@@ -27,40 +63,76 @@ export function AgentTodoPanel({
     return null;
   }
 
+  const completedCount = todos.filter(
+    (todo) => todo.status === "completed"
+  ).length;
+
+  const runningTodo =
+    todos.find((todo) => todo.status === "in_progress") ??
+    todos.find((todo) => todo.status === "pending");
+
+  const headerLabel = expanded
+    ? `Tasks ${completedCount}/${todos.length}`
+    : (runningTodo?.content ?? `Tasks ${completedCount}/${todos.length}`);
+
+  const list = (
+    <ul className={cn("space-y-1.5", stack ? "pr-3 pb-2.5 pl-7" : "mt-1")}>
+      {todos.map((todo, index) => (
+        <TodoRow index={index} key={todo.id} todo={todo} />
+      ))}
+    </ul>
+  );
+
+  const header = (
+    <button
+      aria-expanded={expanded}
+      className={cn(
+        "flex w-full items-center gap-1.5 text-left text-muted-foreground text-xs transition-colors hover:text-foreground",
+        stack ? "px-3 py-1.5" : "mb-0.5"
+      )}
+      onClick={() => setExpanded((current) => !current)}
+      type="button"
+    >
+      <ArrowDown01Icon
+        aria-hidden="true"
+        className={cn(
+          "size-3.5 shrink-0 transition-transform duration-200",
+          !expanded && "-rotate-90"
+        )}
+      />
+      {!expanded && runningTodo?.status === "in_progress" ? (
+        <TodoStatusIcon status="in_progress" />
+      ) : (
+        <ListViewIcon aria-hidden="true" className="size-3.5 shrink-0" />
+      )}
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate transition-opacity duration-200",
+          expanded && "tabular-nums"
+        )}
+      >
+        {headerLabel}
+      </span>
+    </button>
+  );
+
+  const expandableList = (
+    <div className="todo-panel-expand" data-expanded={expanded}>
+      <div className="todo-panel-expand-inner overflow-hidden pb-1.5">
+        {list}
+      </div>
+    </div>
+  );
+
   if (stack) {
     return (
       <div className="px-3">
         <aside
-          className="relative z-0 w-full shrink-0 overflow-hidden rounded-t-xl rounded-b-none border border-b-0 border-border bg-card shadow-xs"
           aria-label="Agent task plan"
+          className={composerShelfPanelClass(stackEdge)}
         >
-          <div className="px-3 py-2">
-            <button
-              type="button"
-              className={cn(
-                "flex w-full items-center gap-2 text-left text-xs text-muted-foreground transition-colors hover:text-foreground",
-                !expanded && "pb-1.5"
-              )}
-              onClick={() => setExpanded((current) => !current)}
-              aria-expanded={expanded}
-            >
-              <ChevronRightIcon
-                className={cn(
-                  "size-4 shrink-0 transition-transform",
-                  expanded && "rotate-90",
-                )}
-                aria-hidden="true"
-              />
-              <span>TODOS</span>
-            </button>
-          </div>
-          {expanded ? (
-            <ul className="space-y-2 border-t border-border/60 px-3 pb-3 pt-2.5">
-              {todos.map((todo) => (
-                <TodoRow key={todo.id} todo={todo} />
-              ))}
-            </ul>
-          ) : null}
+          {header}
+          {expandableList}
         </aside>
       </div>
     );
@@ -68,34 +140,34 @@ export function AgentTodoPanel({
 
   return (
     <aside
+      aria-label="Agent task plan"
       className={cn(
         embedded
-          ? "border-b border-border/80 px-1 pb-3 pt-0.5"
-          : "mb-3 rounded-xl border border-border/80 bg-card px-4 py-3 shadow-sm",
+          ? "border-border/80 border-b px-1 pt-0.5 pb-3"
+          : "mb-3 rounded-xl border border-border/80 bg-card px-4 py-3 shadow-sm"
       )}
-      aria-label="Agent task plan"
     >
-      <h3 className="type-label mb-1 text-muted-foreground">Task plan</h3>
-      <ul className="space-y-2">
-        {todos.map((todo) => (
-          <TodoRow key={todo.id} todo={todo} />
-        ))}
-      </ul>
+      {header}
+      {expandableList}
     </aside>
   );
 }
 
-function TodoRow({ todo }: { todo: AgentTodo }) {
+function TodoRow({ todo, index }: { todo: AgentTodo; index: number }) {
   return (
-    <li className="flex items-start gap-2.5 text-xs">
-      <TodoStatusIcon status={todo.status} />
+    <li
+      className="todo-item-enter flex min-w-0 items-center gap-2 pl-1 text-xs leading-none"
+      style={{ animationDelay: `${index * 100}ms` }}
+    >
+      <TodoStatusIcon key={todo.status} status={todo.status} />
       <span
         className={cn(
+          "min-w-0 truncate transition-colors duration-300",
           todo.status === "completed" || todo.status === "cancelled"
-            ? "text-muted-foreground line-through"
+            ? "text-muted-foreground"
             : todo.status === "in_progress"
-              ? "todo-shimmer-text"
-              : "text-foreground",
+              ? "todo-shimmer-text text-foreground"
+              : "text-muted-foreground"
         )}
       >
         {todo.content}
@@ -108,30 +180,48 @@ function TodoStatusIcon({ status }: { status: AgentTodo["status"] }) {
   switch (status) {
     case "in_progress":
       return (
-        <LoaderCircleIcon
-          className="mt-0.5 size-4 shrink-0 animate-spin text-primary"
-          aria-label="In progress"
+        <Matrix
+          {...todoMatrixStaticProps}
+          ariaLabel="In progress"
+          fps={4}
+          frames={snake3x2}
         />
       );
     case "completed":
       return (
-        <CheckCircle2Icon
-          className="mt-0.5 size-4 shrink-0 text-emerald-600"
-          aria-label="Completed"
+        <Matrix
+          {...todoMatrixStaticProps}
+          ariaLabel="Completed"
+          palette={{
+            off: "hsl(142 76% 10%)",
+            on: "hsl(142 76% 36%)",
+          }}
+          pattern={completedPattern}
         />
       );
     case "cancelled":
       return (
-        <XCircleIcon
-          className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-          aria-label="Cancelled"
+        <Matrix
+          {...todoMatrixStaticProps}
+          ariaLabel="Cancelled"
+          palette={{
+            off: "var(--muted-foreground)",
+            on: "var(--muted-foreground)",
+          }}
+          pattern={cancelledPattern}
         />
       );
     default:
       return (
-        <CircleIcon
-          className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-          aria-label="Pending"
+        <Matrix
+          {...todoMatrixStaticProps}
+          ariaLabel="Pending"
+          brightness={0.55}
+          palette={{
+            off: "var(--muted-foreground)",
+            on: "var(--muted-foreground)",
+          }}
+          pattern={pendingPattern}
         />
       );
   }

@@ -1,37 +1,35 @@
-import {
-  BlocksIcon,
-  CircleGaugeIcon,
-  DatabaseBackupIcon,
-  PlugIcon,
-} from "lucide-react";
+import { PAGE_PATHS } from "@/lib/navigation";
 
-export const SYSTEM_TABS = [
-  { id: "status" as const, label: "Status", icon: CircleGaugeIcon },
-  { id: "tools" as const, label: "Tools", icon: BlocksIcon },
-  { id: "mcp" as const, label: "MCP", icon: PlugIcon },
-  { id: "data" as const, label: "Data", icon: DatabaseBackupIcon },
-] as const;
+export function legacySystemDestination(
+  searchParams: URLSearchParams,
+  isPlatformAdmin: boolean
+): string {
+  const next = new URLSearchParams(searchParams);
+  const tab = next.get("tab");
+  next.delete("tab");
+  let path: string = PAGE_PATHS.tools;
 
-export type SystemTabId = (typeof SYSTEM_TABS)[number]["id"];
-
-export function resolveSystemTab(value: string | null, isPlatformAdmin: boolean): SystemTabId {
-  if (value === "status") {
-    return "status";
+  if (tab === "mcp" && isPlatformAdmin) {
+    path = PAGE_PATHS.mcp;
   }
 
-  if (!isPlatformAdmin) {
-    return "tools";
+  if (tab === "usage") {
+    path = PAGE_PATHS.usage;
   }
 
-  if (value === "mcp" || value === "data") {
-    return value;
+  if (tab === "plugins") {
+    path = PAGE_PATHS["plugin-management"];
   }
 
-  return "tools";
-}
+  if (tab === "status") {
+    path = PAGE_PATHS.workers;
+  }
 
-export function visibleSystemTabs(isPlatformAdmin: boolean) {
-  return isPlatformAdmin
-    ? SYSTEM_TABS
-    : SYSTEM_TABS.filter((item) => item.id === "status" || item.id === "tools");
+  if (tab === "organization") {
+    path = PAGE_PATHS.organization;
+  }
+
+  const query = next.toString();
+
+  return query ? `${path}?${query}` : path;
 }

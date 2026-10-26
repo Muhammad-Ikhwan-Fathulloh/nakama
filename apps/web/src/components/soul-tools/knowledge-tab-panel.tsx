@@ -1,27 +1,31 @@
-import type { KnowledgeBaseDocument, KnowledgeBaseSource } from "@nakama/core/contract";
-import {
-  ExternalLinkIcon,
-  FileTextIcon,
-  LinkIcon,
-  Trash2Icon,
-  UploadIcon,
-} from "lucide-react";
+import type {
+  ImportKnowledgeBaseZipResponse,
+  KnowledgeBaseDocument,
+} from "@nakama/core/contract";
+import { MAX_KNOWLEDGE_DOCUMENT_BYTES } from "@nakama/core/message-content";
+import { Button } from "@nakama/ui/button";
+import { Spinner } from "@nakama/ui/spinner";
+import { cn } from "@nakama/ui/utils";
+import { Delete02Icon, File01Icon, Upload04Icon } from "hugeicons-react";
 import type { RefObject } from "react";
-import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
-import {
-  formatBytes,
-  KNOWLEDGE_BASE_ACCEPT,
-} from "@/lib/knowledge-base-files";
-import { cn } from "@/lib/utils";
+import { KnowledgeDocumentPreview } from "@/components/soul-tools/knowledge-document-preview";
+import { formatBytes, KNOWLEDGE_BASE_ACCEPT } from "@/lib/knowledge-base-files";
+
+/** Extend icon-sm (28px) to a 40px hit target without overlapping neighbors at gap-3. */
+const iconActionHitArea =
+  "relative after:absolute after:top-1/2 after:left-1/2 after:size-10 after:-translate-x-1/2 after:-translate-y-1/2";
+
+const uploadedAtFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
 
 function formatUploadedAt(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
+  try {
+    return uploadedAtFormatter.format(new Date(value));
+  } catch {
     return value;
   }
-
-  return date.toLocaleString();
 }
 
 function formatDocumentCount(count: number): string {
@@ -32,11 +36,45 @@ function formatDocumentCount(count: number): string {
   return count === 1 ? "1 document" : `${count} documents`;
 }
 
+export function KnowledgeZipImportResult({
+  result,
+}: {
+  result: ImportKnowledgeBaseZipResponse;
+}) {
+  const problemEntries = result.entries.filter(
+    (entry) => entry.outcome !== "created" || entry.status === "failed"
+  );
+
+  return (
+    <div
+      className="mb-4 rounded-md border border-border px-4 py-3 text-sm"
+      role="status"
+    >
+      <p className="font-medium">
+        ZIP import: {result.totals.created} added, {result.totals.duplicate}{" "}
+        duplicates, {result.totals.unsupported} unsupported,{" "}
+        {result.totals.error} errors
+        {result.totals.failedExtraction > 0
+          ? `, ${result.totals.failedExtraction} unreadable`
+          : ""}
+      </p>
+      {problemEntries.length > 0 ? (
+        <ul className="mt-2 list-inside list-disc text-muted-foreground">
+          {problemEntries.map((entry) => (
+            <li key={entry.filename}>
+              {entry.filename}:{" "}
+              {entry.outcome === "created" ? "unreadable" : entry.outcome}
+              {entry.match ? ` (${entry.match.replace("_", " ")})` : ""}
+              {entry.reason ? ` — ${entry.reason}` : ""}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 export function KnowledgeTabPanel({
-  embedded,
-  selectedProfileName,
-  knowledgeBaseDirectory,
-  sources,
   documents,
   readyCount,
   profileId,
@@ -46,10 +84,6 @@ export function KnowledgeTabPanel({
   onUpload,
   onDeleteDocument,
 }: {
-  embedded: boolean;
-  selectedProfileName?: string;
-  knowledgeBaseDirectory: string | null;
-  sources: KnowledgeBaseSource[];
   documents: KnowledgeBaseDocument[];
   readyCount: number;
   profileId: string | null;
@@ -60,144 +94,105 @@ export function KnowledgeTabPanel({
   onDeleteDocument: (document: KnowledgeBaseDocument) => void;
 }) {
   return (
-    <div className={embedded ? undefined : "min-w-0 p-4 sm:p-5"}>
-      <div className="mb-4 min-w-0">
-        {!embedded ? (
-          <h2 className="type-section-title">{selectedProfileName ?? "Profile"}</h2>
-        ) : null}
-        <p className={cn("type-body text-xs", !embedded && "mt-1")}>
-          Knowledge base · one library per profile
-        </p>
-        {knowledgeBaseDirectory ? (
-          <p
-            className="type-code mt-2 truncate text-muted-foreground"
-            title={knowledgeBaseDirectory}
-          >
-            {knowledgeBaseDirectory}
-          </p>
-        ) : null}
-      </div>
-
-      {sources.length > 0 ? (
-        <div className="mb-4 rounded-md border border-border">
-          <div className="border-b border-border px-4 py-3">
-            <p className="text-xs text-muted-foreground tabular-nums">
-              {sources.length === 1 ? "1 inherited source" : `${sources.length} inherited sources`}
-            </p>
-          </div>
-          <ul className="divide-y divide-border">
-            {sources.map((source) => (
-              <li
-                key={source.id}
-                className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
-              >
-                <div className="flex min-w-0 items-start gap-3">
-                  <LinkIcon
-                    className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-                    aria-hidden
-                  />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{source.title}</p>
-                    <p className="line-clamp-2 text-xs text-muted-foreground">
-                      {source.description}
-                    </p>
-                    <a
-                      href={source.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-1 inline-flex max-w-full items-center gap-1 text-xs text-primary hover:underline"
-                    >
-                      <span className="truncate">{source.url}</span>
-                      <ExternalLinkIcon className="size-3 shrink-0" aria-hidden />
-                    </a>
-                  </div>
-                </div>
-
-                <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                  inherited
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
+    <div className="space-y-4">
       <div className="rounded-md border border-border">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-          <p className="text-xs text-muted-foreground tabular-nums">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-border border-b px-4 py-3">
+          <p className="text-muted-foreground text-xs tabular-nums">
             {formatDocumentCount(documents.length)}
-            {readyCount !== documents.length ? ` · ${readyCount} ready` : ""}
-            {" · "}txt, md, csv, pdf · 5 MB max
+            {readyCount === documents.length ? "" : ` · ${readyCount} ready`}
+            {" · "}txt, md, csv, pdf, docx, zip ·{" "}
+            {MAX_KNOWLEDGE_DOCUMENT_BYTES / (1024 * 1024)} MB max
           </p>
 
           <div>
             <input
+              accept={KNOWLEDGE_BASE_ACCEPT}
+              className="hidden"
+              multiple
+              onChange={(event) => onUpload(event.target.files)}
               ref={fileInputRef}
               type="file"
-              accept={KNOWLEDGE_BASE_ACCEPT}
-              multiple
-              className="hidden"
-              onChange={(event) => onUpload(event.target.files)}
             />
             <Button
-              type="button"
-              size="sm"
-              onClick={() => fileInputRef.current?.click()}
               disabled={!profileId || busy}
+              onClick={() => fileInputRef.current?.click()}
+              size="sm"
+              type="button"
             >
-              {uploadPending ? <Spinner className="size-4" /> : <UploadIcon className="size-4" />}
-              Upload
+              {uploadPending ? (
+                <Spinner className="size-3.5" />
+              ) : (
+                <Upload04Icon aria-hidden className="size-3.5" />
+              )}
+              Add document or ZIP
             </Button>
           </div>
         </div>
 
         {documents.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-muted-foreground">
+          <div className="px-4 py-10 text-center text-muted-foreground text-sm">
             No documents yet.
           </div>
         ) : (
           <ul className="divide-y divide-border">
             {documents.map((document) => (
               <li
+                className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 transition-colors duration-100 ease-out hover:bg-muted/40"
                 key={document.id}
-                className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
               >
                 <div className="flex min-w-0 items-start gap-3">
-                  <FileTextIcon
-                    className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                  <File01Icon
                     aria-hidden
+                    className="mt-0.5 size-4 shrink-0 text-muted-foreground"
                   />
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{document.filename}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {formatBytes(document.sizeBytes)} · {formatUploadedAt(document.uploadedAt)}
+                    <p className="truncate font-medium text-foreground text-sm">
+                      {document.filename}
+                    </p>
+                    <p className="text-pretty text-muted-foreground text-xs">
+                      {document.scope === "organization"
+                        ? "Shared organization document · "
+                        : "Profile document · "}
+                      <span className="tabular-nums">
+                        {formatBytes(document.sizeBytes)}
+                      </span>
+                      {" · "}
+                      {formatUploadedAt(document.uploadedAt)}
                     </p>
                     {document.status === "failed" && document.error ? (
-                      <p className="mt-1 text-xs text-destructive">{document.error}</p>
+                      <p className="mt-1 text-pretty text-destructive text-xs">
+                        {document.error}
+                      </p>
                     ) : null}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
                   <span
                     className={cn(
-                      "rounded-full px-2 py-0.5 text-xs font-medium",
+                      "rounded-full px-2 py-0.5 font-medium text-xs",
                       document.status === "ready"
                         ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                        : "bg-destructive/10 text-destructive",
+                        : "bg-destructive/10 text-destructive"
                     )}
                   >
                     {document.status}
                   </span>
+                  <KnowledgeDocumentPreview
+                    className={iconActionHitArea}
+                    document={document}
+                    profileId={profileId ?? ""}
+                  />
                   <Button
+                    aria-label={`Delete ${document.filename}`}
+                    className={iconActionHitArea}
+                    disabled={busy}
+                    onClick={() => onDeleteDocument(document)}
+                    size="icon-sm"
                     type="button"
                     variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Delete ${document.filename}`}
-                    onClick={() => onDeleteDocument(document)}
-                    disabled={busy}
                   >
-                    <Trash2Icon className="size-4" />
+                    <Delete02Icon aria-hidden className="size-4" />
                   </Button>
                 </div>
               </li>
@@ -206,5 +201,74 @@ export function KnowledgeTabPanel({
         )}
       </div>
     </div>
+  );
+}
+
+export function SharedKnowledgeDocuments({
+  availableDocuments,
+  busy,
+  documents,
+  onAttach,
+}: {
+  availableDocuments?: KnowledgeBaseDocument[];
+  busy: boolean;
+  documents: KnowledgeBaseDocument[];
+  onAttach: (documentId: string) => Promise<void>;
+}) {
+  const organizationDocuments = availableDocuments ?? [];
+
+  const attachedOrganizationDocumentIds = new Set(
+    documents
+      .filter((document) => document.scope === "organization")
+      .map((document) => document.id)
+  );
+
+  return (
+    <section className="mb-4 rounded-md border border-border">
+      <div className="border-border border-b px-4 py-3">
+        <h3 className="font-medium text-sm">Shared organization knowledge</h3>
+        <p className="mt-1 text-muted-foreground text-xs">
+          Attach an organization document to make it available to this profile.
+          Shared documents are managed by organization administrators.
+        </p>
+      </div>
+      {organizationDocuments.length === 0 ? (
+        <p className="px-4 py-3 text-muted-foreground text-sm">
+          No shared organization documents yet.
+        </p>
+      ) : (
+        <ul className="divide-y divide-border">
+          {organizationDocuments.map((document) => {
+            const attached = attachedOrganizationDocumentIds.has(document.id);
+
+            return (
+              <li
+                className="flex items-center justify-between gap-3 px-4 py-3"
+                key={document.id}
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-sm">
+                    {document.filename}
+                  </p>
+                  <p className="text-muted-foreground text-xs">
+                    {document.status} · {document.sizeBytes.toLocaleString()}{" "}
+                    bytes
+                  </p>
+                </div>
+                <Button
+                  disabled={busy || attached}
+                  onClick={() => void onAttach(document.id)}
+                  size="sm"
+                  type="button"
+                  variant={attached ? "outline" : "secondary"}
+                >
+                  {attached ? "Attached" : "Attach"}
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }

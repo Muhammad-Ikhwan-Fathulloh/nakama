@@ -1,27 +1,49 @@
-import type { EmailConfigFile } from "../email-config";
-import { resolveFromAddress, toMailboxConfig } from "../email-config";
+import { z } from "zod";
+import type { toMailboxConfig } from "../email-config";
+
+const MailAddressSchema = z.union([
+  z.string(),
+  z.object({ address: z.string().optional(), name: z.string().optional() }),
+]);
+
+export type MailAddressInput =
+  | string
+  | { address?: string; name?: string }
+  | null
+  | undefined;
 
 export const MAX_EMAIL_BODY_BYTES = 256 * 1024;
 
+export const MAX_EMAIL_MESSAGE_BYTES = 10 * 1024 * 1024;
+
+export interface MailAttachment {
+  disposition: "attachment" | "inline" | null;
+  filename: string;
+  id: string;
+  mediaType: string;
+  size: number;
+}
+
 export interface MailMessageSummary {
-  uid: number;
-  subject: string;
-  from: string;
   date: string;
   folder: string;
+  from: string;
+  subject: string;
+  uid: number;
 }
 
 export interface MailMessage extends MailMessageSummary {
-  text?: string;
+  attachments?: MailAttachment[];
   html?: string;
+  text?: string;
   truncated?: boolean;
 }
 
 export interface MailSendInput {
-  to: string;
+  html?: string;
   subject: string;
   text: string;
-  html?: string;
+  to: string;
 }
 
 export interface MailSendResult {
@@ -32,11 +54,16 @@ export interface MailReader {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   listMessages(folder: string, limit: number): Promise<MailMessageSummary[]>;
+  readAttachment(
+    folder: string,
+    uid: number,
+    attachmentId: string
+  ): Promise<{ metadata: MailAttachment; data: Buffer } | null>;
   readMessage(folder: string, uid: number): Promise<MailMessage | null>;
   searchMessages(
     folder: string,
     query: string,
-    limit: number,
+    limit: number
   ): Promise<MailMessageSummary[]>;
 }
 
@@ -46,33 +73,50 @@ export interface MailSender {
 
 export type MailboxConfig = ReturnType<typeof toMailboxConfig>;
 
-export function emailConfigToMailboxConfig(config: EmailConfigFile): MailboxConfig {
-  return toMailboxConfig(config);
-}
-
-export function formatMailAddress(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "address" in value &&
-    typeof (value as { address?: unknown }).address === "string"
-  ) {
-    const entry = value as { name?: string; address: string };
-    const name = entry.name?.trim();
-    return name ? `${name} <${entry.address}>` : entry.address;
-  }
-
-  return "";
-}
-
-export function truncateMailBody(value: string, maxBytes = MAX_EMAIL_BODY_BYTES): {
+export interface MailBodyPreview {
   text: string;
   truncated: boolean;
-} {
+}
+
+export function formatMailAddress(value: MailAddressInput): string {
+  if (value == null) {
+    return "";
+  }
+
+  const parsed = MailAddressSchema.safeParse(value);
+
+  if (!parsed.success) {
+    return "";
+  }
+
+  const text = z.string().safeParse(parsed.data);
+
+  if (text.success) {
+    return text.data.trim();
+  }
+
+  const entry = z
+    .object({ address: z.string().optional(), name: z.string().optional() })
+    .passthrough()
+    .safeParse(parsed.data);
+
+  if (!entry.success) {
+    return "";
+  }
+
+  if (!entry.data.address) {
+    return "";
+  }
+
+  const name = entry.data.name?.trim();
+
+  return name ? `${name} <${entry.data.address}>` : entry.data.address;
+}
+
+export function truncateMailBody(
+  value: string,
+  maxBytes = MAX_EMAIL_BODY_BYTES
+): MailBodyPreview {
   const bytes = Buffer.byteLength(value, "utf8");
 
   if (bytes <= maxBytes) {

@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import { maskSecret } from "./email-config";
-import { parseIni, readTextOrNull, writePrivateTextFile } from "./fs";
+import { readEnvValue, resolveManagedSecret } from "./config";
+import { maskTrailingSecret } from "./secret-mask";
 import { getUserConfigDir } from "./user-config";
 
 export interface ComposioConfigFile {
@@ -8,8 +8,8 @@ export interface ComposioConfigFile {
 }
 
 export interface ComposioSettingsPublic {
-  configured: boolean;
   apiKeyMasked: string | null;
+  configured: boolean;
 }
 
 export interface UpdateComposioSettingsInput {
@@ -32,72 +32,61 @@ export function composioUserId(userId: string): string {
   return `nakama:user:${userId}`;
 }
 
-export function resolveComposioApiKey(file: ComposioConfigFile | null | undefined): string {
-  return file?.apiKey?.trim() || "";
+export function resolveComposioApiKey(
+  file: ComposioConfigFile | null | undefined,
+  env: Record<string, string | undefined> = process.env
+): string {
+  return readEnvValue(env, "COMPOSIO_API_KEY") || file?.apiKey?.trim() || "";
 }
 
-export function isComposioConfigured(file?: ComposioConfigFile | null): boolean {
-  return Boolean(resolveComposioApiKey(file));
+export function isComposioConfigured(
+  file?: ComposioConfigFile | null,
+  env: Record<string, string | undefined> = process.env
+): boolean {
+  return Boolean(resolveComposioApiKey(file, env));
 }
 
-export async function isComposioConfiguredAsync(): Promise<boolean> {
-  return isComposioConfigured(await loadComposioConfigFile());
+export async function isComposioConfiguredAsync(
+  env: Record<string, string | undefined> = process.env
+): Promise<boolean> {
+  return isComposioConfigured(await loadComposioConfigFile(), env);
 }
 
 export async function loadComposioConfigFile(): Promise<ComposioConfigFile | null> {
-  const raw = await readTextOrNull(getComposioConfigPath());
+  const apiKey = await resolveManagedSecret("global", "composio", [
+    "COMPOSIO_API_KEY",
+  ]);
 
-  if (raw === null) {
-    return null;
-  }
-
-  const values = parseIni(raw);
-  const apiKey = values.api_key?.trim() ?? "";
-
-  if (!apiKey) {
-    return null;
-  }
-
-  return { apiKey };
+  return apiKey ? { apiKey } : null;
 }
 
-export function toComposioSettingsPublic(file: ComposioConfigFile | null): ComposioSettingsPublic {
-  if (!file) {
+export function toComposioSettingsPublic(
+  file: ComposioConfigFile | null,
+  env: Record<string, string | undefined> = process.env
+): ComposioSettingsPublic {
+  const apiKey = resolveComposioApiKey(file, env);
+
+  if (!apiKey) {
     return {
-      configured: false,
       apiKeyMasked: null,
+      configured: false,
     };
   }
 
   return {
-    configured: Boolean(file.apiKey.trim()),
-    apiKeyMasked: maskSecret(file.apiKey),
+    apiKeyMasked: maskTrailingSecret(apiKey),
+    configured: true,
   };
 }
 
-export async function loadComposioSettingsPublic(): Promise<ComposioSettingsPublic> {
-  return toComposioSettingsPublic(await loadComposioConfigFile());
-}
-
-async function writeComposioConfigFile(config: ComposioConfigFile): Promise<void> {
-  const lines = ["# Nakama Composio integration", `api_key=${config.apiKey}`, ""];
-
-  await writePrivateTextFile(getComposioConfigPath(), lines.join("\n"), {
-    ensureDir: getComposioConfigDir(),
-  });
+export async function loadComposioSettingsPublic(
+  env: Record<string, string | undefined> = process.env
+): Promise<ComposioSettingsPublic> {
+  return toComposioSettingsPublic(await loadComposioConfigFile(), env);
 }
 
 export async function saveComposioConfig(
-  input: UpdateComposioSettingsInput,
+  _input: UpdateComposioSettingsInput
 ): Promise<ComposioSettingsPublic> {
-  const existing = await loadComposioConfigFile();
-  const apiKey =
-    input.apiKey !== undefined ? input.apiKey.trim() : (existing?.apiKey ?? "");
-
-  if (!apiKey) {
-    throw new Error("Composio API key is required.");
-  }
-
-  await writeComposioConfigFile({ apiKey });
-  return toComposioSettingsPublic({ apiKey });
+  throw new Error("Save the Composio key through the secret settings API.");
 }

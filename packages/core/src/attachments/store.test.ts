@@ -10,11 +10,12 @@ import {
 } from "./store";
 
 const originalConfigDir = process.env.NAKAMA_CONFIG_DIR;
+
 let tempConfigDir = "";
 
 afterEach(() => {
   if (tempConfigDir) {
-    rmSync(tempConfigDir, { recursive: true, force: true });
+    rmSync(tempConfigDir, { force: true, recursive: true });
     tempConfigDir = "";
   }
 
@@ -35,15 +36,27 @@ describe("attachment store", () => {
     useTempConfigDir();
     const bytes = Buffer.from("hello attachment");
 
-    const path = await saveAttachmentBytes("org_1", "profile_1", "att_1", bytes);
+    const path = await saveAttachmentBytes(
+      "org_1",
+      "profile_1",
+      "att_1",
+      bytes
+    );
 
     expect(path).toBe(getAttachmentFilePath("org_1", "profile_1", "att_1"));
-    expect(await readAttachmentBytes("org_1", "profile_1", "att_1")).toEqual(bytes);
+    expect(await readAttachmentBytes("org_1", "profile_1", "att_1")).toEqual(
+      bytes
+    );
   });
 
   test("deleteAttachmentBytes removes stored file", async () => {
     useTempConfigDir();
-    await saveAttachmentBytes("org_1", "profile_1", "att_2", Buffer.from("bye"));
+    await saveAttachmentBytes(
+      "org_1",
+      "profile_1",
+      "att_2",
+      Buffer.from("bye")
+    );
 
     await deleteAttachmentBytes("org_1", "profile_1", "att_2");
 

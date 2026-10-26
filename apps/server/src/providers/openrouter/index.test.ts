@@ -1,285 +1,567 @@
 import { describe, expect, mock, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  loadUserConfig,
+  type OpenRouterRoutingSettings,
+  saveUserConfig,
+} from "@nakama/core";
+import { HttpResponse, http } from "msw";
+import { setupServer } from "msw/node";
+import {
+  applyProviderInstanceUpdate,
+  buildProviderInstanceFromCreateRequest,
+  toProviderInstanceSummary,
+} from "../../services/provider-instance-helpers";
+import { createProviderForInstance } from "../create";
+import { type ProviderJsonRecord, parseJsonRecord } from "../shared";
+import { asTestFetch, streamFromChunks } from "../test-helpers";
 import { createOpenRouterProvider } from "./index";
 
 function chatCompletionResponse(
-  content: string,
-  options: { toolCalls?: unknown[]; reasoning?: string } = {},
+  content: string | ProviderJsonRecord[],
+  options: { toolCalls?: unknown[]; reasoning?: string } = {}
 ) {
+  const message = { content, role: "assistant" };
+
+  if (options.reasoning) {
+    Object.assign(message, { reasoning: options.reasoning });
+  }
+
+  if (options.toolCalls) {
+    Object.assign(message, { tool_calls: options.toolCalls });
+  }
+
   return JSON.stringify({
-    id: "gen-test",
-    object: "chat.completion",
-    created: 1_700_000_000,
-    model: "anthropic/claude-sonnet-4-6",
-    system_fingerprint: null,
     choices: [
       {
-        index: 0,
         finish_reason: "stop",
-        message: {
-          role: "assistant",
-          content,
-          ...(options.reasoning ? { reasoning: options.reasoning } : {}),
-          ...(options.toolCalls ? { tool_calls: options.toolCalls } : {}),
-        },
+        index: 0,
+        message,
       },
     ],
-  });
-}
-
-function streamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-
-  return new ReadableStream({
-    start(controller) {
-      for (const chunk of chunks) {
-        controller.enqueue(encoder.encode(chunk));
-      }
-
-      controller.close();
-    },
-  });
-}
-
-function streamChunk(delta: Record<string, unknown>): string {
-  return `data:${JSON.stringify({
-    id: "chunk-1",
-    object: "chat.completion.chunk",
     created: 1_700_000_000,
+    id: "gen-test",
     model: "anthropic/claude-sonnet-4-6",
-    choices: [{ index: 0, delta, finish_reason: null }],
+    object: "chat.completion",
+    system_fingerprint: null,
+  });
+}
+
+function streamChunk<ErrorValue>(
+  delta: ProviderJsonRecord,
+  error?: ErrorValue
+): string {
+  return `data:${JSON.stringify({
+    choices: [{ delta, finish_reason: null, index: 0 }],
+    created: 1_700_000_000,
+    error,
+    id: "chunk-1",
+    model: "anthropic/claude-sonnet-4-6",
+    object: "chat.completion.chunk",
+  })}\r\n\r\n`;
+}
+
+function streamError<ErrorValue>(error: ErrorValue): string {
+  return `data:${JSON.stringify({
+    choices: [],
+    created: 1_700_000_000,
+    error,
+    id: "chunk-error",
+    model: "anthropic/claude-sonnet-4-6",
+    object: "chat.completion.chunk",
   })}\r\n\r\n`;
 }
 
 describe("createOpenRouterProvider", () => {
-  test("calls OpenRouter chat completions via SDK", async () => {
-    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const request = input instanceof Request ? input : new Request(input, init);
-      expect(request.url).toContain("/chat/completions");
-      const headers = request.headers;
-      expect(headers.get("Authorization")).toBe("Bearer sk-or-v1-test");
-      expect(headers.get("HTTP-Referer")).toBe("https://github.com/ahmadrosid/nakama");
-      expect(headers.get("X-OpenRouter-Title")).toBe("Nakama");
-
-      return new Response(chatCompletionResponse("Hello from OpenRouter"), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+  test("reads text parts from structured chat and text responses", async () => {
+    const provider = createOpenRouterProvider({
+      apiKey: "test-key",
+      fetcher: async () =>
+        new Response(
+          chatCompletionResponse([
+            { text: "Hello", type: "text" },
+            { text: " world", type: "text" },
+          ]),
+          { headers: { "Content-Type": "application/json" } }
+        ),
     });
+
+    expect(
+      (await provider.generateChat({ messages: [], system: "test" })).content
+    ).toBe("Hello world");
+    expect(
+      (
+        await provider.generateText({
+          format: "text",
+          prompt: "hi",
+          system: "test",
+        })
+      ).content
+    ).toBe("Hello world");
+  });
+
+  test("rejects a response mode that does not match the request", async () => {
+    const provider = createOpenRouterProvider({
+      apiKey: "test-key",
+      fetcher: async (input, init) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init);
+
+        const body = parseJsonRecord(await request.text());
+
+        return body.stream
+          ? new Response(chatCompletionResponse("unexpected"), {
+              headers: { "Content-Type": "application/json" },
+            })
+          : new Response(
+              streamFromChunks([streamChunk({ content: "unexpected" })]),
+              {
+                headers: { "Content-Type": "text/event-stream" },
+              }
+            );
+      },
+    });
+
+    await expect(
+      provider.generateChat({ messages: [], system: "test" })
+    ).rejects.toThrow();
+    await expect(
+      provider.generateText({ prompt: "hi", system: "test" })
+    ).rejects.toThrow();
+    const onChunk = mock(() => {});
+    await expect(
+      provider.streamChat({ messages: [], system: "test" }, { onChunk })
+    ).rejects.toThrow();
+    expect(onChunk).not.toHaveBeenCalled();
+  });
+
+  test("serializes routing on every dedicated request path", async () => {
+    for (const [openRouterRouting, expected] of [
+      [undefined, undefined],
+      [{}, undefined],
+      [
+        { dataCollection: "deny", requireParameters: true, zdr: true },
+        { data_collection: "deny", require_parameters: true, zdr: true },
+      ],
+      [
+        { dataCollection: "allow", requireParameters: false, zdr: false },
+        { data_collection: "allow", require_parameters: false, zdr: false },
+      ],
+      [{ requireParameters: true }, { require_parameters: true }],
+    ] satisfies [OpenRouterRoutingSettings | undefined, unknown][]) {
+      const bodies: ProviderJsonRecord[] = [];
+
+      const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init);
+
+        const body = parseJsonRecord(await request.text());
+        bodies.push(body);
+
+        return body.stream
+          ? new Response(
+              streamFromChunks([
+                streamChunk({ content: "ok" }),
+                "data:[DONE]\r\n\r\n",
+              ]),
+              { headers: { "Content-Type": "text/event-stream" } }
+            )
+          : new Response(chatCompletionResponse("ok"), {
+              headers: { "Content-Type": "application/json" },
+            });
+      };
+
+      const provider = createOpenRouterProvider({
+        apiKey: "test-key",
+        fetcher,
+        model: "openai/gpt-6-luna",
+        openRouterRouting,
+      });
+
+      const input = {
+        messages: [{ content: "hi", role: "user" as const }],
+        system: "test",
+      };
+
+      expect((await provider.generateChat(input)).content).toBe("ok");
+      expect((await provider.streamChat(input, { onChunk() {} })).content).toBe(
+        "ok"
+      );
+
+      for (const format of ["text", "json"] as const) {
+        expect(
+          (
+            await provider.generateText({
+              format,
+              prompt: "hi",
+              system: "test",
+            })
+          ).content
+        ).toBe("ok");
+      }
+
+      expect(bodies.map((body) => body.stream)).toEqual([
+        false,
+        true,
+        false,
+        false,
+      ]);
+
+      for (const body of bodies) {
+        if (expected === undefined) {
+          expect(body.provider).toBeUndefined();
+        } else {
+          expect(body).toEqual(expect.objectContaining({ provider: expected }));
+        }
+
+        expect(body.model).toBe("openai/gpt-6-luna");
+        expect(body).not.toHaveProperty("extra_body");
+
+        if (expected === undefined) {
+          expect(body).not.toHaveProperty("provider");
+        }
+      }
+
+      expect(bodies[3]?.response_format).toEqual({ type: "json_object" });
+    }
+  });
+
+  test("create, persist, update and clear routing through the instance factory", async () => {
+    const previousDir = process.env.NAKAMA_CONFIG_DIR;
+    const previousKey = process.env.OPENROUTER_API_KEY;
+    const directory = await mkdtemp(join(tmpdir(), "nakama-routing-"));
+    const bodies: ProviderJsonRecord[] = [];
+
+    const server = setupServer(
+      http.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        async ({ request }) => {
+          const body = parseJsonRecord(await request.text());
+          bodies.push(body);
+
+          return body.stream
+            ? new HttpResponse(
+                streamChunk({ content: "ok" }) + "data:[DONE]\r\n\r\n",
+                { headers: { "Content-Type": "text/event-stream" } }
+              )
+            : new HttpResponse(chatCompletionResponse("ok"), {
+                headers: { "Content-Type": "application/json" },
+              });
+        }
+      )
+    );
+
+    server.listen({ onUnhandledRequest: "error" });
+    process.env.NAKAMA_CONFIG_DIR = directory;
+    process.env.OPENROUTER_API_KEY = `sk-or-${"x".repeat(24)}`;
+
+    try {
+      const strict = {
+        dataCollection: "deny",
+        requireParameters: true,
+        zdr: true,
+      } as const;
+
+      let instance = buildProviderInstanceFromCreateRequest(
+        {
+          apiKey: `sk-or-${"x".repeat(24)}`,
+          openRouterRouting: strict,
+          type: "openrouter",
+        },
+        []
+      );
+
+      const other = buildProviderInstanceFromCreateRequest(
+        { apiKey: `sk-or-${"y".repeat(24)}`, type: "openrouter" },
+        [instance]
+      );
+
+      const stages = [
+        [
+          undefined,
+          strict,
+          { data_collection: "deny", require_parameters: true, zdr: true },
+        ],
+        [
+          { label: "Renamed" },
+          strict,
+          { data_collection: "deny", require_parameters: true, zdr: true },
+        ],
+        [
+          {
+            openRouterRouting: {
+              dataCollection: "allow",
+              requireParameters: false,
+              zdr: false,
+            },
+          },
+          { dataCollection: "allow", requireParameters: false, zdr: false },
+          { data_collection: "allow", require_parameters: false, zdr: false },
+        ],
+        [{ openRouterRouting: { zdr: true } }, { zdr: true }, { zdr: true }],
+        [{ openRouterRouting: {} }, undefined, undefined],
+      ] as const;
+
+      for (const [update, saved, wire] of stages) {
+        if (update) {
+          instance = applyProviderInstanceUpdate(instance, update);
+        }
+
+        await saveUserConfig({
+          defaultProviderId: instance.id,
+          providers: [instance, other],
+        });
+        const loaded = await loadUserConfig();
+        instance = loaded!.providers.find((entry) => entry.id === instance.id)!;
+        expect(instance.openRouterRouting).toEqual(saved);
+        expect(
+          toProviderInstanceSummary(instance, 0).openRouterRouting
+        ).toEqual(saved);
+
+        const otherLoaded = loaded!.providers.find(
+          (entry) => entry.id === other.id
+        )!;
+
+        expect(otherLoaded.openRouterRouting).toBeUndefined();
+
+        const client = createProviderForInstance(
+          instance,
+          "openai/gpt-6-luna"
+        )!;
+
+        const input = {
+          messages: [{ content: "hi", role: "user" as const }],
+          system: "test",
+        };
+
+        await client.generateChat(input);
+        await client.streamChat(input, { onChunk() {} });
+        await client.generateText({ prompt: "hi", system: "test" });
+
+        for (const body of bodies.splice(0)) {
+          if (wire === undefined) {
+            expect(body).not.toHaveProperty("provider");
+          } else {
+            expect(body).toEqual(expect.objectContaining({ provider: wire }));
+          }
+        }
+
+        await createProviderForInstance(
+          otherLoaded,
+          "openai/gpt-6-luna"
+        )!.generateChat(input);
+        const requests = bodies.splice(0);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.provider).toBeUndefined();
+      }
+    } finally {
+      server.close();
+
+      if (previousDir === undefined) {
+        delete process.env.NAKAMA_CONFIG_DIR;
+      } else {
+        process.env.NAKAMA_CONFIG_DIR = previousDir;
+      }
+
+      if (previousKey === undefined) {
+        delete process.env.OPENROUTER_API_KEY;
+      } else {
+        process.env.OPENROUTER_API_KEY = previousKey;
+      }
+
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("calls OpenRouter chat completions via SDK", async () => {
+    const fetchMock = mock(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init);
+
+        expect(request.url).toContain("/chat/completions");
+        const headers = request.headers;
+        expect(headers.get("Authorization")).toBe("Bearer sk-or-v1-test");
+        expect(headers.get("HTTP-Referer")).toBe(
+          "https://github.com/ahmadrosid/nakama"
+        );
+        expect(headers.get("X-OpenRouter-Title")).toBe("Nakama");
+
+        return new Response(chatCompletionResponse("Hello from OpenRouter"), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+    );
 
     const provider = createOpenRouterProvider({
       apiKey: "sk-or-v1-test",
+      fetcher: asTestFetch(fetchMock),
       model: "anthropic/claude-sonnet-4-6",
-      fetcher: fetchMock as typeof fetch,
     });
 
     const result = await provider.generateText({
-      system: "You are helpful.",
-      prompt: "Say hi",
       format: "text",
+      prompt: "Say hi",
+      system: "You are helpful.",
     });
 
     expect(result.content).toBe("Hello from OpenRouter");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  test("returns tool calls from generateChat", async () => {
-    const fetchMock = mock(async () => {
-      return new Response(
-        chatCompletionResponse("", {
-          toolCalls: [
+  test("serializes user image parts with the OpenRouter SDK shape", async () => {
+    const fetchMock = mock(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init);
+
+        // SAFETY: The provider serializes this request body and the test checks its known fixture shape.
+        const body = (await request.json()) as {
+          messages: Array<{ content: unknown; role: string }>;
+        };
+
+        expect(body.messages[1]).toEqual({
+          content: [
+            { text: "What is this?", type: "text" },
             {
-              id: "call_1",
-              type: "function",
-              function: { name: "write_file", arguments: '{"path":"a.txt"}' },
+              image_url: {
+                url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+              },
+              type: "image_url",
             },
           ],
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+          role: "user",
+        });
+
+        return new Response(chatCompletionResponse("A tiny image"), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+    );
+
+    const provider = createOpenRouterProvider({
+      apiKey: "test-key",
+      fetcher: asTestFetch(fetchMock),
     });
+
+    await provider.generateChat({
+      messages: [
+        {
+          content: [
+            { text: "What is this?", type: "text" },
+            {
+              data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+              mediaType: "image/png",
+              type: "image",
+            },
+          ],
+          role: "user",
+        },
+      ],
+      system: "You are helpful.",
+    });
+  });
+
+  test("serializes user document parts with the OpenRouter SDK shape", async () => {
+    const fetchMock = mock(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init);
+
+        // SAFETY: The provider serializes this request body and the test checks its known fixture shape.
+        const body = (await request.json()) as {
+          messages: Array<{ content: unknown; role: string }>;
+        };
+
+        expect(body.messages[1]).toEqual({
+          content: [
+            { text: "Summarize this report", type: "text" },
+            {
+              file: {
+                file_data: "data:application/pdf;base64,JVBERi0=",
+                filename: "report.pdf",
+              },
+              type: "file",
+            },
+          ],
+          role: "user",
+        });
+
+        return new Response(chatCompletionResponse("A short report"), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+    );
+
+    const provider = createOpenRouterProvider({
+      apiKey: "test-key",
+      fetcher: asTestFetch(fetchMock),
+    });
+
+    await provider.generateChat({
+      messages: [
+        {
+          content: [
+            { text: "Summarize this report", type: "text" },
+            {
+              data: "JVBERi0=",
+              filename: "report.pdf",
+              mediaType: "application/pdf",
+              type: "document",
+            },
+          ],
+          role: "user",
+        },
+      ],
+      system: "You are helpful.",
+    });
+  });
+
+  test("returns tool calls from generateChat", async () => {
+    const fetchMock = mock(
+      async () =>
+        new Response(
+          chatCompletionResponse("", {
+            toolCalls: [
+              {
+                function: { arguments: '{"path":"a.txt"}', name: "write_file" },
+                id: "call_1",
+                type: "function",
+              },
+            ],
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        )
+    );
 
     const provider = createOpenRouterProvider({
       apiKey: "sk-or-v1-test",
-      fetcher: fetchMock as typeof fetch,
+      fetcher: asTestFetch(fetchMock),
     });
 
     const result = await provider.generateChat({
+      messages: [{ content: "Create a file", role: "user" }],
       system: "You are helpful.",
-      messages: [{ role: "user", content: "Create a file" }],
       tools: [
         {
-          name: "write_file",
           description: "Write a file",
-          parameters: { type: "object", properties: {} },
+          name: "write_file",
+          parameters: { properties: {}, type: "object" },
         },
       ],
     });
 
     expect(result.toolCalls).toEqual([
       {
+        arguments: { path: "a.txt" },
         id: "call_1",
         name: "write_file",
-        arguments: { path: "a.txt" },
       },
     ]);
-  });
-
-  test("sends reasoning config when thinking is enabled", async () => {
-    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const request = input instanceof Request ? input : new Request(input, init);
-      const body = (await request.json()) as {
-        reasoning?: { effort?: string; summary?: string };
-      };
-
-      expect(body.reasoning).toEqual({ effort: "high", summary: "auto" });
-
-      return new Response(chatCompletionResponse("Answer", { reasoning: "Plan" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-
-    const provider = createOpenRouterProvider({
-      apiKey: "sk-or-v1-test",
-      fetcher: fetchMock as typeof fetch,
-    });
-
-    const result = await provider.generateChat({
-      system: "You are helpful.",
-      messages: [{ role: "user", content: "Think, then answer" }],
-      providerOptions: {
-        thinking: { enabled: true, effort: "high" },
-      },
-    });
-
-    expect(result.content).toBe("Answer");
-    expect(result.assistantMessage.thinking).toBe("Plan");
-  });
-
-  test("omits reasoning when custom model disables thinking", async () => {
-    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const request = input instanceof Request ? input : new Request(input, init);
-      const body = (await request.json()) as { reasoning?: unknown };
-
-      expect(body.reasoning).toBeUndefined();
-
-      return new Response(chatCompletionResponse("Answer"), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-
-    const provider = createOpenRouterProvider({
-      apiKey: "sk-or-v1-test",
-      model: "anthropic/claude-sonnet-4-6",
-      customModels: [{ id: "anthropic/claude-sonnet-4-6", supportsThinking: false }],
-      fetcher: fetchMock as typeof fetch,
-    });
-
-    await provider.generateChat({
-      system: "You are helpful.",
-      messages: [{ role: "user", content: "Think, then answer" }],
-      providerOptions: {
-        thinking: { enabled: true, effort: "high" },
-      },
-    });
-  });
-
-  test("omits reasoning for models that do not support thinking", async () => {
-    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const request = input instanceof Request ? input : new Request(input, init);
-      const body = (await request.json()) as { reasoning?: unknown; model?: string };
-
-      expect(body.model).toBe("meta-llama/llama-4-maverick");
-      expect(body.reasoning).toBeUndefined();
-
-      return new Response(chatCompletionResponse("Answer"), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-
-    const provider = createOpenRouterProvider({
-      apiKey: "sk-or-v1-test",
-      model: "meta-llama/llama-4-maverick",
-      fetcher: fetchMock as typeof fetch,
-    });
-
-    const result = await provider.generateChat({
-      system: "You are helpful.",
-      messages: [{ role: "user", content: "Hello" }],
-      providerOptions: {
-        thinking: { enabled: true, effort: "high" },
-      },
-    });
-
-    expect(result.content).toBe("Answer");
-  });
-
-  test("streams reasoning deltas when thinking is enabled", async () => {
-    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const request = input instanceof Request ? input : new Request(input, init);
-      const body = (await request.json()) as { stream?: boolean; reasoning?: unknown };
-
-      expect(body.stream).toBe(true);
-      expect(body.reasoning).toEqual({ effort: "medium", summary: "auto" });
-
-      return new Response(
-        streamFromChunks([
-          streamChunk({ reasoning: "Plan" }),
-          streamChunk({ content: "Hi" }),
-          "data:[DONE]\r\n\r\n",
-        ]),
-        { status: 200, headers: { "Content-Type": "text/event-stream" } },
-      );
-    });
-
-    const provider = createOpenRouterProvider({
-      apiKey: "sk-or-v1-test",
-      fetcher: fetchMock as typeof fetch,
-    });
-
-    const chunks: string[] = [];
-    const thinking: string[] = [];
-    const result = await provider.streamChat(
-      {
-        system: "You are helpful.",
-        messages: [{ role: "user", content: "Think, then answer" }],
-        providerOptions: {
-          thinking: { enabled: true, effort: "medium" },
-        },
-      },
-      {
-        onChunk: (delta) => chunks.push(delta),
-        onThinking: (delta) => thinking.push(delta),
-      },
-    );
-
-    expect(result.content).toBe("Hi");
-    expect(result.assistantMessage.thinking).toBe("Plan");
-    expect(chunks).toEqual(["Hi"]);
-    expect(thinking).toEqual(["Plan"]);
-  });
-
-  test("throws on empty generateText response", async () => {
-    const fetchMock = mock(async () => {
-      return new Response(chatCompletionResponse("   "), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-
-    const provider = createOpenRouterProvider({
-      apiKey: "sk-or-v1-test",
-      fetcher: fetchMock as typeof fetch,
-    });
-
-    await expect(
-      provider.generateText({
-        system: "You are helpful.",
-        prompt: "Say hi",
-        format: "text",
-      }),
-    ).rejects.toThrow("OpenRouter returned an empty response.");
   });
 });

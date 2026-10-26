@@ -1,50 +1,74 @@
-import type { ServerOptions } from "../context";
-import type { HonoApp } from "../types";
-import { json, readJson } from "../shared";
-import {
-  requireActiveOrgIdFromContext,
-  requireNotViewerFromContext,
-} from "../org-guards";
-import { ArtifactShareService } from "../../services/artifact-share-service";
+import { z } from "@hono/zod-openapi";
 import { NakamaApiError } from "@nakama/core";
 import type {
   ArtifactShareStatusResponse,
-  PublishArtifactShareRequest,
   PublishArtifactShareResponse,
   RevokeArtifactShareResponse,
 } from "@nakama/core/contract";
+import { ArtifactShareService } from "../../services/artifact-share-service";
+import { resolveRequestClientOrigin } from "../../services/composio-callback-url";
+import type { ServerOptions } from "../context";
+import {
+  requireActiveOrgIdFromContext,
+  requireOrgMemberFromContext,
+} from "../org-guards";
+import { json, readJson } from "../shared";
+import type { HonoApp } from "../types";
 
-export function registerArtifactShareRoutes(app: HonoApp, options: ServerOptions): void {
-  if (!options.databaseAdapter || !options.authService) {
+export function registerArtifactShareRoutes(
+  app: HonoApp,
+  options: ServerOptions
+): void {
+  if (!(options.databaseAdapter && options.authService)) {
     return;
   }
 
-  const service = new ArtifactShareService(options.databaseAdapter, options.authService);
+  const service = new ArtifactShareService(
+    options.databaseAdapter,
+    options.authService
+  );
 
   app.post("/v1/profiles/:profileId/artifacts/shares", async (c) => {
-    const auth = requireNotViewerFromContext(c);
+    const auth = requireOrgMemberFromContext(c);
     const orgId = requireActiveOrgIdFromContext(c);
     const profileId = decodeURIComponent(c.req.param("profileId"));
-    const body = await readJson<PublishArtifactShareRequest>(c.req.raw);
+
+    const body = await readJson(
+      c.req.raw,
+      z
+        .object({ clientOrigin: z.string().optional(), path: z.string() })
+        .strict()
+    );
 
     if (!body.path?.trim()) {
       return json({ error: "path is required" }, 400);
     }
 
+    const clientOrigin = resolveRequestClientOrigin(
+      c.req.raw,
+      body.clientOrigin
+    );
+
+    const publishRequest = {
+      orgId,
+      profileId,
+      request: c.req.raw,
+      sourcePath: body.path.trim(),
+      userId: auth.user.id,
+    };
+
+    if (clientOrigin) {
+      Object.assign(publishRequest, { clientOrigin });
+    }
+
     return json<PublishArtifactShareResponse>(
-      await service.publishArtifactShare({
-        orgId,
-        profileId,
-        sourcePath: body.path.trim(),
-        userId: auth.user.id,
-        request: c.req.raw,
-      }),
-      201,
+      await service.publishArtifactShare(publishRequest),
+      201
     );
   });
 
   app.get("/v1/profiles/:profileId/artifacts/shares/status", async (c) => {
-    requireNotViewerFromContext(c);
+    requireOrgMemberFromContext(c);
     const orgId = requireActiveOrgIdFromContext(c);
     const profileId = decodeURIComponent(c.req.param("profileId"));
     const sourcePath = c.req.query("path");
@@ -56,8 +80,8 @@ export function registerArtifactShareRoutes(app: HonoApp, options: ServerOptions
     const status = await service.getArtifactShareStatus({
       orgId,
       profileId,
-      sourcePath: sourcePath.trim(),
       request: c.req.raw,
+      sourcePath: sourcePath.trim(),
     });
 
     if (!status) {
@@ -68,13 +92,13 @@ export function registerArtifactShareRoutes(app: HonoApp, options: ServerOptions
   });
 
   app.delete("/v1/profiles/:profileId/artifacts/shares/:shareId", async (c) => {
-    requireNotViewerFromContext(c);
+    requireOrgMemberFromContext(c);
     const orgId = requireActiveOrgIdFromContext(c);
     const profileId = decodeURIComponent(c.req.param("profileId"));
     const shareId = decodeURIComponent(c.req.param("shareId"));
 
     return json<RevokeArtifactShareResponse>(
-      await service.revokeArtifactShare({ orgId, profileId, shareId }),
+      await service.revokeArtifactShare({ orgId, profileId, shareId })
     );
   });
 
@@ -91,16 +115,17 @@ export function registerArtifactShareRoutes(app: HonoApp, options: ServerOptions
 
       const downloadName = metadata.filename.replace(/["\\]/g, "_");
       const disposition = metadata.inlineAllowed ? "inline" : "attachment";
+
       const contentType = metadata.inlineAllowed
         ? metadata.mimeType
         : metadata.mimeType.startsWith("text/")
           ? "text/plain; charset=utf-8"
           : "application/octet-stream";
 
-      return new Response(bytes, {
+      return new Response(new Uint8Array(bytes), {
         headers: {
-          "Content-Type": contentType,
           "Content-Disposition": `${disposition}; filename="${downloadName}"`,
+          "Content-Type": contentType,
           "Referrer-Policy": "no-referrer",
           "X-Artifact-Filename": metadata.filename,
           "X-Inline-Allowed": metadata.inlineAllowed ? "1" : "0",

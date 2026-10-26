@@ -1,4 +1,8 @@
-import type { AgentChannel, LoadAttachmentBytes, SaveInlineAttachment } from "@nakama/core";
+import type {
+  AgentChannel,
+  LoadAttachmentBytes,
+  SaveInlineAttachment,
+} from "@nakama/core";
 import { createId } from "@nakama/core";
 import {
   readAttachmentBytes,
@@ -7,37 +11,44 @@ import {
 import type { DatabaseAdapter, StoredAttachmentRecord } from "@nakama/db";
 
 export interface AttachmentServiceContext {
+  channel: AgentChannel;
+  /** True in a cognito session, which pairs with a null sessionId. */
+  ephemeral?: boolean;
   orgId: string;
   profileId: string;
-  sessionId: string;
-  channel: AgentChannel;
+  /** Null in a cognito session: there is no `sessions` row to point at. */
+  sessionId: string | null;
 }
 
 export function createAttachmentSaver(
   db: DatabaseAdapter,
-  context: AttachmentServiceContext,
+  context: AttachmentServiceContext
 ): SaveInlineAttachment {
   return async (input) => {
     const attachmentId = createId("att");
+
     const storagePath = await saveAttachmentBytes(
       context.orgId,
       context.profileId,
       attachmentId,
-      input.bytes,
+      input.bytes
     );
+
     const now = new Date().toISOString();
+
     const record: StoredAttachmentRecord = {
+      channel: context.channel,
+      createdAt: now,
+      ephemeral: context.ephemeral ?? false,
+      filename: input.filename ?? null,
       id: attachmentId,
+      kind: input.kind,
+      mediaType: input.mediaType,
       orgId: context.orgId,
       profileId: context.profileId,
       sessionId: context.sessionId,
-      channel: context.channel,
-      kind: input.kind,
-      filename: input.filename ?? null,
-      mediaType: input.mediaType,
       sizeBytes: input.bytes.byteLength,
       storagePath,
-      createdAt: now,
     };
 
     await db.insertAttachment(record);
@@ -51,19 +62,23 @@ export function createAttachmentSaver(
 
 export function createAttachmentLoader(
   db: DatabaseAdapter,
-  context: Pick<AttachmentServiceContext, "orgId" | "profileId">,
+  context: Pick<AttachmentServiceContext, "orgId" | "profileId">
 ): LoadAttachmentBytes {
   return async (attachmentId) => {
     const record = await db.getAttachment(attachmentId);
 
-    if (!record || record.profileId !== context.profileId) {
+    if (
+      !record ||
+      record.orgId !== context.orgId ||
+      record.profileId !== context.profileId
+    ) {
       return null;
     }
 
     const bytes = await readAttachmentBytes(
       context.orgId,
       context.profileId,
-      attachmentId,
+      attachmentId
     );
 
     if (!bytes) {
@@ -72,8 +87,8 @@ export function createAttachmentLoader(
 
     return {
       bytes,
-      mediaType: record.mediaType,
       filename: record.filename,
+      mediaType: record.mediaType,
     };
   };
 }

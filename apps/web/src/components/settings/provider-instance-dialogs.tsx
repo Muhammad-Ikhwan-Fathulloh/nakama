@@ -1,13 +1,5 @@
-import type {
-  ProviderInstanceSummary,
-  ProviderModelOption,
-} from "@nakama/core/contract";
-import type { ModelListRow } from "@/components/ModelListEditor";
-import { CerebrasProviderModelFields } from "@/components/CerebrasProviderModelFields";
-import { OpenRouterProviderModelFields } from "@/components/OpenRouterProviderModelFields";
-import { CatalogProviderModelFields } from "@/components/CatalogProviderModelFields";
-import { CustomProviderFields } from "@/components/CustomProviderFields";
-import { Button } from "@/components/ui/button";
+import type { ProviderInstanceSummary, WireApi } from "@nakama/core/contract";
+import { Button } from "@nakama/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -15,17 +7,24 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@nakama/ui/dialog";
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupInput,
-} from "@/components/ui/input-group";
-import { Spinner } from "@/components/ui/spinner";
+} from "@nakama/ui/input-group";
+import { Spinner } from "@nakama/ui/spinner";
+import { LinkSquare02Icon, ViewIcon, ViewOffIcon } from "hugeicons-react";
+import type { ReactNode } from "react";
+import {
+  DeviceSignInCode,
+  useDeviceSignIn,
+} from "@/components/ChatgptSignInPanel";
+import { CustomProviderFields } from "@/components/CustomProviderFields";
+import type { ModelListRow } from "@/components/ModelListEditor";
+import type { DeviceSignIn } from "@/components/subscription-sign-in.shared";
 import { apiKeyPlaceholder, type SelectedProvider } from "@/lib/models";
-import type { CatalogShortlistProvider } from "@/components/catalog-provider-model-fields.shared";
-import { EyeIcon, EyeOffIcon } from "lucide-react";
 
 export function ProviderReplaceKeyDialog({
   open,
@@ -39,6 +38,7 @@ export function ProviderReplaceKeyDialog({
   onApiKeyChange,
   onToggleShowApiKey,
   onSave,
+  onManage,
 }: {
   open: boolean;
   instance: ProviderInstanceSummary;
@@ -51,45 +51,231 @@ export function ProviderReplaceKeyDialog({
   onApiKeyChange: (value: string) => void;
   onToggleShowApiKey: () => void;
   onSave: () => void;
+  onManage?: (action: "clear" | "use-stored") => void;
 }) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {instance.hasApiKey ? "Update API key" : "Add API key"} for {instance.label}
+            {instance.hasApiKey ? "Update API key" : "Add API key"} for{" "}
+            {instance.label}
           </DialogTitle>
         </DialogHeader>
         <InputGroup>
           <InputGroupInput
-            type={showApiKey ? "text" : "password"}
             autoComplete="off"
-            placeholder={apiKeyPlaceholder(providerType)}
-            value={apiKey}
-            disabled={busy}
+            disabled={busy || instance.secretSource === "environment"}
             onChange={(event) => onApiKeyChange(event.target.value)}
+            placeholder={apiKeyPlaceholder(providerType)}
+            type={showApiKey ? "text" : "password"}
+            value={apiKey}
           />
           <InputGroupAddon align="inline-end">
             <InputGroupButton
-              size="icon-sm"
               aria-label={showApiKey ? "Hide API key" : "Show API key"}
               onClick={onToggleShowApiKey}
+              size="icon-sm"
             >
-              {showApiKey ? <EyeOffIcon /> : <EyeIcon />}
+              {showApiKey ? <ViewOffIcon /> : <ViewIcon />}
             </InputGroupButton>
           </InputGroupAddon>
         </InputGroup>
+        {instance.secretSource === "environment" ? (
+          <p className="text-sm">
+            Managed by {instance.secretEnvName}. Restart Nakama after you change
+            it.
+          </p>
+        ) : null}
         {dialogError ? (
-          <p className="text-sm text-destructive" role="alert">
+          <p className="text-destructive text-sm" role="alert">
             {dialogError}
           </p>
         ) : null}
         <DialogFooter>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
+          {instance.secretSource === "settings" ? (
+            <Button
+              disabled={busy}
+              onClick={() => onManage?.("clear")}
+              type="button"
+              variant="outline"
+            >
+              Clear saved key
+            </Button>
+          ) : null}
+          {instance.secretSource === "missing" &&
+          instance.savedSecretAvailable ? (
+            <Button
+              disabled={busy}
+              onClick={() => onManage?.("use-stored")}
+              type="button"
+              variant="outline"
+            >
+              Use saved key
+            </Button>
+          ) : null}
+          <Button
+            disabled={busy}
+            onClick={() => onOpenChange(false)}
+            type="button"
+            variant="outline"
+          >
             Cancel
           </Button>
-          <Button type="button" disabled={busy || !apiKey.trim()} onClick={onSave}>
+          <Button
+            disabled={
+              busy || instance.secretSource === "environment" || !apiKey.trim()
+            }
+            onClick={onSave}
+            type="button"
+          >
             {busy ? <Spinner className="mr-2" /> : null}
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function ProviderReconnectDialog<T>({
+  open,
+  instance,
+  signIn,
+  busy,
+  dialogError,
+  onOpenChange,
+  onConnected,
+}: {
+  open: boolean;
+  instance: ProviderInstanceSummary;
+  signIn: DeviceSignIn<T>;
+  busy: boolean;
+  dialogError: string | null;
+  onOpenChange: (open: boolean) => void;
+  onConnected: (oauth: T) => void;
+}) {
+  const device = useDeviceSignIn(signIn, {
+    onOAuthChange: (oauth) => {
+      if (oauth) {
+        onConnected(oauth);
+      }
+    },
+  });
+
+  const waiting = device.flow === "waiting";
+  const error = device.error ?? dialogError;
+  const verb = instance.hasApiKey ? "Reconnect" : "Connect";
+
+  return (
+    <Dialog
+      onOpenChange={(nextOpen) => {
+        if (!(nextOpen || busy)) {
+          device.cancel();
+          onOpenChange(false);
+        }
+      }}
+      open={open}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {verb} {signIn.label}?
+          </DialogTitle>
+          {instance.hasApiKey ? (
+            <DialogDescription>
+              You sign in again. The new account replaces the current one.
+            </DialogDescription>
+          ) : null}
+        </DialogHeader>
+        {waiting ? (
+          <div className="space-y-3 rounded-md border p-3">
+            <DeviceSignInCode
+              loginUrl={device.loginUrl}
+              userCode={device.userCode}
+              verificationUri={device.verificationUri}
+            />
+          </div>
+        ) : null}
+        {error ? (
+          <p className="text-destructive text-sm" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <DialogFooter>
+          <Button
+            disabled={busy}
+            onClick={() => {
+              device.cancel();
+              onOpenChange(false);
+            }}
+            type="button"
+            variant="outline"
+          >
+            Cancel
+          </Button>
+          <Button
+            disabled={busy || waiting}
+            onClick={() => void device.start()}
+            type="button"
+          >
+            {busy || waiting ? (
+              <Spinner className="mr-2" />
+            ) : (
+              <LinkSquare02Icon className="mr-2 size-4" />
+            )}
+            {waiting ? "Waiting for sign-in…" : verb}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ProviderModelsDialogShell({
+  open,
+  busy,
+  dialogError,
+  title,
+  description,
+  onOpenChange,
+  onSave,
+  children,
+}: {
+  open: boolean;
+  busy: boolean;
+  dialogError: string | null;
+  title: string;
+  description?: string;
+  onOpenChange: (open: boolean) => void;
+  onSave: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent className="w-[min(96vw,56rem)] grid-cols-1 sm:max-w-4xl">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          {description ? (
+            <DialogDescription>{description}</DialogDescription>
+          ) : null}
+        </DialogHeader>
+        {children}
+        {dialogError ? (
+          <p className="text-destructive text-sm" role="alert">
+            {dialogError}
+          </p>
+        ) : null}
+        <DialogFooter>
+          <Button
+            disabled={busy}
+            onClick={() => onOpenChange(false)}
+            type="button"
+            variant="outline"
+          >
+            Cancel
+          </Button>
+          <Button disabled={busy} onClick={onSave} type="button">
             Save
           </Button>
         </DialogFooter>
@@ -105,11 +291,20 @@ export function ProviderCompatibleEditDialog({
   editLabel,
   editBaseUrl,
   manageModels,
+  apiKey = "",
+  browseSource = "remote",
+  remoteProvider = "openai_compatible",
+  providerInstanceId,
+  hostMode,
+  hideIdentity = false,
+  browseLabel,
   onOpenChange,
   onDisplayNameChange,
   onBaseUrlChange,
   onCustomModelsChange,
+  onWireApiChange,
   onSave,
+  wireApi,
 }: {
   open: boolean;
   busy: boolean;
@@ -117,43 +312,103 @@ export function ProviderCompatibleEditDialog({
   editLabel: string;
   editBaseUrl: string;
   manageModels: ModelListRow[];
+  apiKey?: string;
+  browseSource?: "remote" | "models.dev";
+  remoteProvider?: "ollama" | "openai_compatible" | "netra";
+  hideIdentity?: boolean;
+  providerInstanceId?: string;
+  hostMode?: "local" | "cloud";
+  browseLabel?: string;
   onOpenChange: (open: boolean) => void;
   onDisplayNameChange: (value: string) => void;
   onBaseUrlChange: (value: string) => void;
   onCustomModelsChange: (rows: ModelListRow[]) => void;
+  onWireApiChange?: (value: WireApi) => void;
   onSave: () => void;
+  wireApi?: WireApi;
 }) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(96vw,56rem)] sm:max-w-3xl">
+    <ProviderModelsDialogShell
+      busy={busy}
+      dialogError={dialogError}
+      onOpenChange={onOpenChange}
+      onSave={onSave}
+      open={open}
+      title="Edit provider"
+    >
+      <CustomProviderFields
+        apiKey={apiKey}
+        baseUrl={editBaseUrl}
+        baseUrlError={null}
+        browseLabel={browseLabel}
+        browseSource={browseSource}
+        customModels={manageModels}
+        disabled={busy}
+        displayName={editLabel}
+        displayNameError={null}
+        hideIdentity={hideIdentity}
+        hostMode={hostMode}
+        modelsError={null}
+        onBaseUrlChange={onBaseUrlChange}
+        onCustomModelsChange={onCustomModelsChange}
+        onDisplayNameChange={onDisplayNameChange}
+        onWireApiChange={onWireApiChange}
+        providerInstanceId={providerInstanceId}
+        remoteProvider={remoteProvider}
+        wireApi={wireApi}
+      />
+    </ProviderModelsDialogShell>
+  );
+}
+
+export function ProviderRemoveDialog({
+  open,
+  label,
+  isSole,
+  busy,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean;
+  label: string;
+  isSole: boolean;
+  busy: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog
+      onOpenChange={(nextOpen) => {
+        if (!(nextOpen || busy)) {
+          onOpenChange(false);
+        }
+      }}
+      open={open}
+    >
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Edit provider</DialogTitle>
+          <DialogTitle>Remove provider?</DialogTitle>
+          <DialogDescription>
+            {isSole ? "This is your only LLM provider. " : null}
+            Models using {label} will stop working. This cannot be undone.
+          </DialogDescription>
         </DialogHeader>
-        <CustomProviderFields
-          displayName={editLabel}
-          baseUrl={editBaseUrl}
-          apiKey=""
-          customModels={manageModels}
-          disabled={busy}
-          showThinkingToggle
-          displayNameError={null}
-          baseUrlError={null}
-          modelsError={null}
-          onDisplayNameChange={onDisplayNameChange}
-          onBaseUrlChange={onBaseUrlChange}
-          onCustomModelsChange={onCustomModelsChange}
-        />
-        {dialogError ? (
-          <p className="text-sm text-destructive" role="alert">
-            {dialogError}
-          </p>
-        ) : null}
         <DialogFooter>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
+          <Button
+            disabled={busy}
+            onClick={() => onOpenChange(false)}
+            type="button"
+            variant="outline"
+          >
             Cancel
           </Button>
-          <Button type="button" disabled={busy} onClick={onSave}>
-            Save
+          <Button
+            disabled={busy}
+            onClick={onConfirm}
+            type="button"
+            variant="destructive"
+          >
+            {busy ? <Spinner className="size-4" /> : "Remove"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -161,199 +416,34 @@ export function ProviderCompatibleEditDialog({
   );
 }
 
-export function ProviderCompatibleManageDialog({
+export function ProviderManageModelsDialog({
   open,
   busy,
   dialogError,
-  instance,
-  manageModels,
   onOpenChange,
-  onCustomModelsChange,
   onSave,
+  children,
+  title = "Manage models",
 }: {
   open: boolean;
   busy: boolean;
   dialogError: string | null;
-  instance: ProviderInstanceSummary;
-  manageModels: ModelListRow[];
   onOpenChange: (open: boolean) => void;
-  onCustomModelsChange: (rows: ModelListRow[]) => void;
   onSave: () => void;
+  children: ReactNode;
+  title?: string;
 }) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(96vw,56rem)] sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>Manage models</DialogTitle>
-          <DialogDescription>Edit the shortlist available in chat for this provider.</DialogDescription>
-        </DialogHeader>
-        <CustomProviderFields
-          displayName={instance.label}
-          baseUrl={instance.baseUrl ?? ""}
-          apiKey=""
-          customModels={manageModels}
-          disabled={busy}
-          identityReadOnly
-          showThinkingToggle
-          displayNameError={null}
-          baseUrlError={null}
-          modelsError={null}
-          onDisplayNameChange={() => {}}
-          onBaseUrlChange={() => {}}
-          onCustomModelsChange={onCustomModelsChange}
-        />
-        {dialogError ? (
-          <p className="text-sm text-destructive" role="alert">
-            {dialogError}
-          </p>
-        ) : null}
-        <DialogFooter>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button type="button" disabled={busy} onClick={onSave}>
-            Save
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-export function ProviderOpenRouterManageDialog({
-  open,
-  busy,
-  dialogError,
-  manageModels,
-  onOpenChange,
-  onCustomModelsChange,
-  onSave,
-}: {
-  open: boolean;
-  busy: boolean;
-  dialogError: string | null;
-  manageModels: ModelListRow[];
-  onOpenChange: (open: boolean) => void;
-  onCustomModelsChange: (rows: ModelListRow[]) => void;
-  onSave: () => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(96vw,56rem)] sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>Manage models</DialogTitle>
-          <DialogDescription>Edit the shortlist available in chat for this provider.</DialogDescription>
-        </DialogHeader>
-        <OpenRouterProviderModelFields
-          customModels={manageModels}
-          disabled={busy}
-          modelsError={dialogError}
-          onCustomModelsChange={onCustomModelsChange}
-        />
-        <DialogFooter>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button type="button" disabled={busy} onClick={onSave}>
-            Save
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-export function ProviderCerebrasManageDialog({
-  open,
-  busy,
-  dialogError,
-  manageModels,
-  onOpenChange,
-  onCustomModelsChange,
-  onSave,
-}: {
-  open: boolean;
-  busy: boolean;
-  dialogError: string | null;
-  manageModels: ModelListRow[];
-  onOpenChange: (open: boolean) => void;
-  onCustomModelsChange: (rows: ModelListRow[]) => void;
-  onSave: () => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(96vw,56rem)] sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>Manage models</DialogTitle>
-          <DialogDescription>Edit the shortlist available in chat for this provider.</DialogDescription>
-        </DialogHeader>
-        <CerebrasProviderModelFields
-          customModels={manageModels}
-          disabled={busy}
-          modelsError={dialogError}
-          onCustomModelsChange={onCustomModelsChange}
-        />
-        <DialogFooter>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button type="button" disabled={busy} onClick={onSave}>
-            Save
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-export function ProviderCatalogManageDialog({
-  open,
-  busy,
-  dialogError,
-  providerType,
-  instanceId,
-  manageModels,
-  catalogModelsForType,
-  onOpenChange,
-  onCustomModelsChange,
-  onSave,
-}: {
-  open: boolean;
-  busy: boolean;
-  dialogError: string | null;
-  providerType: CatalogShortlistProvider;
-  instanceId: string;
-  manageModels: ModelListRow[];
-  catalogModelsForType: ProviderModelOption[];
-  onOpenChange: (open: boolean) => void;
-  onCustomModelsChange: (rows: ModelListRow[]) => void;
-  onSave: () => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(96vw,56rem)] sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>Manage models</DialogTitle>
-          <DialogDescription>Edit the shortlist available in chat for this provider.</DialogDescription>
-        </DialogHeader>
-        <CatalogProviderModelFields
-          provider={providerType}
-          providerInstanceId={instanceId}
-          customModels={manageModels}
-          catalogModels={catalogModelsForType}
-          disabled={busy}
-          modelsError={dialogError}
-          onCustomModelsChange={onCustomModelsChange}
-        />
-        <DialogFooter>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button type="button" disabled={busy} onClick={onSave}>
-            Save
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ProviderModelsDialogShell
+      busy={busy}
+      description="Edit the shortlist available in chat for this provider."
+      dialogError={dialogError}
+      onOpenChange={onOpenChange}
+      onSave={onSave}
+      open={open}
+      title={title}
+    >
+      {children}
+    </ProviderModelsDialogShell>
   );
 }

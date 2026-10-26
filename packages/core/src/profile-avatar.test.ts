@@ -1,7 +1,7 @@
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
 import {
   deleteProfileAvatar,
   getProfileAvatarPath,
@@ -11,6 +11,7 @@ import {
 } from "./profile-avatar";
 
 const originalConfigDir = process.env.NAKAMA_CONFIG_DIR;
+
 const ORG_ID = "org_test";
 
 const tinyPngBase64 =
@@ -20,10 +21,14 @@ describe("profile avatar", () => {
   let tempConfigDir = "";
 
   afterEach(async () => {
-    process.env.NAKAMA_CONFIG_DIR = originalConfigDir;
+    if (originalConfigDir === undefined) {
+      delete process.env.NAKAMA_CONFIG_DIR;
+    } else {
+      process.env.NAKAMA_CONFIG_DIR = originalConfigDir;
+    }
 
     if (tempConfigDir) {
-      await rm(tempConfigDir, { recursive: true, force: true });
+      await rm(tempConfigDir, { force: true, recursive: true });
       tempConfigDir = "";
     }
   });
@@ -37,12 +42,14 @@ describe("profile avatar", () => {
     expect(await hasProfileAvatar(ORG_ID, profileId)).toBe(false);
 
     await saveProfileAvatar(ORG_ID, profileId, {
-      mediaType: "image/png",
       data: tinyPngBase64,
+      mediaType: "image/png",
     });
 
     expect(await hasProfileAvatar(ORG_ID, profileId)).toBe(true);
-    expect(getProfileAvatarPath(ORG_ID, profileId, "image/png")).toEndWith("avatar.png");
+    expect(getProfileAvatarPath(ORG_ID, profileId, "image/png")).toEndWith(
+      "avatar.png"
+    );
 
     const avatar = await readProfileAvatar(ORG_ID, profileId);
 
@@ -61,17 +68,19 @@ describe("profile avatar", () => {
     const profileId = "profile_test";
 
     await saveProfileAvatar(ORG_ID, profileId, {
-      mediaType: "image/png",
       data: tinyPngBase64,
+      mediaType: "image/png",
     });
 
     await saveProfileAvatar(ORG_ID, profileId, {
-      mediaType: "image/jpeg",
       data: tinyPngBase64,
+      mediaType: "image/jpeg",
     });
 
     expect(await hasProfileAvatar(ORG_ID, profileId)).toBe(true);
-    expect(getProfileAvatarPath(ORG_ID, profileId, "image/jpeg")).toEndWith("avatar.jpg");
+    expect(getProfileAvatarPath(ORG_ID, profileId, "image/jpeg")).toEndWith(
+      "avatar.jpg"
+    );
 
     const avatar = await readProfileAvatar(ORG_ID, profileId);
     expect(avatar?.mediaType).toBe("image/jpeg");

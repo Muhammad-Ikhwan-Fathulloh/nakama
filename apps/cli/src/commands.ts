@@ -1,27 +1,31 @@
-import type { ModelsResponse, ProfileSummary, ProviderModelOption } from "@nakama/core";
+import uFuzzy from "@leeoniya/ufuzzy";
+import type {
+  ListUserOrgsResponse,
+  ModelsResponse,
+  ProfileSummary,
+  ProviderModelOption,
+} from "@nakama/core";
 
-export function parseModelCommandArg(raw: string): {
-  providerId: string | null;
-  modelId: string;
-} {
+export function parseModelCommandArg(raw: string) {
   const trimmed = raw.trim();
   const separator = trimmed.indexOf("::");
 
   if (separator > 0) {
     return {
-      providerId: trimmed.slice(0, separator),
       modelId: trimmed.slice(separator + 2),
+      providerId: trimmed.slice(0, separator),
     };
   }
 
-  return { providerId: null, modelId: trimmed };
+  return { modelId: trimmed, providerId: null };
 }
 
 export function resolveModelSwitchTarget(
   cached: ModelsResponse,
-  rawArg: string,
+  rawArg: string
 ): { providerId: string; modelId: string } | "unknown" | "ambiguous" {
-  const { providerId: explicitProviderId, modelId } = parseModelCommandArg(rawArg);
+  const { providerId: explicitProviderId, modelId } =
+    parseModelCommandArg(rawArg);
 
   if (!modelId) {
     return "unknown";
@@ -31,15 +35,17 @@ export function resolveModelSwitchTarget(
     const match = cached.models.find(
       (model) =>
         model.id === modelId &&
-        (model.providerId ?? model.provider) === explicitProviderId,
+        (model.providerId ?? model.provider) === explicitProviderId
     );
 
     if (match?.providerId) {
-      return { providerId: match.providerId, modelId };
+      return { modelId, providerId: match.providerId };
     }
 
-    if (cached.providers.some((provider) => provider.id === explicitProviderId)) {
-      return { providerId: explicitProviderId, modelId };
+    if (
+      cached.providers.some((provider) => provider.id === explicitProviderId)
+    ) {
+      return { modelId, providerId: explicitProviderId };
     }
 
     return "unknown";
@@ -48,21 +54,23 @@ export function resolveModelSwitchTarget(
   const matches = cached.models.filter((model) => model.id === modelId);
 
   if (matches.length === 1 && matches[0]!.providerId) {
-    return { providerId: matches[0]!.providerId, modelId };
+    return { modelId, providerId: matches[0]!.providerId };
   }
 
   if (matches.length > 1) {
-    const onCurrent = matches.find((model) => model.providerId === cached.currentProviderId);
+    const onCurrent = matches.find(
+      (model) => model.providerId === cached.currentProviderId
+    );
 
     if (onCurrent?.providerId) {
-      return { providerId: onCurrent.providerId, modelId };
+      return { modelId, providerId: onCurrent.providerId };
     }
 
     return "ambiguous";
   }
 
   if (cached.currentProviderId) {
-    return { providerId: cached.currentProviderId, modelId };
+    return { modelId, providerId: cached.currentProviderId };
   }
 
   return "unknown";
@@ -70,8 +78,8 @@ export function resolveModelSwitchTarget(
 
 export function effectiveModelState(
   profile: ProfileSummary,
-  models: ModelsResponse | null,
-): { modelId: string | null; providerId: string | null } {
+  models: ModelsResponse | null
+) {
   if (!profile.model?.trim()) {
     return { modelId: null, providerId: models?.currentProviderId ?? null };
   }
@@ -83,7 +91,7 @@ export function effectiveModelState(
   }
 
   if (providerId) {
-    return { providerId, modelId };
+    return { modelId, providerId };
   }
 
   const match = models?.models.find((model) => model.id === modelId);
@@ -94,9 +102,9 @@ export function effectiveModelState(
   };
 }
 
-export function isActiveModelOption(
+function isActiveModelOption(
   model: ProviderModelOption,
-  active: { modelId: string | null; providerId: string | null },
+  active: { modelId: string | null; providerId: string | null }
 ): boolean {
   if (!active.modelId || model.id !== active.modelId) {
     return false;
@@ -109,60 +117,83 @@ export function isActiveModelOption(
   return (model.providerId ?? model.provider) === active.providerId;
 }
 
-export function formatModelCommandArg(model: ProviderModelOption): string {
+function formatModelCommandArg(model: ProviderModelOption): string {
   return model.providerId ? `${model.providerId}::${model.id}` : model.id;
 }
 
 export interface SlashCommand {
-  name: string;
   description: string;
+  name: string;
 }
 
 export interface PromptSuggestion {
-  label: string;
   description: string;
   insertValue: string;
+  label: string;
+  submitOnEnter?: boolean;
 }
 
-export const SLASH_COMMANDS: SlashCommand[] = [
-  { name: "/help", description: "show commands" },
-  { name: "/paste", description: "attach image from clipboard" },
-  { name: "/clear", description: "clear history" },
-  { name: "/compact", description: "compact conversation history" },
-  { name: "/status", description: "show server and model status" },
-  { name: "/create", description: "draft an automation" },
-  { name: "/soul", description: "show or initialize profile soul files" },
-  { name: "/user", description: "show or initialize USER.md" },
-  { name: "/models", description: "choose a model" },
-  { name: "/model", description: "show or switch model" },
-  { name: "/thinking", description: "show or change extended thinking" },
-  { name: "/debug", description: "toggle layout debug overlay" },
-  { name: "/profile", description: "show or switch bot profile" },
-  { name: "/exit", description: "quit" },
+const SLASH_COMMANDS: SlashCommand[] = [
+  { description: "show commands", name: "/help" },
+  { description: "attach image from clipboard", name: "/paste" },
+  { description: "clear history", name: "/clear" },
+  { description: "compact conversation history", name: "/compact" },
+  { description: "show server and model status", name: "/status" },
+  { description: "draft an automation", name: "/create" },
+  { description: "distill a reusable skill from sources", name: "/learn" },
+  { description: "show or initialize profile soul files", name: "/soul" },
+  { description: "show or initialize USER.md", name: "/user" },
+  { description: "choose a model", name: "/model" },
+  { description: "show or change extended thinking", name: "/thinking" },
+  { description: "toggle layout debug overlay", name: "/debug" },
+  { description: "show or switch bot profile", name: "/profile" },
+  { description: "list or switch organizations", name: "/org" },
+  { description: "quit", name: "/exit" },
 ];
 
 const COMMANDS_WITH_ARGS = new Set([
+  "/org",
   "/model",
   "/thinking",
   "/profile",
   "/create",
+  "/learn",
   "/soul",
   "/user",
 ]);
 
+export function resolveSlashCommand(line: string): SlashCommand | null {
+  return (
+    SLASH_COMMANDS.find(
+      ({ name }) =>
+        line === name ||
+        (COMMANDS_WITH_ARGS.has(name) && line.startsWith(`${name} `))
+    ) ?? null
+  );
+}
+
+const commandSearch = new uFuzzy({
+  compare: () => 0,
+  intraIns: Number.POSITIVE_INFINITY,
+});
+
 export interface ResolveSuggestionsOptions {
+  currentModel?: string | null;
+  currentOrgId?: string | null;
+  currentProfileId?: string | null;
+  currentProviderId?: string | null;
   input: string;
   models?: ProviderModelOption[];
-  currentModel?: string | null;
-  currentProviderId?: string | null;
+  orgs?: ListUserOrgsResponse["orgs"];
   profiles?: ProfileSummary[];
-  currentProfileId?: string | null;
 }
 
 export function resolveSuggestions(
-  options: ResolveSuggestionsOptions,
+  options: ResolveSuggestionsOptions
 ): PromptSuggestion[] {
   const {
+    orgs = [],
+    currentOrgId = null,
     input,
     models = [],
     currentModel = null,
@@ -173,6 +204,25 @@ export function resolveSuggestions(
 
   if (!input.startsWith("/")) {
     return [];
+  }
+
+  const orgMatch = input.match(/^\/org(?:\s+(.*))?$/);
+
+  if (orgMatch) {
+    const query = (orgMatch[1] ?? "").trim().toLowerCase();
+
+    return orgs
+      .filter((org) =>
+        [org.id, org.slug, org.name].some((value) =>
+          value.toLowerCase().includes(query)
+        )
+      )
+      .map((org) => ({
+        description: `${org.slug}${org.id === currentOrgId ? " (current)" : ""}`,
+        insertValue: `/org ${org.id}`,
+        label: org.name,
+        submitOnEnter: orgMatch[1] === undefined ? undefined : true,
+      }));
   }
 
   const profileMatch = input.match(/^\/profile(?:\s+(.*))?$/);
@@ -200,9 +250,9 @@ export function resolveSuggestions(
           .join(", ");
 
         return {
-          label: profile.id,
-          description: `${profile.name}${markers ? ` (${markers})` : ""}`,
+          description: markers ? `(${markers})` : "",
           insertValue: `/profile ${profile.id}`,
+          label: profile.name,
         };
       });
   }
@@ -226,6 +276,7 @@ export function resolveSuggestions(
       })
       .map((model) => {
         const active = { modelId: currentModel, providerId: currentProviderId };
+
         const markers = [
           isActiveModelOption(model, active) ? "current" : null,
           model.default ? "default" : null,
@@ -234,9 +285,10 @@ export function resolveSuggestions(
           .join(", ");
 
         return {
-          label: model.id,
           description: `${model.name} [${model.providerLabel ?? model.provider}]${markers ? ` (${markers})` : ""}`,
           insertValue: `/model ${formatModelCommandArg(model)}`,
+          label: model.id,
+          submitOnEnter: modelMatch[1] === undefined ? undefined : true,
         };
       });
   }
@@ -245,58 +297,82 @@ export function resolveSuggestions(
 
   if (soulMatch) {
     const query = (soulMatch[1] ?? "").trim().toLowerCase();
-    const subcommands = [{ name: "init", description: "scaffold soul templates for current profile" }];
 
-    return subcommands
-      .filter((command) => !query || command.name.startsWith(query))
-      .map((command) => ({
-        label: command.name,
-        description: command.description,
-        insertValue: `/soul ${command.name}`,
-      }));
+    const subcommands = [
+      {
+        description: "scaffold soul templates for current profile",
+        name: "init",
+      },
+    ];
+
+    return subcommands.flatMap((command) =>
+      !query || command.name.startsWith(query)
+        ? [
+            {
+              description: command.description,
+              insertValue: `/soul ${command.name}`,
+              label: command.name,
+            },
+          ]
+        : []
+    );
   }
 
   const userMatch = input.match(/^\/user(?:\s+(.*))?$/);
 
   if (userMatch) {
     const query = (userMatch[1] ?? "").trim().toLowerCase();
-    const subcommands = [{ name: "init", description: "scaffold USER.md template" }];
 
-    return subcommands
-      .filter((command) => !query || command.name.startsWith(query))
-      .map((command) => ({
-        label: command.name,
-        description: command.description,
-        insertValue: `/user ${command.name}`,
-      }));
+    const subcommands = [
+      { description: "scaffold USER.md template", name: "init" },
+    ];
+
+    return subcommands.flatMap((command) =>
+      !query || command.name.startsWith(query)
+        ? [
+            {
+              description: command.description,
+              insertValue: `/user ${command.name}`,
+              label: command.name,
+            },
+          ]
+        : []
+    );
   }
 
   if (input.includes(" ")) {
     return [];
   }
 
-  const query = input.toLowerCase();
+  let commands = SLASH_COMMANDS;
 
-  return SLASH_COMMANDS.filter((command) => {
-    if (query === "/") {
-      return true;
-    }
+  if (input !== "/") {
+    const needle = input.slice(1).toLowerCase().replace(/[-_]/g, "");
 
-    return (
-      command.name.toLowerCase().startsWith(query) ||
-      command.description.toLowerCase().includes(query.slice(1))
+    const [indices, info, order] = commandSearch.search(
+      SLASH_COMMANDS.map((command) =>
+        command.name.slice(1).toLowerCase().replace(/[-_]/g, "")
+      ),
+      needle
     );
-  }).map((command) => ({
-    label: command.name,
+
+    const matches =
+      info && order ? order.map((index) => info.idx[index]) : indices;
+
+    commands = (matches ?? []).map((index) => SLASH_COMMANDS[index]);
+  }
+
+  return commands.map((command) => ({
     description: command.description,
     insertValue: COMMANDS_WITH_ARGS.has(command.name)
       ? `${command.name} `
       : command.name,
+    label: command.name,
   }));
 }
 
 export function formatSlashCommands(): string {
   return SLASH_COMMANDS.map(
-    (command) => `${command.name.padEnd(16)} ${command.description}`,
+    (command) => `${command.name.padEnd(16)} ${command.description}`
   ).join("\n");
 }

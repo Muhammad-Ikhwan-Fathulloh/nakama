@@ -1,43 +1,45 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { createHonoApp } from "./app";
-import { AuthService } from "../services/auth-service";
-import { OrgService } from "../services/org-service";
-import { AgentService } from "../services/agent-service";
+import {
+  getUserConfigPath,
+  readEnvValue,
+  readTextOrNull,
+  setManagedSecretResolver,
+} from "@nakama/core";
 import { createInMemoryDatabaseAdapter } from "@nakama/db";
+import { AgentService } from "../services/agent-service";
+import { ManagedSecrets } from "../services/managed-secrets";
+import { setupTestConfigDir } from "../test-config-dir";
+import { createMinimalHonoApp } from "./test-app-helpers";
 import { setupFreshInstallSession } from "./test-session-helpers";
 
+setupTestConfigDir("nakama-email-route-");
+
+afterEach(() => {
+  delete process.env.NAKAMA_EMAIL_PASSWORD;
+  setManagedSecretResolver(
+    async (_scope, _name, envNames) =>
+      envNames.map((name) => readEnvValue(process.env, name)).find(Boolean) ??
+      null
+  );
+});
+
 describe("email settings routes", () => {
-  let configDir = "";
-
-  afterEach(async () => {
-    if (configDir) {
-      await rm(configDir, { recursive: true, force: true });
-      configDir = "";
-    }
-
-    delete process.env.NAKAMA_CONFIG_DIR;
-  });
-
   test("org admin can read and update email settings without exposing password", async () => {
-    configDir = await mkdtemp(join(tmpdir(), "nakama-email-route-"));
-    process.env.NAKAMA_CONFIG_DIR = configDir;
-
     const databaseAdapter = createInMemoryDatabaseAdapter();
-    const authService = new AuthService();
-    const app = createHonoApp({
-      agent: new AgentService(null, null, databaseAdapter),
-      automationService: {} as any,
-      taskService: {} as any,
-      systemStatus: { getStatus: async () => ({ ok: true }) } as any,
-      workerManager: {} as any,
-      mcpService: {} as any,
-      authService,
-      orgService: new OrgService(databaseAdapter, authService),
+
+    const secrets = new ManagedSecrets(
       databaseAdapter,
-      webDistDir: null,
+      Buffer.alloc(32, 1).toString("base64")
+    );
+
+    setManagedSecretResolver(
+      async (scope, name, envNames) =>
+        (await secrets.resolve(scope, name, envNames)).value
+    );
+
+    const { app } = createMinimalHonoApp({
+      agent: new AgentService(null, null, databaseAdapter, undefined, secrets),
+      databaseAdapter,
     });
 
     const session = await setupFreshInstallSession(app, databaseAdapter);
@@ -45,55 +47,141 @@ describe("email settings routes", () => {
     const getEmpty = await app.fetch(
       new Request("http://localhost:4310/v1/settings/email", {
         headers: session.headers(),
-      }),
+      })
     );
+
     expect(getEmpty.status).toBe(200);
-    const emptyBody = (await getEmpty.json()) as Record<string, unknown>;
+    const emptyBody = await getEmpty.json();
     expect(emptyBody.configured).toBe(false);
     expect("password" in emptyBody).toBe(false);
 
     const putResponse = await app.fetch(
       new Request("http://localhost:4310/v1/settings/email", {
-        method: "PUT",
-        headers: session.headers({
-          "X-CSRF-Token": session.csrfToken,
-          "Content-Type": "application/json",
-        }),
         body: JSON.stringify({
+          from: "admin@example.com",
           imapHost: "imap.example.com",
           smtpHost: "smtp.example.com",
           username: "admin@example.com",
-          password: "secret-pass",
-          from: "admin@example.com",
         }),
-      }),
+        headers: session.headers({
+          "Content-Type": "application/json",
+          "X-CSRF-Token": session.csrfToken,
+        }),
+        method: "PUT",
+      })
     );
+
     expect(putResponse.status).toBe(200);
-    const saved = (await putResponse.json()) as { configured: boolean; passwordMasked: string | null };
-    expect(saved.configured).toBe(true);
+
+    const legacyPut = await app.fetch(
+      new Request("http://localhost:4310/v1/settings/email", {
+        body: JSON.stringify({ password: "should-not-save" }),
+        headers: session.headers({
+          "Content-Type": "application/json",
+          "X-CSRF-Token": session.csrfToken,
+        }),
+        method: "PUT",
+      })
+    );
+
+    expect(legacyPut.status).toBe(400);
+
+    const secretResponse = await app.fetch(
+      new Request("http://localhost:4310/v1/settings/email/secret", {
+        body: JSON.stringify({ password: "secret-pass" }),
+        headers: session.headers({
+          "Content-Type": "application/json",
+          "X-CSRF-Token": session.csrfToken,
+        }),
+        method: "PUT",
+      })
+    );
+
+    expect(secretResponse.status).toBe(200);
+
+    // SAFETY: The assertions below check the email settings response contract.
+    const saved = (await putResponse.json()) as {
+      configured: boolean;
+      passwordMasked: string | null;
+    };
+
+    expect(saved.configured).toBe(false);
+
     expect(saved.passwordMasked).not.toBe("secret-pass");
 
     const putWithoutPassword = await app.fetch(
       new Request("http://localhost:4310/v1/settings/email", {
-        method: "PUT",
-        headers: session.headers({
-          "X-CSRF-Token": session.csrfToken,
-          "Content-Type": "application/json",
-        }),
         body: JSON.stringify({
           smtpHost: "smtp2.example.com",
         }),
-      }),
+        headers: session.headers({
+          "Content-Type": "application/json",
+          "X-CSRF-Token": session.csrfToken,
+        }),
+        method: "PUT",
+      })
     );
+
     expect(putWithoutPassword.status).toBe(200);
 
     const getSaved = await app.fetch(
       new Request("http://localhost:4310/v1/settings/email", {
         headers: session.headers(),
-      }),
+      })
     );
-    const savedBody = (await getSaved.json()) as { smtpHost: string | null; passwordMasked: string | null };
+
+    // SAFETY: The test checks this response against the endpoint contract asserted below.
+    const savedBody = (await getSaved.json()) as {
+      smtpHost: string | null;
+      passwordMasked: string | null;
+      configured: boolean;
+      source: string;
+    };
+
     expect(savedBody.smtpHost).toBe("smtp2.example.com");
-    expect(savedBody.passwordMasked).toBeTruthy();
+    expect(savedBody.passwordMasked).toBeNull();
+    expect(savedBody.configured).toBe(true);
+    expect(savedBody.source).toBe("settings");
+    expect(await readTextOrNull(getUserConfigPath())).not.toContain(
+      "secret-pass"
+    );
+
+    const authHeaders = session.headers({ "X-CSRF-Token": session.csrfToken });
+    process.env.NAKAMA_EMAIL_PASSWORD = "override";
+
+    const overridden = await app.fetch(
+      new Request("http://localhost:4310/v1/settings/email", {
+        headers: session.headers(),
+      })
+    );
+
+    expect((await overridden.json()).source).toBe("environment");
+    delete process.env.NAKAMA_EMAIL_PASSWORD;
+
+    const fallback = await app.fetch(
+      new Request("http://localhost:4310/v1/settings/email", {
+        headers: session.headers(),
+      })
+    );
+
+    expect((await fallback.json()).source).toBe("settings");
+
+    const selected = await app.fetch(
+      new Request("http://localhost:4310/v1/settings/email/secret/use-stored", {
+        headers: authHeaders,
+        method: "POST",
+      })
+    );
+
+    expect((await selected.json()).source).toBe("settings");
+
+    const cleared = await app.fetch(
+      new Request("http://localhost:4310/v1/settings/email/secret", {
+        headers: authHeaders,
+        method: "DELETE",
+      })
+    );
+
+    expect((await cleared.json()).source).toBe("missing");
   });
 });

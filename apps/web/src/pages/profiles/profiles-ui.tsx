@@ -1,51 +1,34 @@
 import type { ProfileSummary } from "@nakama/core/contract";
-import { PlusIcon, SearchIcon, UsersRoundIcon, XIcon, CameraIcon } from "lucide-react";
-import type { ReactNode } from "react";
-import { ProfileAvatar } from "@/components/ProfileAvatar";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
-import { cn } from "@/lib/utils";
+import { Button } from "@nakama/ui/button";
+import { ConfirmDialog } from "@nakama/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@nakama/ui/popover";
+import { Spinner } from "@nakama/ui/spinner";
+import { cn } from "@nakama/ui/utils";
 import {
-  profileSidebarDescription,
+  Add01Icon,
+  Camera01Icon,
+  Delete02Icon,
+  DiceFaces05Icon,
+  Undo02Icon,
+  Upload04Icon,
+  UserGroup02Icon,
+} from "hugeicons-react";
+import { type ReactNode, useState } from "react";
+import {
+  isMoodstoneAvatar,
+  moodstoneIndexes,
+  moodstoneSvg,
+} from "@/components/moodstone";
+import {
+  moodstoneAvatars,
+  moodstoneColors,
+} from "@/components/moodstone-avatars";
+import { ProfileAvatar } from "@/components/ProfileAvatar";
+import {
+  type ProfileSaveStatus,
   profilesTagline,
   sectionClass,
-  type ProfileSaveStatus,
 } from "@/pages/profiles/profiles-page.shared";
-
-export function ProfileDetailTabButton({
-  id,
-  active,
-  controls,
-  onSelect,
-  children,
-}: {
-  id: string;
-  active: boolean;
-  controls: string;
-  onSelect: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      id={id}
-      role="tab"
-      aria-selected={active}
-      aria-controls={controls}
-      data-active={active || undefined}
-      className={cn(
-        "relative -mb-px inline-flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors sm:px-4",
-        active
-          ? "border-foreground text-foreground"
-          : "border-transparent text-muted-foreground hover:text-foreground",
-      )}
-      onClick={onSelect}
-    >
-      {children}
-    </button>
-  );
-}
 
 export function ProfileSaveIndicator({
   saveStatus,
@@ -62,7 +45,9 @@ export function ProfileSaveIndicator({
 
   if (nameMissing) {
     content = (
-      <span className="font-medium text-amber-700 dark:text-amber-300">Name is required</span>
+      <span className="font-medium text-amber-700 dark:text-amber-300">
+        Name is required
+      </span>
     );
   } else if (saveStatus === "pending" || saveStatus === "saving") {
     content = (
@@ -90,7 +75,37 @@ export function ProfileSaveIndicator({
     );
   }
 
-  return <p className="mt-2 text-xs text-muted-foreground">{content}</p>;
+  return <p className="mt-2 text-muted-foreground text-xs">{content}</p>;
+}
+
+function ProfileAvatarOverlay({
+  round,
+  size,
+  uploading,
+}: {
+  round: boolean;
+  size: "xs" | "sm" | "md" | "ml" | "lg";
+  uploading: boolean;
+}) {
+  const overlayIconClass = size === "lg" ? "size-5" : "size-4";
+
+  return (
+    <span
+      className={cn(
+        "absolute inset-0 flex items-center justify-center bg-foreground/50 opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100 group-focus-visible:opacity-100",
+        round && "rounded-full"
+      )}
+    >
+      {uploading ? (
+        <Spinner className={cn(overlayIconClass, "text-primary-foreground")} />
+      ) : (
+        <Camera01Icon
+          aria-hidden
+          className={cn(overlayIconClass, "text-primary-foreground")}
+        />
+      )}
+    </span>
+  );
 }
 
 export function EditableProfileAvatar({
@@ -98,276 +113,348 @@ export function EditableProfileAvatar({
   disabled,
   uploading,
   onPick,
+  onPreset,
+  onRemove,
   size = "md",
+  avatarClassName,
 }: {
+  avatarClassName?: string;
   profile: ProfileSummary;
   disabled: boolean;
   uploading: boolean;
   onPick: () => void;
+  onPreset: (svg: string) => Promise<void>;
+  onRemove?: () => Promise<void>;
   size?: "xs" | "sm" | "md" | "ml" | "lg";
 }) {
-  const overlayIconClass = size === "lg" ? "size-5" : "size-4";
+  const [open, setOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const square = isMoodstoneAvatar(profile);
 
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onPick}
-      aria-label="Change profile image"
-      className="group relative shrink-0 rounded-full disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      <ProfileAvatar profile={profile} size={size} />
-      <span className="absolute inset-0 flex items-center justify-center rounded-full bg-foreground/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
-        {uploading ? (
-          <Spinner className={cn(overlayIconClass, "text-primary-foreground")} />
-        ) : (
-          <CameraIcon className={cn(overlayIconClass, "text-primary-foreground")} aria-hidden />
-        )}
-      </span>
-    </button>
+  const [colorIndex, setColorIndex] = useState(
+    () => moodstoneIndexes(profile.id || profile.name || "?").colorIndex
   );
-}
 
-export function ProfileScopeButton({
-  profile,
-  active,
-  disabled,
-  onClick,
-}: {
-  profile: ProfileSummary;
-  active: boolean;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        "flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left transition-colors disabled:cursor-not-allowed",
-        disabled && "opacity-50",
-        active
-          ? "bg-primary/10 text-foreground"
-          : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
-      )}
-    >
-      <ProfileAvatar profile={profile} size="sm" />
-      <span className="min-w-0 space-y-0.5">
-        <span className="block truncate text-sm font-medium leading-tight">{profile.name}</span>
-        <span className="block truncate text-xs leading-snug text-muted-foreground">
-          {profileSidebarDescription(profile)}
-        </span>
-      </span>
-    </button>
+  const [previewAvatarIndex, setPreviewAvatarIndex] = useState<number | null>(
+    null
   );
-}
 
-export function ProfileSearch({
-  value,
-  disabled,
-  isSearching,
-  onChange,
-  onClear,
-}: {
-  value: string;
-  disabled: boolean;
-  isSearching: boolean;
-  onChange: (value: string) => void;
-  onClear: () => void;
-}) {
   return (
-    <div className="relative">
-      <SearchIcon
-        className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-        aria-hidden
-      />
-      <Input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder="Search…"
-        disabled={disabled}
-        className={cn("pl-9", isSearching && "pr-9")}
-        aria-label="Search profiles"
-      />
-      {isSearching ? (
-        <button
-          type="button"
-          aria-label="Clear search"
-          className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-          onClick={onClear}
+    <>
+      <Popover
+        onOpenChange={(nextOpen) => {
+          setOpen(nextOpen);
+          setPreviewAvatarIndex(null);
+        }}
+        open={open}
+      >
+        <PopoverTrigger
+          aria-label="Change profile image"
+          className={cn(
+            "group relative shrink-0 transition-transform duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:not-disabled:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-50",
+            square ? "rounded-none" : "rounded-full"
+          )}
+          disabled={disabled}
         >
-          <XIcon className="size-4" />
-        </button>
+          <ProfileAvatar
+            className={avatarClassName}
+            profile={profile}
+            size={size}
+            squareMoodstone
+          />
+          <ProfileAvatarOverlay
+            round={!square}
+            size={size}
+            uploading={uploading}
+          />
+        </PopoverTrigger>
+        <PopoverContent
+          align="center"
+          className="flex w-68 min-w-0 flex-col gap-0.5 p-1.5"
+        >
+          <div
+            className="relative mb-1 flex h-33 items-center justify-center rounded-lg transition-colors duration-150 ease-out"
+            style={{ backgroundColor: `${moodstoneColors[colorIndex].lit}4d` }}
+          >
+            {previewAvatarIndex === null ? (
+              <ProfileAvatar
+                active
+                className="size-20 rounded-none outline-none"
+                profile={profile}
+                size="lg"
+              />
+            ) : (
+              <img
+                alt="Avatar preview"
+                className="size-20"
+                height={80}
+                src={`data:image/svg+xml,${encodeURIComponent(
+                  moodstoneSvg(
+                    previewAvatarIndex,
+                    colorIndex,
+                    !window.matchMedia("(prefers-reduced-motion: reduce)")
+                      .matches
+                  )
+                )}`}
+                width={80}
+              />
+            )}
+            {previewAvatarIndex === null ? null : (
+              <Button
+                aria-label="Undo"
+                className="absolute top-2 left-2 bg-background/85 shadow-xs"
+                onClick={() => setPreviewAvatarIndex(null)}
+                size="icon"
+                variant="ghost"
+              >
+                <Undo02Icon aria-hidden />
+              </Button>
+            )}
+            <Button
+              aria-label="Shuffle"
+              className="absolute top-2 right-2 bg-background/85 shadow-xs"
+              onClick={() => {
+                setPreviewAvatarIndex(
+                  Math.floor(Math.random() * moodstoneAvatars.length)
+                );
+                setColorIndex(
+                  Math.floor(Math.random() * moodstoneColors.length)
+                );
+              }}
+              size="icon"
+              variant="ghost"
+            >
+              <DiceFaces05Icon aria-hidden />
+            </Button>
+          </div>
+          <div className="grid grid-cols-7 gap-0.5 px-1.5 pt-0.5 pb-1">
+            {moodstoneAvatars.map((avatar, avatarIndex) => (
+              <button
+                aria-label={`Preview ${avatar.cut} avatar`}
+                aria-pressed={avatarIndex === previewAvatarIndex}
+                className={cn(
+                  "flex h-9 cursor-pointer items-center justify-center rounded-lg transition-colors duration-150 ease-out hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                  avatarIndex === previewAvatarIndex &&
+                    "bg-muted ring-[1.5px] ring-foreground ring-inset"
+                )}
+                key={avatar.cut}
+                onClick={() => setPreviewAvatarIndex(avatarIndex)}
+                type="button"
+              >
+                <img
+                  alt=""
+                  className="size-7"
+                  height={28}
+                  src={`data:image/svg+xml,${encodeURIComponent(
+                    moodstoneSvg(avatarIndex, colorIndex)
+                  )}`}
+                  width={28}
+                />
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-12 justify-items-center gap-0.5 px-2 pt-1 pb-2">
+            {moodstoneColors.map((color, index) => (
+              <button
+                aria-label={`${color.name} color`}
+                aria-pressed={index === colorIndex}
+                className={cn(
+                  "size-4 cursor-pointer rounded-full outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring",
+                  index === colorIndex && "outline-2 outline-foreground"
+                )}
+                key={color.name}
+                onClick={() => setColorIndex(index)}
+                style={{
+                  background: `linear-gradient(135deg, ${color.lit}, ${color.shade})`,
+                }}
+                type="button"
+              />
+            ))}
+          </div>
+          {previewAvatarIndex === null ? null : (
+            <Button
+              className="mb-1"
+              onClick={() => {
+                setPreviewAvatarIndex(null);
+                setOpen(false);
+                void onPreset(moodstoneSvg(previewAvatarIndex, colorIndex));
+              }}
+              size="lg"
+            >
+              Apply
+            </Button>
+          )}
+          <div className="-mx-1.5 my-0.5 h-px bg-border" />
+          <Button
+            className="justify-start gap-2.5 font-normal"
+            onClick={() => {
+              setOpen(false);
+              onPick();
+            }}
+            size="lg"
+            variant="ghost"
+          >
+            <Upload04Icon aria-hidden className="text-muted-foreground" />
+            Upload image…
+          </Button>
+          {profile.hasAvatar && onRemove ? (
+            <Button
+              className="justify-start gap-2.5 font-normal text-destructive hover:text-destructive"
+              onClick={() => {
+                setOpen(false);
+                setRemoveOpen(true);
+              }}
+              size="lg"
+              variant="ghost"
+            >
+              <Delete02Icon aria-hidden />
+              Remove image
+            </Button>
+          ) : null}
+        </PopoverContent>
+      </Popover>
+      {removeOpen && onRemove ? (
+        <ConfirmDialog
+          confirmLabel="Remove"
+          description={`Remove the profile image for "${profile.name}"?`}
+          onClose={() => setRemoveOpen(false)}
+          onConfirm={onRemove}
+          title="Remove profile image?"
+        />
       ) : null}
-    </div>
+    </>
   );
 }
 
 const profileEmptySteps = [
   {
-    title: "Create a profile",
     description: "Give it a name, avatar, and system prompt.",
+    title: "Create a profile",
   },
   {
-    title: "Assign tools",
     description: "Control which capabilities this bot can use.",
+    title: "Assign tools",
   },
   {
-    title: "Customize soul & knowledge",
     description: "Set voice, identity, and documents per profile.",
+    title: "Customize soul & knowledge",
   },
 ] as const;
 
 export function ProfilesEmptyState({
-  variant,
   disabled,
+  canCreate = true,
+  canImport = false,
   onCreate,
-  onAskSuperBot,
+  onImport,
+  onAskSuperNakama,
 }: {
-  variant: "compact" | "full";
   disabled?: boolean;
+  canCreate?: boolean;
+  canImport?: boolean;
   onCreate: () => void;
-  onAskSuperBot?: () => void;
+  onImport?: () => void;
+  onAskSuperNakama?: () => void;
 }) {
-  const isCompact = variant === "compact";
+  const importIsPrimary = canImport && !canCreate;
 
   return (
     <div
-      role="status"
       aria-labelledby="profiles-empty-title"
-      className={cn(
-        "text-center",
-        isCompact
-          ? "flex flex-col items-center gap-3 rounded-md border border-dashed border-border/80 bg-muted/20 px-3 py-6"
-          : "flex min-h-[min(20rem,50dvh)] flex-col items-center justify-center gap-6 px-4 py-10 sm:px-6",
-      )}
+      className="flex min-h-[min(20rem,50dvh)] flex-col items-center justify-center gap-6 px-4 py-10 text-center sm:px-6"
+      role="status"
     >
-      <div
-        className={cn(
-          "flex shrink-0 items-center justify-center border border-border bg-muted/40",
-          isCompact ? "size-10 rounded-full" : "size-14 rounded-2xl",
-        )}
-      >
-        <UsersRoundIcon
-          className={cn("text-muted-foreground", isCompact ? "size-4" : "size-6")}
-          aria-hidden
-        />
+      <div className="flex size-14 shrink-0 items-center justify-center rounded-2xl border border-border bg-muted/40">
+        <UserGroup02Icon aria-hidden className="size-6 text-muted-foreground" />
       </div>
 
-      <div className={cn("space-y-1.5", !isCompact && "max-w-sm")}>
+      <div className="max-w-sm space-y-1.5">
         <p
+          className="type-section-title font-medium text-foreground"
           id="profiles-empty-title"
-          className={cn(
-            "font-medium text-foreground",
-            isCompact ? "text-sm" : "type-section-title",
-          )}
         >
-          {isCompact ? "No profiles yet" : "Create your first profile"}
+          {importIsPrimary ? "Import a profile" : "Create your first profile"}
         </p>
-        {!isCompact ? (
-          <p className="type-body text-sm text-muted-foreground">{profilesTagline}</p>
-        ) : null}
+        <p className="type-body text-muted-foreground text-sm">
+          {profilesTagline}
+        </p>
       </div>
 
       <div className="flex flex-col items-center gap-2">
-        <Button type="button" size={isCompact ? "sm" : "default"} disabled={disabled} onClick={onCreate}>
-          <PlusIcon className="size-4" aria-hidden />
-          {isCompact ? "Create profile" : "New profile"}
-        </Button>
-        {onAskSuperBot ? (
+        {canCreate ? (
+          <Button disabled={disabled} onClick={onCreate} type="button">
+            <Add01Icon aria-hidden className="size-4" />
+            New profile
+          </Button>
+        ) : null}
+        {canImport && onImport ? (
           <Button
+            disabled={disabled}
+            onClick={onImport}
+            type="button"
+            variant={importIsPrimary ? "default" : "outline"}
+          >
+            <Upload04Icon aria-hidden className="size-4" />
+            Import profile
+          </Button>
+        ) : null}
+        {onAskSuperNakama ? (
+          <Button
+            disabled={disabled}
+            onClick={onAskSuperNakama}
+            size="sm"
             type="button"
             variant="ghost"
-            size="sm"
-            disabled={disabled}
-            onClick={onAskSuperBot}
           >
-            Ask Super Bot
+            Ask Super Nakama
           </Button>
         ) : null}
       </div>
 
-      {!isCompact ? (
-        <ol className="w-full max-w-md space-y-3 border-t border-border pt-6 text-left">
-          {profileEmptySteps.map((step, index) => (
-            <li key={step.title} className="flex gap-3">
-              <span
-                className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium tabular-nums text-muted-foreground"
-                aria-hidden
-              >
-                {index + 1}
-              </span>
-              <div className="min-w-0 pt-0.5">
-                <p className="text-sm font-medium text-foreground">{step.title}</p>
-                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                  {step.description}
-                </p>
-              </div>
-            </li>
-          ))}
-        </ol>
-      ) : null}
+      <ol className="w-full max-w-md space-y-3 border-border border-t pt-6 text-left">
+        {profileEmptySteps.map((step, index) => (
+          <li className="flex gap-3" key={step.title}>
+            <span
+              aria-hidden
+              className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted font-medium text-muted-foreground text-xs tabular-nums"
+            >
+              {index + 1}
+            </span>
+            <div className="min-w-0 pt-0.5">
+              <p className="font-medium text-foreground text-sm">
+                {step.title}
+              </p>
+              <p className="mt-0.5 text-muted-foreground text-xs leading-relaxed">
+                {step.description}
+              </p>
+            </div>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
 
-export function EmptyMessage({
+export function PageState({
   message,
-  actionLabel,
-  onAction,
+  embedded = false,
 }: {
   message: string;
-  actionLabel?: string;
-  onAction?: () => void;
+  embedded?: boolean;
 }) {
-  return (
-    <div className="rounded-md border border-dashed border-border/60 px-3 py-8 text-center" role="status">
-      <p className="type-body text-xs text-muted-foreground">{message}</p>
-      {actionLabel && onAction ? (
-        <Button type="button" variant="link" className="mt-2 h-auto p-0" onClick={onAction}>
-          {actionLabel}
-        </Button>
-      ) : null}
-    </div>
-  );
-}
-
-export function PageState({ message, embedded = false }: { message: string; embedded?: boolean }) {
   return (
     <div
       className={cn(
         embedded
-          ? "flex min-h-48 flex-col items-center justify-center gap-3 text-sm text-muted-foreground"
+          ? "flex min-h-48 flex-col items-center justify-center gap-3 text-muted-foreground text-sm"
           : cn(
               sectionClass,
-              "flex min-h-64 flex-col items-center justify-center gap-3 p-8 text-sm text-muted-foreground",
-            ),
+              "flex min-h-64 flex-col items-center justify-center gap-3 p-8 text-muted-foreground text-sm"
+            )
       )}
     >
       <Spinner className="size-5" />
       {message}
-    </div>
-  );
-}
-
-export function Field({
-  label,
-  htmlFor,
-  children,
-  className,
-}: {
-  label: string;
-  htmlFor?: string;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
-      <label className="text-xs text-muted-foreground" htmlFor={htmlFor}>
-        {label}
-      </label>
-      {children}
     </div>
   );
 }

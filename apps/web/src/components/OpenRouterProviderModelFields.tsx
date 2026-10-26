@@ -1,20 +1,25 @@
-import { useState } from "react";
+import type { OpenRouterRoutingSettings } from "@nakama/core/contract";
+import { FormField } from "@nakama/ui/form-field";
 import {
-  ModelListEditor,
-  type ModelListRow,
-} from "@/components/ModelListEditor";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@nakama/ui/select";
+import { BrowsableModelFields } from "@/components/BrowsableModelFields";
+import type { ModelListRow } from "@/components/ModelListEditor";
 import { OpenRouterModelsBrowseList } from "@/components/OpenRouterModelsBrowseList";
-import { Button } from "@/components/ui/button";
-import { FormField } from "@/components/ui/form-field";
 import type { OpenRouterModelRow } from "@/lib/openrouter-models";
 
 interface OpenRouterProviderModelFieldsProps {
   customModels: ModelListRow[];
-  disabled?: boolean;
   density?: "default" | "compact";
+  disabled?: boolean;
   modelsError?: string | null;
   onCustomModelsChange: (models: ModelListRow[]) => void;
-  onBrowseModelAdded?: (row: OpenRouterModelRow) => void;
+  onRoutingChange: (routing: OpenRouterRoutingSettings) => void;
+  routing: OpenRouterRoutingSettings;
 }
 
 export function OpenRouterProviderModelFields({
@@ -23,80 +28,141 @@ export function OpenRouterProviderModelFields({
   density = "default",
   modelsError,
   onCustomModelsChange,
-  onBrowseModelAdded,
+  onRoutingChange,
+  routing,
 }: OpenRouterProviderModelFieldsProps) {
-  const [isBrowsing, setIsBrowsing] = useState(false);
-
-  const handleBrowseSelect = (row: OpenRouterModelRow) => {
-    const nextModel: ModelListRow = {
-      id: row.id,
-      name: row.name,
-      supportsThinking: row.reasoning,
-      ...(row.inputPerMillionUsd !== undefined
-        ? { inputPerMillionUsd: row.inputPerMillionUsd }
-        : {}),
-      ...(row.outputPerMillionUsd !== undefined
-        ? { outputPerMillionUsd: row.outputPerMillionUsd }
-        : {}),
-    };
-
-    if (customModels.some((model) => model.id === nextModel.id)) {
-      setIsBrowsing(false);
-      return;
-    }
-
-    onCustomModelsChange([...customModels, nextModel]);
-    onBrowseModelAdded?.(row);
-    setIsBrowsing(false);
-  };
-
   return (
-    <FormField
-      id="openrouter-provider-models"
-      label="Models"
-      density={density}
-      footer={
-        modelsError ? (
-          <p className="text-sm text-destructive" role="alert">
-            {modelsError}
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            Add models by ID or browse OpenRouter. Pricing from browse is saved for usage cost on
-            the Status page.
-          </p>
-        )
-      }
-    >
-      {isBrowsing ? (
-        <div className="space-y-2">
-          <OpenRouterModelsBrowseList
-            onSelect={handleBrowseSelect}
-            className="h-72 rounded-md border border-border"
-          />
-          <div className="flex justify-end">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
+    <div className="space-y-4">
+      <fieldset className="space-y-3" disabled={disabled}>
+        <legend className="font-medium text-sm">OpenRouter routing</legend>
+        {(
+          [
+            [
+              "zdr",
+              "Zero data retention (ZDR)",
+              "Enforce",
+              "No request-level enforcement",
+            ],
+            [
+              "requireParameters",
+              "Require all parameters",
+              "Require",
+              "Do not require",
+            ],
+          ] as const
+        ).map(([key, label, enabled, disabledLabel]) => (
+          <FormField
+            density={density}
+            id={`openrouter-${key}`}
+            key={key}
+            label={label}
+          >
+            <Select
               disabled={disabled}
-              onClick={() => setIsBrowsing(false)}
+              onValueChange={(value) =>
+                onRoutingChange({
+                  ...routing,
+                  [key]: value === "unset" ? undefined : value === "true",
+                })
+              }
+              value={
+                routing[key] === undefined ? "unset" : String(routing[key])
+              }
             >
-              Back
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <ModelListEditor
-          models={customModels}
-          disabled={disabled}
-          showPricing
-          showThinkingToggle
-          browseLabel="Browse OpenRouter"
-          onBrowse={() => setIsBrowsing(true)}
-          onChange={onCustomModelsChange}
-        />
-      )}
-    </FormField>
+              <SelectTrigger className="w-full" id={`openrouter-${key}`}>
+                <SelectValue>
+                  {routing[key] === undefined
+                    ? "Default (not sent)"
+                    : routing[key]
+                      ? enabled
+                      : disabledLabel}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unset">Default (not sent)</SelectItem>
+                <SelectItem value="true">{enabled}</SelectItem>
+                <SelectItem value="false">{disabledLabel}</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
+        ))}
+        <FormField
+          density={density}
+          id="openrouter-data-collection"
+          label="Data collection policy"
+        >
+          <Select
+            disabled={disabled}
+            onValueChange={(value) =>
+              onRoutingChange({
+                ...routing,
+                dataCollection:
+                  value === "allow" || value === "deny" ? value : undefined,
+              })
+            }
+            value={routing.dataCollection ?? "unset"}
+          >
+            <SelectTrigger className="w-full" id="openrouter-data-collection">
+              <SelectValue>
+                {routing.dataCollection === "deny"
+                  ? "Deny"
+                  : routing.dataCollection === "allow"
+                    ? "Allow"
+                    : "Default (not sent)"}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unset">Default (not sent)</SelectItem>
+              <SelectItem value="deny">Deny</SelectItem>
+              <SelectItem value="allow">Allow</SelectItem>
+            </SelectContent>
+          </Select>
+        </FormField>
+        <p className="text-muted-foreground text-xs">
+          Applies only to this provider’s dedicated OpenRouter model requests.
+          Request settings cannot loosen account or guardrail ZDR enforcement.
+          These policies do not cover plugins, web tools, application logs, or
+          external coding agents. Stricter routing can fail when no eligible
+          endpoint supports the request.
+        </p>
+      </fieldset>
+      <BrowsableModelFields
+        browseLabel="Browse OpenRouter"
+        customModels={customModels}
+        density={density}
+        disabled={disabled}
+        fieldId="openrouter-provider-models"
+        modelsError={modelsError}
+        onCustomModelsChange={onCustomModelsChange}
+        renderBrowse={({ multiSelect, onAddMany, onSelect }) => (
+          <OpenRouterModelsBrowseList
+            className="h-72 rounded-md border border-border"
+            multiSelect={multiSelect}
+            onAddMany={onAddMany}
+            onSelect={onSelect}
+          />
+        )}
+        showThinking
+        showVision
+        toModelRow={(row: OpenRouterModelRow) => {
+          const model: ModelListRow = {
+            id: row.id,
+            name: row.name,
+            supportsThinking: row.reasoning,
+            supportsVision: row.vision,
+          };
+
+          if (row.inputPerMillionUsd !== undefined) {
+            model.inputPerMillionUsd = row.inputPerMillionUsd;
+          }
+
+          if (row.outputPerMillionUsd !== undefined) {
+            model.outputPerMillionUsd = row.outputPerMillionUsd;
+          }
+
+          return model;
+        }}
+      />
+    </div>
   );
 }

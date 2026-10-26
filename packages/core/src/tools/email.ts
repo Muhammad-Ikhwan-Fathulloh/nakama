@@ -1,75 +1,57 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../contract";
+import type { JsonSchema, ToolContext, ToolDefinition } from "../contract";
 import {
-  emailConfigToMailboxConfig,
   isEmailConfigComplete,
   loadEmailConfig,
+  toMailboxConfig,
 } from "../email-config";
+import {
+  createAttachmentReference,
+  getMailboxIdentity,
+} from "../mail/attachment-reference";
 import { createFakeMailReader, createFakeMailSender } from "../mail/fake";
 import { createImapReader } from "../mail/imap-reader";
-import { createSmtpSender } from "../mail/smtp-sender";
 import { sanitizeMailError } from "../mail/sanitize";
-import type { MailReader, MailSender } from "../mail/types";
+import { createSmtpSender } from "../mail/smtp-sender";
+import type { MailMessage, MailReader, MailSender } from "../mail/types";
 import { MAX_EMAIL_BODY_BYTES } from "../mail/types";
-import { jsonSchemaFromZod, parseToolInput } from "./schema";
+import { parseToolInput } from "./schema";
 
 const EMAIL_ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const folderSchema = z.preprocess(
-  (value) => (typeof value === "string" && value.trim() ? value.trim() : undefined),
-  z.string().optional().default("INBOX"),
-);
+const folderSchema = z.string().trim().min(1).catch("INBOX").default("INBOX");
 
-const limitSchema = z.preprocess(
-  (value) => {
-    if (value === undefined) {
-      return 20;
-    }
-    if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-      return 20;
-    }
-    return Math.min(value, 100);
-  },
-  z.number().int().positive().max(100),
-);
+const limitSchema = z.number().int().positive().max(100).catch(20).default(20);
 
-const emailListInputSchema = z
-  .object({
-    action: z.literal("list"),
-    folder: folderSchema,
-    limit: limitSchema,
-  })
-  .strict();
+const emailListInputSchema = z.object({
+  action: z.literal("list"),
+  folder: folderSchema,
+  limit: limitSchema,
+});
 
-const emailReadInputSchema = z
-  .object({
-    action: z.literal("read"),
-    folder: folderSchema,
-    uid: z
-      .number({ error: "uid is required." })
-      .int()
-      .positive({ error: "uid must be a positive integer." }),
-  })
-  .strict();
+const emailReadInputSchema = z.object({
+  action: z.literal("read"),
+  folder: folderSchema,
+  uid: z
+    .number({ error: "uid is required." })
+    .int()
+    .positive({ error: "uid must be a positive integer." }),
+});
 
-const emailSearchInputSchema = z
-  .object({
-    action: z.literal("search"),
-    folder: folderSchema,
-    query: z.string({ error: "query is required." }).trim().min(1),
-    limit: limitSchema,
-  })
-  .strict();
+const emailSearchInputSchema = z.object({
+  action: z.literal("search"),
+  folder: folderSchema,
+  limit: limitSchema,
+  query: z.string({ error: "query is required." }).trim().min(1),
+});
 
-const emailSendInputSchema = z
-  .object({
-    action: z.literal("send"),
-    to: z.string({ error: "to is required." }).trim().min(1),
-    subject: z.string({ error: "subject is required." }).trim().min(1),
-    text: z.string({ error: "text is required." }).trim().min(1),
-    html: z.string().trim().min(1).optional(),
-  })
-  .strict();
+const emailSendInputSchema = z.object({
+  action: z.literal("send"),
+  html: z.string().trim().min(1).optional(),
+  subject: z.string({ error: "subject is required." }).trim().min(1),
+  text: z.string({ error: "text is required." }).trim().min(1),
+  to: z.string({ error: "to is required." }).trim().min(1),
+});
 
 export const emailInputSchema = z.discriminatedUnion("action", [
   emailListInputSchema,
@@ -79,21 +61,64 @@ export const emailInputSchema = z.discriminatedUnion("action", [
 ]);
 
 export type EmailAction = z.infer<typeof emailInputSchema>["action"];
-export type EmailToolInput = z.infer<typeof emailInputSchema>;
 
-export function emailParameters() {
-  return jsonSchemaFromZod(emailInputSchema);
+export type EmailToolInput = z.input<typeof emailInputSchema>;
+
+/**
+ * OpenAI (and several OpenAI-compatible providers) require tool `parameters`
+ * to be a JSON Schema with top-level `type: "object"`. Zod's discriminated
+ * union emits `oneOf`/`anyOf` without that key, which providers reject with
+ * 400 invalid_function_parameters — blocking all chat when email is enabled.
+ * Keep `emailInputSchema` for runtime parsing; expose a flat object schema to LLMs.
+ */
+export function emailParameters(): JsonSchema {
+  return {
+    additionalProperties: false,
+    properties: {
+      action: {
+        enum: ["list", "read", "search", "send"],
+        type: "string",
+      },
+      folder: {
+        description: "Mail folder. Defaults to INBOX.",
+        type: "string",
+      },
+      html: {
+        description: "Optional HTML body for action=send.",
+        type: "string",
+      },
+      limit: {
+        description: "Max messages to return (1-100). Defaults to 20.",
+        type: "integer",
+      },
+      query: {
+        description: "Search query. Required for action=search.",
+        type: "string",
+      },
+      subject: {
+        description: "Subject. Required for action=send.",
+        type: "string",
+      },
+      text: {
+        description: "Plain-text body. Required for action=send.",
+        type: "string",
+      },
+      to: {
+        description: "Recipient address. Required for action=send.",
+        type: "string",
+      },
+      uid: {
+        description: "Message UID. Required for action=read.",
+        type: "integer",
+      },
+    },
+    required: ["action"],
+    type: "object",
+  };
 }
 
 export interface EmailToolSuccess {
   action: EmailAction;
-  messages?: Array<{
-    uid: number;
-    subject: string;
-    from: string;
-    date: string;
-    folder: string;
-  }>;
   message?: {
     uid: number;
     subject: string;
@@ -103,7 +128,21 @@ export interface EmailToolSuccess {
     text?: string;
     html?: string;
     truncated?: boolean;
+    attachments?: Array<{
+      documentRef: string;
+      filename: string;
+      mediaType: string;
+      size: number;
+      disposition: "attachment" | "inline" | null;
+    }>;
   };
+  messages?: Array<{
+    uid: number;
+    subject: string;
+    from: string;
+    date: string;
+    folder: string;
+  }>;
   sent?: {
     to: string;
     subject: string;
@@ -118,18 +157,21 @@ export interface EmailToolFailure {
 export type EmailToolResult = EmailToolSuccess | EmailToolFailure;
 
 export interface EmailToolDependencies {
+  createReader?: (config: ReturnType<typeof toMailboxConfig>) => MailReader;
+  createSender?: (config: ReturnType<typeof toMailboxConfig>) => MailSender;
   loadConfig?: typeof loadEmailConfig;
-  createReader?: (config: ReturnType<typeof emailConfigToMailboxConfig>) => MailReader;
-  createSender?: (config: ReturnType<typeof emailConfigToMailboxConfig>) => MailSender;
 }
 
-function parseEmailToolInput(input: unknown): EmailToolInput {
+function parseEmailToolInput(
+  input: EmailToolInput
+): z.output<typeof emailInputSchema> {
   return parseToolInput(emailInputSchema, input);
 }
 
 export async function runEmailTool(
-  input: unknown,
+  input: EmailToolInput,
   dependencies: EmailToolDependencies = {},
+  context: ToolContext = {}
 ): Promise<EmailToolResult> {
   const loadConfig = dependencies.loadConfig ?? loadEmailConfig;
   const config = await loadConfig();
@@ -142,7 +184,7 @@ export async function runEmailTool(
   }
 
   const parsed = parseEmailToolInput(input);
-  const mailboxConfig = emailConfigToMailboxConfig(config!);
+  const mailboxConfig = toMailboxConfig(config);
 
   if (parsed.action === "send") {
     return sendEmail(parsed, mailboxConfig, dependencies.createSender);
@@ -156,6 +198,7 @@ export async function runEmailTool(
 
     if (parsed.action === "list") {
       const messages = await reader.listMessages(parsed.folder, parsed.limit);
+
       return { action: parsed.action, messages };
     }
 
@@ -163,13 +206,27 @@ export async function runEmailTool(
       const message = await reader.readMessage(parsed.folder, parsed.uid);
 
       if (!message) {
-        return { error: `No message found with uid ${parsed.uid} in ${parsed.folder}.` };
+        return {
+          error: `No message found with uid ${parsed.uid} in ${parsed.folder}.`,
+        };
       }
 
-      return { action: parsed.action, message };
+      return {
+        action: parsed.action,
+        message: toEmailMessage(
+          message,
+          context,
+          getMailboxIdentity(mailboxConfig)
+        ),
+      };
     }
 
-    const messages = await reader.searchMessages(parsed.folder, parsed.query, parsed.limit);
+    const messages = await reader.searchMessages(
+      parsed.folder,
+      parsed.query,
+      parsed.limit
+    );
+
     return { action: parsed.action, messages };
   } catch (err) {
     return { error: sanitizeMailError(err) };
@@ -180,8 +237,8 @@ export async function runEmailTool(
 
 async function sendEmail(
   input: Extract<EmailToolInput, { action: "send" }>,
-  mailboxConfig: ReturnType<typeof emailConfigToMailboxConfig>,
-  createSender: EmailToolDependencies["createSender"],
+  mailboxConfig: ReturnType<typeof toMailboxConfig>,
+  createSender: EmailToolDependencies["createSender"]
 ): Promise<EmailToolResult> {
   const { to, subject, text, html } = input;
 
@@ -205,13 +262,14 @@ async function sendEmail(
   const sender = senderFactory(mailboxConfig);
 
   try {
-    const result = await sender.send({ to, subject, text, html });
+    const result = await sender.send({ html, subject, text, to });
+
     return {
       action: "send",
       sent: {
-        to,
-        subject,
         messageId: result.messageId,
+        subject,
+        to,
       },
     };
   } catch (err) {
@@ -220,13 +278,41 @@ async function sendEmail(
 }
 
 export const emailTool: ToolDefinition<EmailToolInput, EmailToolResult> = {
-  name: "email",
   description:
-    "List, read, search, and send email through the deployment mailbox configured in Settings. Use list/search to find messages, read to fetch one message body, and send for outbound mail.",
+    "List, read, search, and send email through the deployment mailbox configured in Control center → Tools (/customize/tools). Read exposes documentRef values for supported document attachments; pass one to extract_document_text when you need document text.",
+  name: "email",
   parameters: emailParameters(),
-  run(input) {
-    return runEmailTool(input);
+  run(input, context) {
+    return runEmailTool(input, {}, context);
   },
 };
+
+function toEmailMessage(
+  message: MailMessage,
+  context: ToolContext,
+  mailboxId: string
+): NonNullable<Extract<EmailToolSuccess, { message?: unknown }>["message"]> {
+  const { attachments, ...messageWithoutAttachments } = message;
+
+  if (!attachments) {
+    return messageWithoutAttachments;
+  }
+
+  return {
+    ...messageWithoutAttachments,
+    attachments: attachments.map((attachment) => ({
+      disposition: attachment.disposition,
+      documentRef: createAttachmentReference(context, {
+        attachmentId: attachment.id,
+        folder: message.folder,
+        mailboxId,
+        uid: message.uid,
+      }),
+      filename: attachment.filename,
+      mediaType: attachment.mediaType,
+      size: attachment.size,
+    })),
+  };
+}
 
 export { createFakeMailReader, createFakeMailSender };

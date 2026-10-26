@@ -1,39 +1,23 @@
-import { useEffect, useState } from "react";
-import { FileTextIcon, ImageIcon } from "lucide-react";
-import { ArtifactAttachmentPanelActions } from "@/components/chat/artifact-attachment-panel-actions";
+import { Button } from "@nakama/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@nakama/ui/tooltip";
+import { cn } from "@nakama/ui/utils";
 import {
-  ArtifactShareMenuItem,
-  ArtifactSharePublishDialogFromState,
-} from "@/components/chat/artifact-share-controls";
-import { useArtifactShareControls } from "@/components/chat/use-artifact-share-controls";
-import {
-  ArtifactAttachmentPanelBody,
-} from "@/components/chat/artifact-attachment-panel-body";
-import { downloadActionLabel, artifactPanelDefaultWidth, artifactPanelSubtitle } from "@/components/chat/artifact-attachment-panel-body.shared";
-import { useChatAttachmentPanel } from "@/context/use-chat-attachment-panel";
-import {
-  artifactCodeLanguage,
-  buildArtifactContentUrl,
-  isDocxFile,
-  isHtmlArtifactMimeType,
-  isImageArtifactMimeType,
-  isLegacyDocFile,
-  isMarkdownArtifactMimeType,
-  isTextArtifactMimeType,
-  isUnknownArtifactMimeType,
-  looksLikeUtf8Text,
-  resolveArtifactMimeType,
-  type ChatArtifactRef,
-} from "@/lib/chat-artifacts";
-import { client, formatError } from "@/lib/client";
+  File01Icon,
+  Image01Icon,
+  Video01Icon,
+  ViewIcon,
+} from "hugeicons-react";
+import { useArtifactAttachmentPreviewPanel } from "@/components/chat/use-artifact-attachment-preview-panel";
+import type { ChatArtifactRef } from "@/lib/chat-artifacts";
 import { formatBytes } from "@/lib/knowledge-base-files";
-import { cn } from "@/lib/utils";
 
 interface ArtifactAttachmentPreviewProps {
-  profileId: string;
-  id: string;
   artifact: ChatArtifactRef;
   className?: string;
+  id: string;
+  profileId: string;
+  /** `overlay` makes the containing file card the preview target. */
+  variant?: "chip" | "icon" | "overlay";
 }
 
 export function ArtifactAttachmentPreview({
@@ -41,309 +25,145 @@ export function ArtifactAttachmentPreview({
   id,
   artifact,
   className,
+  variant = "chip",
 }: ArtifactAttachmentPreviewProps) {
-  const { show, update, hide, activeId } = useChatAttachmentPanel();
-  const share = useArtifactShareControls({ profileId, artifactPath: artifact.path });
-  const open = activeId === id;
-  const [fullscreen, setFullscreen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [content, setContent] = useState<string | null>(null);
-  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
-  const downloadUrl = `${client.baseUrl}${buildArtifactContentUrl(profileId, artifact.path)}`;
-  const mimeType = resolveArtifactMimeType(artifact.mimeType, artifact.filename);
-  const isHtml = isHtmlArtifactMimeType(mimeType);
-  const isImage = isImageArtifactMimeType(mimeType);
-  const isWordDocument =
-    isDocxFile(artifact.filename, mimeType) || isLegacyDocFile(artifact.filename, mimeType);
-  const isMarkdown = isMarkdownArtifactMimeType(mimeType) || isWordDocument;
-  const language = artifactCodeLanguage(artifact.filename);
-  const canPreview =
-    isHtml ||
-    isImage ||
-    isWordDocument ||
-    isTextArtifactMimeType(mimeType) ||
-    isUnknownArtifactMimeType(mimeType);
-  const downloadLabel = downloadActionLabel(mimeType);
+  const { imagePreviewUrl, isImage, isVideo, openPanel } =
+    useArtifactAttachmentPreviewPanel({
+      artifact,
+      id,
+      // Preview, download, share and save all go through this id.
+      profileId: artifact.ownerProfileId ?? profileId,
+    });
 
-  useEffect(() => {
-    return () => {
-      if (imagePreviewUrl) {
-        URL.revokeObjectURL(imagePreviewUrl);
-      }
-    };
-  }, [imagePreviewUrl]);
+  return (
+    <ArtifactAttachmentPreviewTrigger
+      artifact={artifact}
+      className={className}
+      imagePreviewUrl={imagePreviewUrl}
+      isImage={isImage}
+      isVideo={isVideo}
+      onOpen={openPanel}
+      variant={variant}
+    />
+  );
+}
 
-  useEffect(() => {
-    if (!open || !canPreview) {
-      return;
-    }
-
-    if (isImage) {
-      if (imagePreviewUrl !== null) {
-        return;
-      }
-    } else if (content !== null) {
-      return;
-    }
-
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-
-    void client
-      .readProfileArtifactContent(profileId, artifact.path, {
-        inline: true,
-        render: isWordDocument ? "markdown" : undefined,
-      })
-      .then((result) => {
-        if (cancelled) {
-          return;
-        }
-
-        const contentType = resolveArtifactMimeType(result.contentType, artifact.filename);
-        const servedAsHtml = isHtmlArtifactMimeType(contentType);
-        const servedAsImage = isImageArtifactMimeType(contentType);
-
-        if (isImage) {
-          if (!servedAsImage) {
-            setError("Preview is not available for this file type. Download instead.");
-            return;
-          }
-
-          setImagePreviewUrl(URL.createObjectURL(new Blob([result.data], { type: contentType })));
-          return;
-        }
-
-        if (isHtml ? !servedAsHtml : servedAsHtml) {
-          setError("Preview is not available for this file type. Download instead.");
-          return;
-        }
-
-        if (
-          !isHtml &&
-          !isTextArtifactMimeType(contentType) &&
-          !looksLikeUtf8Text(new Uint8Array(result.data))
-        ) {
-          setError("Preview is not available for this file type. Download instead.");
-          return;
-        }
-
-        setContent(new TextDecoder().decode(result.data));
-      })
-      .catch((fetchError) => {
-        if (!cancelled) {
-          setError(formatError(fetchError));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    open,
-    canPreview,
-    content,
-    imagePreviewUrl,
-    isHtml,
-    isImage,
-    isWordDocument,
-    profileId,
-    artifact.path,
-    artifact.filename,
-  ]);
-
-  useEffect(() => {
-    if (!copied) {
-      return;
-    }
-
-    const timeout = window.setTimeout(() => setCopied(false), 2000);
-    return () => window.clearTimeout(timeout);
-  }, [copied]);
-
-  useEffect(() => {
-    return () => {
-      hide(id);
-    };
-  }, [hide, id]);
-
-  function buildPanelBody(loadingOverride?: boolean) {
-    const loadingState = loadingOverride ?? loading;
-    if (isImage) {
-      return (
-        <ArtifactAttachmentPanelBody
-          kind="image"
-          loading={loadingState}
-          error={error}
-          imagePreviewUrl={imagePreviewUrl}
-          canPreview={canPreview}
-          artifact={artifact}
-        />
-      );
-    }
-    if (isHtml) {
-      return (
-        <ArtifactAttachmentPanelBody
-          kind="html"
-          loading={loadingState}
-          error={error}
-          content={content}
-          canPreview={canPreview}
-          artifact={artifact}
-        />
-      );
-    }
+function ArtifactAttachmentPreviewTrigger({
+  artifact,
+  className,
+  imagePreviewUrl,
+  isImage,
+  isVideo,
+  onOpen,
+  variant,
+}: {
+  artifact: ChatArtifactRef;
+  className?: string;
+  imagePreviewUrl: string | null;
+  isImage: boolean;
+  isVideo: boolean;
+  onOpen: () => void;
+  variant: "chip" | "icon" | "overlay";
+}) {
+  if (variant === "overlay") {
     return (
-      <ArtifactAttachmentPanelBody
-        kind="text"
-        format={isMarkdown ? "markdown" : "plain"}
-        language={language}
-        loading={loadingState}
-        error={error}
-        content={content}
-        canPreview={canPreview}
-        artifact={artifact}
+      <button
+        aria-label={`View ${artifact.filename}`}
+        className={cn(
+          "absolute inset-0 cursor-pointer rounded-[inherit] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset",
+          className
+        )}
+        onClick={onOpen}
+        type="button"
       />
     );
   }
 
-  function buildPanelConfig() {
-    return {
-      title: artifact.filename,
-      subtitle: artifactPanelSubtitle({
-        mimeType,
-        sizeBytes: artifact.sizeBytes,
-      }),
-      headerActions: (
-        <>
-          <ArtifactAttachmentPanelActions
-            copied={copied}
-            loading={loading}
-            content={content}
-            copyDisabled={isImage}
-            fullscreen={fullscreen}
-            downloadLabel={downloadLabel}
-            downloadUrl={downloadUrl}
-            filename={artifact.filename}
-            onCopy={() => void copyArtifact()}
-            onToggleFullscreen={() => setFullscreen((current) => !current)}
-            additionalMenuItems={<ArtifactShareMenuItem share={share} />}
-          />
-          <ArtifactSharePublishDialogFromState
-            share={share}
-            artifactPath={artifact.path}
-          />
-        </>
-      ),
-      resizable: !fullscreen,
-      fullscreen,
-      bodyClassName:
-        isHtml || isImage ? "flex flex-col overflow-hidden p-0" : undefined,
-      content: buildPanelBody(),
-    };
+  if (variant === "icon") {
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              aria-label="View"
+              className={className}
+              onClick={onOpen}
+              size="icon-sm"
+              title="View"
+              type="button"
+              variant="outline"
+            >
+              <ViewIcon aria-hidden className="size-3.5" />
+            </Button>
+          }
+        />
+        <TooltipContent side="top" sideOffset={8}>
+          View
+        </TooltipContent>
+      </Tooltip>
+    );
   }
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    update(id, buildPanelConfig());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    open,
-    update,
-    id,
-    artifact,
-    fullscreen,
-    isHtml,
-    isImage,
-    isMarkdown,
-    language,
-    mimeType,
-    loading,
-    error,
-    content,
-    imagePreviewUrl,
-    canPreview,
-    copied,
-    downloadLabel,
-    downloadUrl,
-    share.busy,
-    share.publishDialogOpen,
-  ]);
-
-  async function copyArtifact() {
-    if (isImage) {
-      return;
-    }
-
-    try {
-      let text = content;
-      if (!text) {
-        const result = await client.readProfileArtifactContent(profileId, artifact.path, {
-          inline: true,
-          render: isWordDocument ? "markdown" : undefined,
-        });
-        text = new TextDecoder().decode(result.data);
-        setContent(text);
-      }
-
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-    } catch {
-      // Clipboard may be unavailable outside secure contexts.
-    }
-  }
-
-  function openPanel() {
-    setFullscreen(false);
-    setCopied(false);
-    show({
-      ...buildPanelConfig(),
-      id,
-      defaultWidth: artifactPanelDefaultWidth(artifact.filename, mimeType),
-      resizable: true,
-      fullscreen: false,
-      content: buildPanelBody(
-        canPreview &&
-          (isImage ? imagePreviewUrl === null : content === null) &&
-          error === null,
-      ),
-      onClose: () => {
-        setFullscreen(false);
-        setCopied(false);
-      },
-    });
+  if (isImage) {
+    return (
+      <button
+        className={cn(
+          "relative flex w-1/2 max-w-full shrink-0 flex-col gap-2 overflow-hidden rounded-lg border border-border bg-muted p-2 text-left transition-colors hover:bg-muted/70",
+          className
+        )}
+        onClick={onOpen}
+        type="button"
+      >
+        {imagePreviewUrl ? (
+          <img
+            alt=""
+            className="h-auto w-full rounded-md border border-border outline outline-1 outline-black/10 dark:outline-white/10"
+            src={imagePreviewUrl}
+          />
+        ) : (
+          <div className="flex aspect-[4/3] w-full items-center justify-center rounded-md border border-border bg-background">
+            <Image01Icon aria-hidden className="size-6 text-muted-foreground" />
+          </div>
+        )}
+        <div className="min-w-0 px-0.5">
+          <p className="truncate font-medium text-foreground text-xs">
+            {artifact.filename}
+          </p>
+          <p className="text-2xs text-muted-foreground">
+            {artifact.sizeBytes > 0
+              ? `${formatBytes(artifact.sizeBytes)} · `
+              : null}
+            Artifact
+          </p>
+        </div>
+      </button>
+    );
   }
 
   return (
     <button
-      type="button"
       className={cn(
         "relative inline-flex max-w-full shrink-0 items-center gap-2 rounded-lg border border-border bg-muted px-2 py-2 text-left transition-colors hover:bg-muted/70",
-        className,
+        className
       )}
-      onClick={openPanel}
+      onClick={onOpen}
+      type="button"
     >
       <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-background">
-        {isImage ? (
-          <ImageIcon className="size-4 text-muted-foreground" aria-hidden />
+        {isVideo ? (
+          <Video01Icon aria-hidden className="size-4 text-muted-foreground" />
         ) : (
-          <FileTextIcon className="size-4 text-muted-foreground" aria-hidden />
+          <File01Icon aria-hidden className="size-4 text-muted-foreground" />
         )}
       </div>
       <div className="min-w-0 max-w-[12rem]">
-        <p className="truncate text-xs font-medium text-foreground">{artifact.filename}</p>
-        <p className="text-[10px] text-muted-foreground">
-          {artifact.sizeBytes > 0 ? `${formatBytes(artifact.sizeBytes)} · ` : null}
+        <p className="truncate font-medium text-foreground text-xs">
+          {artifact.filename}
+        </p>
+        <p className="text-2xs text-muted-foreground">
+          {artifact.sizeBytes > 0
+            ? `${formatBytes(artifact.sizeBytes)} · `
+            : null}
           Artifact
         </p>
       </div>

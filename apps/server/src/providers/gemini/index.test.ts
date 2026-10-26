@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import type { ProviderJsonRecord, ProviderJsonValue } from "../shared";
+import { asTestFetch } from "../test-helpers";
 import { createGeminiProvider } from "./index";
 
 const originalFetch = globalThis.fetch;
@@ -9,6 +11,7 @@ afterEach(() => {
 
 function withMockFetch(fetchMock: typeof fetch, run: () => Promise<void>) {
   globalThis.fetch = fetchMock;
+
   return run().finally(() => {
     globalThis.fetch = originalFetch;
   });
@@ -17,10 +20,10 @@ function withMockFetch(fetchMock: typeof fetch, run: () => Promise<void>) {
 function generateContentResponse(options: {
   text?: string;
   thinking?: string;
-  functionCalls?: unknown[];
-  usageMetadata?: Record<string, unknown>;
+  functionCalls?: ProviderJsonValue[];
+  usageMetadata?: ProviderJsonRecord;
 }) {
-  const parts: Array<Record<string, unknown>> = [];
+  const parts: ProviderJsonRecord[] = [];
 
   if (options.thinking) {
     parts.push({ text: options.thinking, thought: true });
@@ -34,15 +37,20 @@ function generateContentResponse(options: {
     parts.push({ functionCall: call });
   }
 
-  return JSON.stringify({
-    ...(options.usageMetadata ? { usageMetadata: options.usageMetadata } : {}),
+  const response = {
     candidates: [
       {
-        content: { role: "model", parts },
+        content: { parts, role: "model" },
         finishReason: "STOP",
       },
     ],
-  });
+  };
+
+  if (options.usageMetadata) {
+    Object.assign(response, { usageMetadata: options.usageMetadata });
+  }
+
+  return JSON.stringify(response);
 }
 
 function streamFromEvents(events: string[]): ReadableStream<Uint8Array> {
@@ -57,29 +65,264 @@ function streamFromEvents(events: string[]): ReadableStream<Uint8Array> {
   });
 }
 
+function emptyCandidate(finishReason?: string): string {
+  const candidate = { content: { parts: [], role: "model" } };
+
+  if (finishReason) {
+    Object.assign(candidate, { finishReason });
+  }
+
+  return JSON.stringify({ candidates: [candidate] });
+}
+
+describe("Gemini empty responses", () => {
+  const input = {
+    messages: [{ content: "hi", role: "user" as const }],
+    system: "",
+  };
+
+  function countingFetch(bodies: string[]) {
+    let calls = 0;
+
+    const fetchMock = async (_url: RequestInfo | URL, _init?: RequestInit) => {
+      const body = bodies[Math.min(calls, bodies.length - 1)] ?? "";
+      calls += 1;
+
+      return new Response(body, {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      });
+    };
+
+    return { calls: () => calls, fetchMock: asTestFetch(fetchMock) };
+  }
+
+  test("retries once when no finishReason came back", async () => {
+    const provider = createGeminiProvider({ apiKey: "k", model: "m" });
+
+    const { fetchMock, calls } = countingFetch([
+      emptyCandidate(),
+      generateContentResponse({ text: "second time" }),
+    ]);
+
+    await withMockFetch(fetchMock, async () => {
+      const result = await provider.generateChat(input);
+      expect(result.content).toBe("second time");
+    });
+
+    // The turn survives, which is the whole point of the report.
+    expect(calls()).toBe(2);
+  });
+
+  test("gives up after one retry rather than looping", async () => {
+    const provider = createGeminiProvider({ apiKey: "k", model: "m" });
+    const { fetchMock, calls } = countingFetch([emptyCandidate()]);
+
+    await withMockFetch(fetchMock, async () => {
+      await expect(provider.generateChat(input)).rejects.toThrow(
+        "no finishReason"
+      );
+    });
+
+    expect(calls()).toBe(2);
+  });
+
+  test("MAX_TOKENS is reported and not retried", async () => {
+    const provider = createGeminiProvider({ apiKey: "k", model: "m" });
+    const { fetchMock, calls } = countingFetch([emptyCandidate("MAX_TOKENS")]);
+
+    await withMockFetch(fetchMock, async () => {
+      // The operator needs to tell this apart from a transient blank in the log.
+      await expect(provider.generateChat(input)).rejects.toThrow(
+        "finishReason: MAX_TOKENS"
+      );
+    });
+
+    expect(calls()).toBe(1);
+  });
+
+  test("a refusal is a 422, not a 500", async () => {
+    const provider = createGeminiProvider({ apiKey: "k", model: "m" });
+    const { fetchMock, calls } = countingFetch([emptyCandidate("SAFETY")]);
+
+    await withMockFetch(fetchMock, async () => {
+      const failure = await provider
+        .generateChat(input)
+        .then(() => null)
+        .catch((error) => error);
+
+      // The request reached the model and the model said no. Serving that as a
+      // server fault sends the operator looking for a bug that is not there.
+      // SAFETY: The provider serializes this request body and the test checks its known fixture shape.
+      expect((failure as { status?: number }).status).toBe(422);
+      // SAFETY: The test reaches this branch with the named error type from the provider contract.
+      expect((failure as Error).message).toContain("SAFETY");
+    });
+
+    expect(calls()).toBe(1);
+  });
+});
+
 describe("createGeminiProvider", () => {
+  test("replays signed model parts unchanged after a tool result and history reload", async () => {
+    const parts = [
+      {
+        text: "Checking",
+        thought: true,
+        thoughtSignature: "thought-signature",
+      },
+      {
+        functionCall: { args: {}, id: "call-1", name: "read_probe" },
+        thoughtSignature: "call-signature",
+      },
+      {
+        functionCall: { args: { city: "B" }, id: "call-2", name: "read_probe" },
+      },
+    ];
+
+    const fetchMock = spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({ candidates: [{ content: { parts, role: "model" } }] })
+      )
+      .mockImplementationOnce(
+        asTestFetch(async (_url, init) => {
+          const body = JSON.parse(String(init?.body));
+          expect(body.contents[1]).toEqual({ parts, role: "model" });
+
+          return Response.json({
+            candidates: [
+              { content: { parts: [{ text: "Done" }], role: "model" } },
+            ],
+          });
+        })
+      );
+
+    const provider = createGeminiProvider({
+      apiKey: "test-key",
+      model: "gemini-3.8-flash",
+    });
+
+    const first = await provider.generateChat({
+      messages: [{ content: "Check both places", role: "user" }],
+      system: "Use the tools.",
+    });
+
+    expect(first.toolCalls).toHaveLength(2);
+
+    const second = await provider.generateChat({
+      messages: [
+        { content: "Check both places", role: "user" },
+        JSON.parse(JSON.stringify(first.assistantMessage)),
+        ...first.toolCalls.map((call) => ({
+          content: '{"value":7}',
+          name: call.name,
+          role: "tool" as const,
+          toolCallId: call.id,
+        })),
+      ],
+      system: "Use the tools.",
+    });
+
+    expect(second.content).toBe("Done");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("replays streamed parts including a signature-only final chunk", async () => {
+    const parts = [
+      { text: "Looking up " },
+      { text: "the code." },
+      {
+        functionCall: { args: {}, id: "call-1", name: "read_probe" },
+        thoughtSignature: "call-signature",
+      },
+      { text: "", thoughtSignature: "final-signature" },
+    ];
+
+    spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          streamFromEvents(
+            parts.map((part) =>
+              JSON.stringify({
+                candidates: [{ content: { parts: [part], role: "model" } }],
+              })
+            )
+          ),
+          { headers: { "Content-Type": "text/event-stream" } }
+        )
+      )
+      .mockImplementationOnce(
+        asTestFetch(async (_url, init) => {
+          expect(JSON.parse(String(init?.body)).contents[1]).toEqual({
+            parts,
+            role: "model",
+          });
+
+          return new Response(generateContentResponse({ text: "Done" }), {
+            headers: { "Content-Type": "application/json" },
+          });
+        })
+      );
+
+    const provider = createGeminiProvider({
+      apiKey: "test-key",
+      model: "gemini-3.8-flash",
+    });
+
+    const user = { content: "Get the code", role: "user" as const };
+
+    const first = await provider.streamChat(
+      { messages: [user], system: "Use the tool." },
+      { onChunk() {} }
+    );
+
+    expect(first.content).toBe("Looking up the code.");
+    expect(first.toolCalls).toEqual([
+      { arguments: {}, id: "call-1", name: "read_probe" },
+    ]);
+
+    const second = await provider.generateChat({
+      messages: [
+        user,
+        first.assistantMessage,
+        {
+          content: '{"code":7319}',
+          name: "read_probe",
+          role: "tool",
+          toolCallId: "call-1",
+        },
+      ],
+      system: "Use the tool.",
+    });
+
+    expect(second.content).toBe("Done");
+  });
+
   test("generateText returns model text", async () => {
     const fetchMock = mock(async (input: RequestInfo | URL) => {
       const url = String(input);
       expect(url).toContain("gemini-2.5-flash");
       expect(url).toContain("generateContent");
 
-      return new Response(generateContentResponse({ text: "Hello from Gemini" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        generateContentResponse({ text: "Hello from Gemini" }),
+        {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }
+      );
     });
 
-    await withMockFetch(fetchMock as typeof fetch, async () => {
+    await withMockFetch(asTestFetch(fetchMock), async () => {
       const provider = createGeminiProvider({
         apiKey: "AIzaTest",
         model: "gemini-2.5-flash",
       });
 
       const result = await provider.generateText({
-        system: "You are helpful.",
-        prompt: "Say hi",
         format: "text",
+        prompt: "Say hi",
+        system: "You are helpful.",
       });
 
       expect(result.content).toBe("Hello from Gemini");
@@ -88,59 +331,76 @@ describe("createGeminiProvider", () => {
   });
 
   test("generateChat returns tool calls", async () => {
-    const fetchMock = mock(async () => {
-      return new Response(
-        generateContentResponse({
-          functionCalls: [
-            { id: "fc1", name: "write_file", args: { path: "a.txt" } },
-          ],
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    });
+    const fetchMock = mock(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        expect(body.tools[0].functionDeclarations[0]).toEqual({
+          description: "Write a file",
+          name: "write_file",
+          parametersJsonSchema: {
+            properties: { offset: { minimum: 1, type: "integer" } },
+            type: "object",
+          },
+        });
 
-    await withMockFetch(fetchMock as typeof fetch, async () => {
+        return new Response(
+          generateContentResponse({
+            functionCalls: [
+              { args: { path: "a.txt" }, id: "fc1", name: "write_file" },
+            ],
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+    );
+
+    await withMockFetch(asTestFetch(fetchMock), async () => {
       const provider = createGeminiProvider({ apiKey: "AIzaTest" });
 
       const result = await provider.generateChat({
+        messages: [{ content: "write a file", role: "user" }],
         system: "system",
-        messages: [{ role: "user", content: "write a file" }],
         tools: [
           {
-            name: "write_file",
             description: "Write a file",
-            parameters: { type: "object", properties: {} },
+            name: "write_file",
+            parameters: {
+              properties: { offset: { exclusiveMinimum: 0, type: "integer" } },
+              type: "object",
+            },
           },
         ],
       });
 
       expect(result.toolCalls).toEqual([
-        { id: "fc1", name: "write_file", arguments: { path: "a.txt" } },
+        { arguments: { path: "a.txt" }, id: "fc1", name: "write_file" },
       ]);
       expect(result.usage).toBeUndefined();
     });
   });
 
   test("captures API-reported usage", async () => {
-    const fetchMock = mock(async () => {
-      return new Response(
-        generateContentResponse({
-          text: "Answer",
-          usageMetadata: {
-            promptTokenCount: 70,
-            candidatesTokenCount: 20,
-            totalTokenCount: 90,
-          },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    });
+    const fetchMock = mock(
+      async () =>
+        new Response(
+          generateContentResponse({
+            text: "Answer",
+            usageMetadata: {
+              candidatesTokenCount: 20,
+              promptTokenCount: 70,
+              totalTokenCount: 90,
+            },
+          }),
+          { headers: { "Content-Type": "application/json" }, status: 200 }
+        )
+    );
 
-    await withMockFetch(fetchMock as typeof fetch, async () => {
+    await withMockFetch(asTestFetch(fetchMock), async () => {
       const provider = createGeminiProvider({ apiKey: "AIzaTest" });
+
       const result = await provider.generateChat({
+        messages: [{ content: "hi", role: "user" }],
         system: "system",
-        messages: [{ role: "user", content: "hi" }],
       });
 
       expect(result.usage).toEqual({
@@ -159,17 +419,19 @@ describe("createGeminiProvider", () => {
       return new Response(
         streamFromEvents([
           JSON.stringify({
-            candidates: [{ content: { parts: [{ text: "Plan", thought: true }] } }],
+            candidates: [
+              { content: { parts: [{ text: "Plan", thought: true }] } },
+            ],
           }),
           JSON.stringify({
             candidates: [{ content: { parts: [{ text: "Hi" }] } }],
           }),
         ]),
-        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        { headers: { "Content-Type": "text/event-stream" }, status: 200 }
       );
     });
 
-    await withMockFetch(fetchMock as typeof fetch, async () => {
+    await withMockFetch(asTestFetch(fetchMock), async () => {
       const provider = createGeminiProvider({ apiKey: "AIzaTest" });
 
       const chunks: string[] = [];
@@ -177,14 +439,14 @@ describe("createGeminiProvider", () => {
 
       const result = await provider.streamChat(
         {
+          messages: [{ content: "hi", role: "user" }],
+          providerOptions: { thinking: { effort: "medium", enabled: true } },
           system: "system",
-          messages: [{ role: "user", content: "hi" }],
-          providerOptions: { thinking: { enabled: true, effort: "medium" } },
         },
         {
           onChunk: (delta) => chunks.push(delta),
           onThinking: (delta) => thinking.push(delta),
-        },
+        }
       );
 
       expect(result.content).toBe("Hi");

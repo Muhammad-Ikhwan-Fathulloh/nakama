@@ -1,7 +1,10 @@
-import type { KnowledgeBaseDocument } from "@nakama/core/contract";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import { Button } from "@/components/ui/button";
+import { NakamaApiError } from "@nakama/core/api-error";
+import type {
+  ImportKnowledgeBaseZipResponse,
+  KnowledgeBaseDocument,
+} from "@nakama/core/contract";
+import { MAX_KNOWLEDGE_ZIP_BYTES } from "@nakama/core/message-content";
+import { Button } from "@nakama/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -9,292 +12,411 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Spinner } from "@/components/ui/spinner";
-import { KnowledgeTabPanel } from "@/components/soul-tools/knowledge-tab-panel";
+} from "@nakama/ui/dialog";
+import { Spinner } from "@nakama/ui/spinner";
+import { useEffect, useRef, useState } from "react";
 import {
-  KnowledgeTabPageState,
-  KnowledgeTabShell,
-} from "@/components/soul-tools/knowledge-tab-shell";
+  KnowledgeTabPanel,
+  KnowledgeZipImportResult,
+  SharedKnowledgeDocuments,
+} from "@/components/soul-tools/knowledge-tab-panel";
+import { useAuth } from "@/context/use-auth";
 import { useProfilesQuery } from "@/hooks/use-app-queries";
 import {
+  useAttachSharedKnowledgeBaseDocumentMutation,
   useDeleteKnowledgeBaseDocumentMutation,
+  useDetachSharedKnowledgeBaseDocumentMutation,
+  useImportKnowledgeBaseZipMutation,
   useKnowledgeBaseQuery,
-  useSoulStatusQuery,
+  useOrganizationKnowledgeBaseQuery,
   useUploadKnowledgeBaseDocumentMutation,
 } from "@/hooks/use-resource-mutations";
+import { formatError } from "@/lib/client";
 import {
   fileToDocumentAttachment,
+  fileToZipBase64,
   isKnowledgeBaseFile,
+  isKnowledgeBaseZipFile,
 } from "@/lib/knowledge-base-files";
-import { findDefaultProfile, resolveInitialProfileId } from "@/lib/profiles";
-import { cn } from "@/lib/utils";
-import { formatError } from "@/lib/client";
 
-const sectionClass = "rounded-md border border-border bg-card";
-const KNOWLEDGE_BASE_SUBDIR = "knowledge-base";
+type DuplicateDecision = "skip" | "replace";
 
-function resolveDefaultProfileId(
-  profiles: Array<{ id: string }>,
-  fromUrl: string | null,
-): string | null {
-  if (profiles.length === 0) {
-    return null;
-  }
+type DuplicatePrompt = {
+  filename: string;
+  resolve: (decision: DuplicateDecision) => void;
+};
 
-  if (fromUrl && profiles.some((profile) => profile.id === fromUrl)) {
-    return fromUrl;
-  }
-
-  return resolveInitialProfileId(profiles);
-}
-
-export function KnowledgeTab({ profileId: controlledProfileId }: { profileId?: string | null } = {}) {
-  const embedded = controlledProfileId !== undefined;
-  const [searchParams, setSearchParams] = useSearchParams();
-  const {
-    data: profiles = [],
-    error: profilesError,
-    isFetching: profilesFetching,
-    refetch: refetchProfiles,
-  } = useProfilesQuery();
-  const [internalProfileId, setProfileIdState] = useState<string | null>(null);
-  const profileInitializedRef = useRef(false);
-  const profileId = embedded ? controlledProfileId : internalProfileId;
+export function KnowledgeTab({ profileId }: { profileId: string | null }) {
+  const { activeOrg } = useAuth();
+  const { data: profiles = [], error: profilesError } = useProfilesQuery();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
   const {
     data: knowledgeBase = null,
     isLoading: knowledgeLoading,
-    isFetching: knowledgeFetching,
     error: knowledgeError,
-    refetch: refetchKnowledgeBase,
   } = useKnowledgeBaseQuery(profileId);
-  const {
-    data: soulStatus = null,
-    isFetching: soulStatusFetching,
-    refetch: refetchSoulStatus,
-  } = useSoulStatusQuery(profileId);
+
+  const { data: organizationKnowledgeBase = null } =
+    useOrganizationKnowledgeBaseQuery(activeOrg?.id ?? null);
+
   const uploadMutation = useUploadKnowledgeBaseDocumentMutation();
+  const importZipMutation = useImportKnowledgeBaseZipMutation();
+  const attachSharedMutation = useAttachSharedKnowledgeBaseDocumentMutation();
   const deleteMutation = useDeleteKnowledgeBaseDocumentMutation();
+  const detachSharedMutation = useDetachSharedKnowledgeBaseDocumentMutation();
   const [error, setError] = useState<string | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<KnowledgeBaseDocument | null>(null);
+  const [uploading, setUploading] = useState(false);
 
-  const selectedProfile = profiles.find((profile) => profile.id === profileId) ?? null;
+  const [importResult, setImportResult] =
+    useState<ImportKnowledgeBaseZipResponse | null>(null);
+
+  const [deleteTarget, setDeleteTarget] =
+    useState<KnowledgeBaseDocument | null>(null);
+
+  const [duplicatePrompt, setDuplicatePrompt] =
+    useState<DuplicatePrompt | null>(null);
+
+  const selectedProfile =
+    profiles.find((profile) => profile.id === profileId) ?? null;
+
   const documents = knowledgeBase?.documents ?? [];
-  const sources = knowledgeBase?.sources ?? [];
-  const readyCount = documents.filter((document) => document.status === "ready").length;
+
+  const readyCount = documents.filter(
+    (document) => document.status === "ready"
+  ).length;
+
   const loading = knowledgeLoading && !knowledgeBase;
-  const refreshing = profilesFetching || knowledgeFetching || soulStatusFetching;
-  const busy = uploadMutation.isPending || deleteMutation.isPending;
-  const knowledgeBaseDirectory = soulStatus
-    ? `${soulStatus.directory}/${KNOWLEDGE_BASE_SUBDIR}`
-    : null;
 
-  const setProfileId = useCallback(
-    (nextProfileId: string) => {
-      setProfileIdState(nextProfileId);
-      setSearchParams(
-        (current) => {
-          const next = new URLSearchParams(current);
-          const defaultProfileId = findDefaultProfile(profiles)?.id;
-          if (defaultProfileId && nextProfileId === defaultProfileId) {
-            next.delete("profile");
-          } else {
-            next.set("profile", nextProfileId);
-          }
-          return next;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams, profiles],
-  );
+  const uploadPending = [
+    uploading,
+    uploadMutation.isPending,
+    importZipMutation.isPending,
+  ].some(Boolean);
 
-  useEffect(() => {
-    if (embedded) {
-      return;
-    }
-
-    if (profiles.length === 0) {
-      return;
-    }
-
-    const urlProfile = searchParams.get("profile");
-    const nextProfileId = resolveDefaultProfileId(profiles, urlProfile);
-
-    if (!profileInitializedRef.current) {
-      profileInitializedRef.current = true;
-      setProfileIdState(nextProfileId);
-      return;
-    }
-
-    setProfileIdState((current) => {
-      if (
-        urlProfile &&
-        profiles.some((profile) => profile.id === urlProfile) &&
-        urlProfile !== current
-      ) {
-        return urlProfile;
-      }
-
-      if (current && profiles.some((profile) => profile.id === current)) {
-        return current;
-      }
-
-      return nextProfileId;
-    });
-  }, [embedded, profiles, searchParams]);
+  const busy = [
+    uploadPending,
+    attachSharedMutation.isPending,
+    deleteMutation.isPending,
+    detachSharedMutation.isPending,
+    duplicatePrompt !== null,
+  ].some(Boolean);
 
   useEffect(() => {
     const queryError = profilesError ?? knowledgeError;
+
     if (queryError) {
       setError(formatError(queryError));
     }
   }, [profilesError, knowledgeError]);
 
-  async function refresh() {
-    setError(null);
-    await Promise.all([refetchProfiles(), refetchKnowledgeBase(), refetchSoulStatus()]);
+  function askDuplicateDecision(filename: string): Promise<DuplicateDecision> {
+    return new Promise((resolve) => {
+      setDuplicatePrompt({ filename, resolve });
+    });
+  }
+
+  function resolveDuplicateDecision(decision: DuplicateDecision) {
+    duplicatePrompt?.resolve(decision);
+    setDuplicatePrompt(null);
+  }
+
+  async function handleZipUpload(file: File, currentProfileId: string) {
+    if (file.size > MAX_KNOWLEDGE_ZIP_BYTES) {
+      setError(`${file.name} exceeds the 20 MB ZIP limit.`);
+
+      return false;
+    }
+
+    try {
+      const zipBase64 = await fileToZipBase64(file);
+
+      const result = await importZipMutation.mutateAsync({
+        profileId: currentProfileId,
+        zipBase64,
+      });
+
+      setImportResult(result);
+
+      return true;
+    } catch (err) {
+      setError(formatError(err));
+
+      return false;
+    }
+  }
+
+  async function handleDocumentUpload(file: File, currentProfileId: string) {
+    if (!isKnowledgeBaseFile(file)) {
+      setError(`Unsupported file type: ${file.name}.`);
+
+      return true;
+    }
+
+    const document = await fileToDocumentAttachment(file);
+
+    if (!document) {
+      setError(`Failed to read file: ${file.name}`);
+
+      return true;
+    }
+
+    try {
+      await uploadMutation.mutateAsync({
+        document,
+        profileId: currentProfileId,
+      });
+
+      return true;
+    } catch (err) {
+      if (!(err instanceof NakamaApiError && err.status === 409)) {
+        setError(formatError(err));
+
+        return false;
+      }
+    }
+
+    if ((await askDuplicateDecision(file.name)) === "skip") {
+      return true;
+    }
+
+    try {
+      await uploadMutation.mutateAsync({
+        document,
+        onDuplicate: "replace",
+        profileId: currentProfileId,
+      });
+
+      return true;
+    } catch (err) {
+      setError(formatError(err));
+
+      return false;
+    }
   }
 
   async function handleUpload(files: FileList | null) {
-    if (!profileId || !files?.length) {
+    if (!(profileId && files?.length)) {
       return;
     }
 
     setError(null);
+    setImportResult(null);
+    setUploading(true);
 
-    await Promise.all(
-      Array.from(files).map(async (file) => {
-        if (!isKnowledgeBaseFile(file)) {
-          setError(`Unsupported file type: ${file.name}. Allowed: txt, md, csv, pdf.`);
-          return;
+    try {
+      if (Array.from(files).filter(isKnowledgeBaseZipFile).length > 1) {
+        setError("Select one ZIP at a time.");
+
+        return;
+      }
+
+      for (const file of Array.from(files)) {
+        const shouldContinue = isKnowledgeBaseZipFile(file)
+          ? await handleZipUpload(file, profileId)
+          : await handleDocumentUpload(file, profileId);
+
+        if (!shouldContinue) {
+          break;
         }
+      }
+    } finally {
+      setUploading(false);
 
-        try {
-          const document = await fileToDocumentAttachment(file);
-          if (!document) {
-            setError(`Failed to read file: ${file.name}`);
-            return;
-          }
-
-          await uploadMutation.mutateAsync({ profileId, document });
-        } catch (err) {
-          setError(formatError(err));
-        }
-      }),
-    );
-
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
   }
 
-  async function handleDelete() {
-    if (!profileId || !deleteTarget) {
+  async function handleAttachSharedDocument(documentId: string) {
+    if (!profileId) {
       return;
     }
 
     setError(null);
 
     try {
-      await deleteMutation.mutateAsync({
-        profileId,
-        documentId: deleteTarget.id,
-      });
+      await attachSharedMutation.mutateAsync({ documentId, profileId });
+    } catch (err) {
+      setError(formatError(err));
+    }
+  }
+
+  async function handleDelete() {
+    if (!(profileId && deleteTarget)) {
+      return;
+    }
+
+    setError(null);
+
+    try {
+      if (deleteTarget.scope === "organization") {
+        await detachSharedMutation.mutateAsync({
+          documentId: deleteTarget.id,
+          profileId,
+        });
+      } else {
+        await deleteMutation.mutateAsync({
+          documentId: deleteTarget.id,
+          profileId,
+        });
+      }
+
       setDeleteTarget(null);
     } catch (err) {
       setError(formatError(err));
     }
   }
 
-  if (!embedded && profiles.length === 0 && !profilesFetching) {
+  if (!profileId) {
     return (
-      <div className={cn(sectionClass, "p-8 text-sm text-muted-foreground")}>
-        Create a profile first to add knowledge base documents.
-      </div>
-    );
-  }
-
-  if (embedded && !profileId) {
-    return (
-      <p className="text-sm text-muted-foreground">Select a profile to manage knowledge base documents.</p>
+      <p className="text-muted-foreground text-sm">
+        Select a profile to manage knowledge base documents.
+      </p>
     );
   }
 
   if (loading && !knowledgeBase) {
-    return <KnowledgeTabPageState message="Loading knowledge base…" embedded={embedded} />;
+    return (
+      <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-muted-foreground text-sm">
+        <Spinner className="size-5" />
+        Loading knowledge base…
+      </div>
+    );
   }
-
-  const knowledgePanel = (
-    <KnowledgeTabPanel
-      embedded={embedded}
-      selectedProfileName={selectedProfile?.name}
-      knowledgeBaseDirectory={knowledgeBaseDirectory}
-      sources={sources}
-      documents={documents}
-      readyCount={readyCount}
-      profileId={profileId}
-      busy={busy}
-      uploadPending={uploadMutation.isPending}
-      fileInputRef={fileInputRef}
-      onUpload={(files) => void handleUpload(files)}
-      onDeleteDocument={setDeleteTarget}
-    />
-  );
 
   return (
     <>
-      {error ? (
-        <p
-          className={cn(
-            "rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive",
-            !embedded && "mb-4",
-          )}
-        >
-          {error}
-        </p>
-      ) : null}
+      <div className="min-w-0">
+        {error ? (
+          <p className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-destructive text-sm">
+            {error}
+          </p>
+        ) : null}
 
-      {embedded ? (
-        knowledgePanel
-      ) : (
-        <KnowledgeTabShell
-          profiles={profiles}
-          profileId={profileId}
-          selectedProfileName={selectedProfile?.name}
+        {importResult ? (
+          <KnowledgeZipImportResult result={importResult} />
+        ) : null}
+
+        <SharedKnowledgeDocuments
+          availableDocuments={organizationKnowledgeBase?.documents}
           busy={busy}
-          refreshing={refreshing}
-          panel={knowledgePanel}
-          onProfileSelect={setProfileId}
-          onRefresh={() => void refresh()}
+          documents={documents}
+          onAttach={handleAttachSharedDocument}
         />
-      )}
 
-      <Dialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete document</DialogTitle>
-            <DialogDescription>
-              Remove {deleteTarget?.filename} from {selectedProfile?.name ?? "this profile"}?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setDeleteTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={() => void handleDelete()}
-              disabled={deleteMutation.isPending}
-            >
-              {deleteMutation.isPending ? <Spinner className="size-4" /> : null}
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        <KnowledgeTabPanel
+          busy={busy}
+          documents={documents}
+          fileInputRef={fileInputRef}
+          onDeleteDocument={setDeleteTarget}
+          onUpload={(files) => void handleUpload(files)}
+          profileId={profileId}
+          readyCount={readyCount}
+          uploadPending={uploadPending}
+        />
+      </div>
+
+      <DeleteKnowledgeDocumentDialog
+        busy={deleteMutation.isPending || detachSharedMutation.isPending}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => void handleDelete()}
+        profileName={selectedProfile?.name ?? "this profile"}
+        target={deleteTarget}
+      />
+
+      <DuplicateKnowledgeDocumentDialog
+        onDecision={resolveDuplicateDecision}
+        prompt={duplicatePrompt}
+      />
     </>
+  );
+}
+
+function DuplicateKnowledgeDocumentDialog({
+  onDecision,
+  prompt,
+}: {
+  onDecision: (decision: DuplicateDecision) => void;
+  prompt: DuplicatePrompt | null;
+}) {
+  return (
+    <Dialog
+      onOpenChange={(open) => {
+        if (!open && prompt) {
+          onDecision("skip");
+        }
+      }}
+      open={prompt !== null}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Duplicate document</DialogTitle>
+          <DialogDescription>
+            {prompt?.filename} is already in this knowledge base.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            onClick={() => onDecision("skip")}
+            type="button"
+            variant="outline"
+          >
+            Skip
+          </Button>
+          <Button onClick={() => onDecision("replace")} type="button">
+            Replace
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteKnowledgeDocumentDialog({
+  busy,
+  onClose,
+  onConfirm,
+  profileName,
+  target,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  profileName: string;
+  target: KnowledgeBaseDocument | null;
+}) {
+  return (
+    <Dialog onOpenChange={(open) => !open && onClose()} open={target !== null}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {target?.scope === "organization"
+              ? "Detach shared document"
+              : "Delete document"}
+          </DialogTitle>
+          <DialogDescription>
+            {target?.scope === "organization"
+              ? `Detach ${target.filename} from ${profileName}? The organization document will remain available to other profiles.`
+              : `Remove ${target?.filename} from ${profileName}?`}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button onClick={() => onClose()} type="button" variant="outline">
+            Cancel
+          </Button>
+          <Button
+            disabled={busy}
+            onClick={onConfirm}
+            type="button"
+            variant="destructive"
+          >
+            {busy ? <Spinner className="size-4" /> : null}
+            {target?.scope === "organization" ? "Detach" : "Delete"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

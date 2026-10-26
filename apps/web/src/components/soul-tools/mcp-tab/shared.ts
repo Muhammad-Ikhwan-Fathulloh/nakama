@@ -1,7 +1,17 @@
-import type { McpTransport } from "@nakama/core/contract";
+import type { McpServerSummary, McpTransport } from "@nakama/core/contract";
+import { isPreinstalledMcpServerId } from "@nakama/core/mcp/preinstalled";
 
-export const sectionClass = "rounded-md border border-border bg-card";
 const REDACTED_SECRET_VALUE = "••••••••";
+
+export function mcpServerDeleteBlockReason(
+  server: McpServerSummary
+): string | null {
+  if (isPreinstalledMcpServerId(server.id)) {
+    return "Preinstalled MCP servers cannot be deleted.";
+  }
+
+  return null;
+}
 
 export type McpHeaderRow = {
   key: string;
@@ -12,7 +22,9 @@ export function emptyHeaderRow(): McpHeaderRow {
   return { key: "", value: "" };
 }
 
-export function recordToHeaderRows(headers?: Record<string, string>): McpHeaderRow[] {
+export function recordToHeaderRows(
+  headers?: Record<string, string>
+): McpHeaderRow[] {
   if (!headers || Object.keys(headers).length === 0) {
     return [emptyHeaderRow()];
   }
@@ -26,7 +38,7 @@ export function recordToHeaderRows(headers?: Record<string, string>): McpHeaderR
 export function resolveFormTransport(
   transport: McpTransport,
   command: string,
-  url: string,
+  url: string
 ): McpTransport {
   if (command.trim()) {
     return "stdio";
@@ -42,14 +54,16 @@ export function resolveFormTransport(
 export function argsToArray(values: string[]): string[] | undefined {
   const items = values.flatMap((value) => {
     const trimmed = value.trim();
+
     return trimmed ? [trimmed] : [];
   });
+
   return items.length > 0 ? items : undefined;
 }
 
 export function headersToRecord(
   rows: McpHeaderRow[],
-  forUpdate = false,
+  forUpdate = false
 ): Record<string, string> | undefined {
   const headers: Record<string, string> = {};
 
@@ -71,5 +85,5 @@ export function headersToRecord(
     }
   }
 
-  return Object.keys(headers).length > 0 ? headers : undefined;
+  return forUpdate || Object.keys(headers).length > 0 ? headers : undefined;
 }

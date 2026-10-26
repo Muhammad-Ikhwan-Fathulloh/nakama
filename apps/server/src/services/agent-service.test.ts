@@ -1,367 +1,199 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import {
-  createInMemoryDatabaseAdapter,
-  createSqliteDatabase,
-  WORKSPACE_SETTINGS_ID,
-} from "@nakama/db";
-import type { StoredProfileRecord } from "@nakama/db";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import type { ProviderClient, ToolCall } from "@nakama/core";
+import { createInMemoryDatabaseAdapter } from "@nakama/db";
+import { setupTestConfigDir } from "../test-config-dir";
 import { AgentService } from "./agent-service";
+import { createDefaultProfile } from "./agent-service-test-fixtures";
+import { McpClientManager } from "./mcp-client-manager";
+import { McpService } from "./mcp-service";
 
-const ORG_ID = "org_test";
+const TEST_ORG_ID = "org_test";
 
-function createDefaultProfile(): StoredProfileRecord {
-  const now = new Date().toISOString();
-  return {
-    id: "profile_default",
-    name: "Default",
-    systemPrompt: "You are helpful.",
-    model: null,
-    isSuper: false,
-    orgId: ORG_ID,
-    isDefault: true,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
+describe("AgentService MCP discovery", () => {
+  setupTestConfigDir("nakama-mcp-discovery-");
+  const previous = process.env.NAKAMA_MCP_TOOL_DISCOVERY;
 
-describe("AgentService branching", () => {
-  test("branches a new session from the selected message index", async () => {
-    const db = createInMemoryDatabaseAdapter();
-    await db.upsertProfile(createDefaultProfile());
-    const service = new AgentService(null, null, db);
-
-    const sourceSessionId = await service.createSession(ORG_ID, "web", "profile_default");
-    await db.replaceMessagesForSession(sourceSessionId, [
-      {
-        id: "msg_1",
-        sessionId: sourceSessionId,
-        seq: 0,
-        payload: { role: "user", content: "Hello" },
-        createdAt: "2026-06-14T10:00:00.000Z",
-      },
-      {
-        id: "msg_2",
-        sessionId: sourceSessionId,
-        seq: 1,
-        payload: { role: "assistant", content: "Hi there" },
-        createdAt: "2026-06-14T10:00:01.000Z",
-      },
-      {
-        id: "msg_3",
-        sessionId: sourceSessionId,
-        seq: 2,
-        payload: { role: "user", content: "Second turn" },
-        createdAt: "2026-06-14T10:00:02.000Z",
-      },
-    ]);
-    await db.updateSessionTitle(sourceSessionId, "Original chat");
-    await db.updateSessionTodos(sourceSessionId, [
-      { id: "todo_1", content: "Keep this out of the branch", status: "pending" },
-    ]);
-    await db.updateSessionQuestionnaire(sourceSessionId, {
-      id: "q_1",
-      title: "Need input",
-      questions: [
-        {
-          id: "timeline",
-          prompt: "When?",
-          allowCustomAnswer: true,
-          choices: [],
-        },
-      ],
-    });
-
-    const result = await service.branchSession(sourceSessionId, 1);
-
-    expect(result).not.toBeNull();
-    const branchSessionId = result!.sessionId;
-
-    const branchMessages = await service.getSessionMessages(branchSessionId);
-    expect(branchMessages?.messages).toEqual([
-      { role: "user", content: "Hello" },
-      { role: "assistant", content: "Hi there" },
-    ]);
-    expect(branchMessages?.messageMeta).toHaveLength(2);
-
-    const branchTodos = await service.getSessionTodos(branchSessionId);
-    expect(branchTodos).toEqual([]);
-    expect(await service.getSessionQuestionnaire(branchSessionId)).toBeNull();
-
-    const branchRecord = await db.getSession(branchSessionId);
-    expect(branchRecord?.profileId).toBe("profile_default");
-    expect(branchRecord?.channel).toBe("web");
-    expect(branchRecord?.title).toBe("Original chat (Branch)");
-
-    const sourceMessages = await service.getSessionMessages(sourceSessionId);
-    expect(sourceMessages?.messages).toHaveLength(3);
-  });
-
-  test("rejects an out-of-range branch index", async () => {
-    const db = createInMemoryDatabaseAdapter();
-    await db.upsertProfile(createDefaultProfile());
-    const service = new AgentService(null, null, db);
-
-    const sourceSessionId = await service.createSession(ORG_ID, "web", "profile_default");
-    await db.replaceMessagesForSession(sourceSessionId, [
-      {
-        id: "msg_1",
-        sessionId: sourceSessionId,
-        seq: 0,
-        payload: { role: "user", content: "Hello" },
-        createdAt: "2026-06-14T10:00:00.000Z",
-      },
-    ]);
-
-    await expect(service.branchSession(sourceSessionId, 3)).rejects.toThrow(
-      "messageIndex is out of bounds.",
-    );
-  });
-
-  test("falls back to org default when the requested profile is missing", async () => {
-    const database = await createSqliteDatabase(":memory:");
-    const db = database.adapter;
-    const now = new Date().toISOString();
-
-    try {
-      await db.upsertOrganization({
-        id: ORG_ID,
-        name: "Test Org",
-        slug: "test-org",
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      await db.upsertProfile({
-        id: "profile_custom",
-        name: "Custom",
-        systemPrompt: "You are helpful.",
-        model: null,
-        isSuper: false,
-        orgId: ORG_ID,
-        isDefault: true,
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      const service = new AgentService(null, null, db);
-      const sessionId = await service.createSession(ORG_ID, "web", "missing_profile");
-      const session = await db.getSession(sessionId);
-
-      expect(session?.profileId).toBe("profile_custom");
-    } finally {
-      database.close();
-    }
-  });
-});
-
-describe("AgentService thinking provider options", () => {
-  test("keeps thinking enabled for openai-compatible providers", () => {
-    const db = createInMemoryDatabaseAdapter();
-    const service = new AgentService(
-      {
-        defaultProviderId: "compat-1",
-        providers: [
-          {
-            id: "compat-1",
-            type: "openai_compatible",
-            label: "NetraRuntime",
-            apiKey: "",
-            baseUrl: "https://api.example.com/v1",
-            customModels: [{ id: "qwen3.6-35b", default: true, supportsThinking: true }],
-            createdAt: new Date().toISOString(),
-          },
-        ],
-        thinkingEnabled: true,
-        thinkingEffort: "high",
-      },
-      null,
-      db,
-    );
-
-    const options = (service as unknown as {
-      resolveChatProviderOptions: (
-        providerInstance: {
-          type: "openai_compatible";
-          id: string;
-          label: string;
-          apiKey: string;
-          baseUrl: string;
-          createdAt: string;
-        },
-        thinkingSettings: { enabled: boolean; effort: "low" | "medium" | "high" },
-      ) => { thinking?: { enabled: boolean; effort: string } } | undefined;
-    }).resolveChatProviderOptions(
-      {
-        id: "compat-1",
-        type: "openai_compatible",
-        label: "NetraRuntime",
-        apiKey: "",
-        baseUrl: "https://api.example.com/v1",
-        createdAt: new Date().toISOString(),
-      },
-      { enabled: true, effort: "high" },
-    );
-
-    expect(options?.thinking).toEqual({ enabled: true, effort: "high" });
-  });
-});
-
-describe("AgentService vision settings", () => {
-  test("persists vision model in the database", async () => {
-    const db = createInMemoryDatabaseAdapter();
-    const service = new AgentService(
-      {
-        defaultProviderId: "p-openai-1",
-        providers: [
-          {
-            id: "p-openai-1",
-            type: "openai",
-            label: "OpenAI",
-            apiKey: "test-key",
-            createdAt: new Date().toISOString(),
-          },
-        ],
-      },
-      null,
-      db,
-    );
-
-    const saved = await service.setVisionSettings({ model: "p-openai-1::gpt-4o-mini" });
-
-    expect(saved).toEqual({ vision: { model: "p-openai-1::gpt-4o-mini" } });
-    expect(await db.getWorkspaceSettings()).toMatchObject({
-      visionModel: "p-openai-1::gpt-4o-mini",
-      transcriptionModel: null,
-    });
-    expect(await service.getVisionSettings()).toEqual({
-      vision: { model: "p-openai-1::gpt-4o-mini" },
-    });
-  });
-});
-
-describe("AgentService transcription settings", () => {
-  test("persists transcription model in the database", async () => {
-    const db = createInMemoryDatabaseAdapter();
-    const service = new AgentService(
-      {
-        defaultProviderId: "p-openai-1",
-        providers: [
-          {
-            id: "p-openai-1",
-            type: "openai",
-            label: "OpenAI",
-            apiKey: "test-key",
-            createdAt: new Date().toISOString(),
-          },
-        ],
-      },
-      null,
-      db,
-    );
-
-    const saved = await service.setTranscriptionSettings({ model: "p-openai-1::whisper-1" });
-
-    expect(saved).toEqual({ transcription: { model: "p-openai-1::whisper-1" } });
-    expect(await db.getWorkspaceSettings()).toMatchObject({
-      transcriptionModel: "p-openai-1::whisper-1",
-    });
-    expect(await service.getTranscriptionSettings()).toEqual({
-      transcription: { model: "p-openai-1::whisper-1" },
-    });
-  });
-});
-
-describe("AgentService coding delegation context", () => {
-  const originalPath = process.env.PATH ?? "";
-  const originalDisableFixPath = process.env.NAKAMA_DISABLE_FIX_PATH;
-  let tempBinDir = "";
-
-  beforeEach(async () => {
-    tempBinDir = await mkdtemp(path.join(tmpdir(), "nakama-agent-delegation-bin-"));
-    process.env.PATH = tempBinDir;
-    process.env.NAKAMA_DISABLE_FIX_PATH = "1";
-  });
-
-  afterEach(async () => {
-    process.env.PATH = originalPath;
-    if (originalDisableFixPath === undefined) {
-      delete process.env.NAKAMA_DISABLE_FIX_PATH;
+  afterEach(() => {
+    if (previous === undefined) {
+      delete process.env.NAKAMA_MCP_TOOL_DISCOVERY;
     } else {
-      process.env.NAKAMA_DISABLE_FIX_PATH = originalDisableFixPath;
-    }
-    if (tempBinDir) {
-      await rm(tempBinDir, { recursive: true, force: true });
-      tempBinDir = "";
+      process.env.NAKAMA_MCP_TOOL_DISCOVERY = previous;
     }
   });
 
-  test("includes harness command template and backend guidance for bash delegation", async () => {
-    const db = createInMemoryDatabaseAdapter();
-    await installFakeOpenCode(tempBinDir);
-    await db.upsertWorkspaceSettings({
-      id: WORKSPACE_SETTINGS_ID,
-      visionModel: null,
-      transcriptionModel: null,
-      codingAgentHarnesses: [
-        {
-          id: "coding-harness-opencode",
-          kind: "opencode",
-          name: "OpenCode",
-          command: "opencode",
-          args: [],
-          enabled: true,
+  test("chat MCP definitions and calls respect current assignment", async () => {
+    for (const mode of [
+      "eager",
+      "lazy",
+      "disabled",
+      "unassigned",
+      "moved",
+      "removed",
+      "shared",
+      "unpublished",
+      "search_revoked",
+    ]) {
+      if (mode === "eager") {
+        delete process.env.NAKAMA_MCP_TOOL_DISCOVERY;
+      } else {
+        process.env.NAKAMA_MCP_TOOL_DISCOVERY = "1";
+      }
+
+      const db = createInMemoryDatabaseAdapter();
+      const profile = createDefaultProfile();
+      await db.upsertProfile(profile);
+
+      const server = {
+        cachedTools: [{ description: "Read a file", name: "read_file" }],
+        config: { url: "https://example.invalid/mcp" },
+        createdAt: profile.createdAt,
+        enabled: true,
+        id: "mcp_assigned",
+        lastError: null,
+        name: "files",
+        orgId: TEST_ORG_ID,
+        status: "connected" as const,
+        transport: "http" as const,
+        updatedAt: profile.updatedAt,
+      };
+
+      await db.upsertMcpServer(server);
+      await db.assignMcpServerToProfile(profile.id, server.id);
+      await db.upsertMcpServer({
+        ...server,
+        id: "mcp_unassigned",
+        name: "other",
+      });
+      await db.upsertMcpServer({
+        ...server,
+        enabled: false,
+        id: "mcp_disabled",
+        name: "disabled",
+      });
+      await db.assignMcpServerToProfile(profile.id, "mcp_disabled");
+      const mcp = new McpService(db, new McpClientManager());
+      const calls: string[] = [];
+
+      using _call = spyOn(mcp, "callTool").mockImplementation(
+        async (_server, _name, _input, orgId, profileId) => {
+          calls.push(`${orgId}:${profileId}`);
+
+          return { ok: true };
+        }
+      );
+
+      const snapshots: string[][] = [];
+      let published = true;
+
+      const provider: ProviderClient = {
+        async generateChat(input) {
+          snapshots.push(input.tools?.map((tool) => tool.name) ?? []);
+          const discovered = mode === "eager" || snapshots.length > 1;
+
+          if (mode === "search_revoked" && snapshots.length === 1) {
+            await db.unassignMcpServerFromProfile(profile.id, server.id);
+          }
+
+          if (snapshots.length === 2) {
+            if (mode === "disabled") {
+              await db.upsertMcpServer({ ...server, enabled: false });
+            } else if (mode === "unassigned") {
+              await db.unassignMcpServerFromProfile(profile.id, server.id);
+            } else if (mode === "moved") {
+              await db.upsertProfile({ ...profile, orgId: "other_org" });
+            } else if (mode === "removed") {
+              await db.deleteProfile(profile.id);
+            } else if (mode === "unpublished") {
+              published = false;
+            }
+          }
+
+          const done = input.messages.some(
+            (message) =>
+              message.role === "tool" && message.name === "files__read_file"
+          );
+
+          const content = done ? "Done" : "";
+
+          const toolCalls: ToolCall[] = done
+            ? []
+            : [
+                {
+                  arguments: discovered ? {} : { query: "read files" },
+                  id: `call_${snapshots.length}`,
+                  name: discovered ? "files__read_file" : "find_tools",
+                },
+              ];
+
+          return {
+            assistantMessage: { content, role: "assistant", toolCalls },
+            content,
+            toolCalls,
+          };
         },
-      ],
-      selectedCodingAgentHarness: "coding-harness-opencode",
-      updatedAt: new Date().toISOString(),
-    });
+        generateText: async () => ({ content: "unused" }),
+        name: "openai",
+        async streamChat(input, handlers) {
+          const result = await this.generateChat(input);
+          handlers.onChunk(result.content);
 
-    const service = new AgentService(null, null, db);
-    const context = await (service as unknown as {
-      formatCodingDelegationContext(orgId: string, profileId: string): Promise<string>;
-    }).formatCodingDelegationContext("org_test", "profile_test");
+          return result;
+        },
+      };
 
-    expect(context).toContain("bash");
-    expect(context).toContain("opencode run");
-    expect(context).not.toContain("delegate_coding_task");
-  });
+      const agent = new AgentService(null, null, db);
+      agent.setMcpService(mcp);
+      Object.assign(agent, { createHarnessForProfile: () => ({ provider }) });
 
-  test("falls back gracefully when no harness is ready", async () => {
-    const db = createInMemoryDatabaseAdapter();
-    await db.upsertWorkspaceSettings({
-      id: WORKSPACE_SETTINGS_ID,
-      visionModel: null,
-      transcriptionModel: null,
-      codingAgentHarnesses: [],
-      selectedCodingAgentHarness: null,
-      updatedAt: new Date().toISOString(),
-    });
+      if (mode === "shared" || mode === "unpublished") {
+        Object.assign(agent, {
+          resolveSharedAgentProfile: async () =>
+            published
+              ? { ...profile, assignedMcpServers: [server], assignedTools: [] }
+              : null,
+        });
+      }
 
-    const service = new AgentService(null, null, db);
-    const context = await (service as unknown as {
-      formatCodingDelegationContext(orgId: string, profileId: string): Promise<string>;
-    }).formatCodingDelegationContext("org_test", "profile_test");
+      const sessionId = await agent.createSession(
+        TEST_ORG_ID,
+        "web",
+        profile.id,
+        null,
+        { orgRole: "member" }
+      );
 
-    expect(context).toContain("bash");
-    expect(context).not.toContain("delegate_coding_task");
+      const session = (await agent.resolveSession(sessionId, TEST_ORG_ID))!;
+      await session.send("Read a file");
+
+      expect(snapshots[0]).not.toContain("other__read_file");
+      expect(snapshots[0]).not.toContain("disabled__read_file");
+
+      if (mode === "eager") {
+        expect(snapshots[0]).toContain("files__read_file");
+      } else {
+        expect(snapshots[0]).not.toContain("files__read_file");
+        expect(snapshots[0]).toContain("find_tools");
+
+        if (mode === "search_revoked") {
+          expect(snapshots[1]).not.toContain("files__read_file");
+        } else {
+          expect(snapshots[1]).toContain("files__read_file");
+        }
+      }
+
+      const allowed = mode === "eager" || mode === "lazy" || mode === "shared";
+      expect(calls).toEqual(allowed ? [`${TEST_ORG_ID}:${profile.id}`] : []);
+
+      const result = session
+        .getHistory()
+        .find(
+          (message) =>
+            message.role === "tool" && message.name === "files__read_file"
+        );
+
+      expect(JSON.parse(String(result?.content))).toEqual(
+        allowed ? { ok: true } : { error: expect.any(String) }
+      );
+    }
   });
 });
-
-async function installFakeOpenCode(binDir: string): Promise<void> {
-  const scriptPath = path.join(binDir, "opencode");
-  await writeFile(
-    scriptPath,
-    [
-      "#!/bin/sh",
-      "if [ \"$1\" = \"--version\" ]; then",
-      "  echo \"fake opencode\"",
-      "  exit 0",
-      "fi",
-      "printf '%s' \"$*\"",
-    ].join("\n"),
-  );
-  await chmod(scriptPath, 0o755);
-}

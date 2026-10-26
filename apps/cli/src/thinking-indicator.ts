@@ -1,11 +1,29 @@
-import type { StatusRenderer } from "./terminal-renderer";
-import { serializeStyledLine, styledLine, type StyledLine } from "./styled-text";
+import {
+  type StyledLine,
+  serializeStyledLine,
+  styledLine,
+} from "./styled-text";
+import type { TerminalRenderer } from "./terminal-renderer";
 
-const THINKING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+const THINKING_FRAMES = [
+  "⠋",
+  "⠙",
+  "⠹",
+  "⠸",
+  "⠼",
+  "⠴",
+  "⠦",
+  "⠧",
+  "⠇",
+  "⠏",
+] as const;
+
 const FRAME_INTERVAL_MS = 80;
 
-export function formatThinkingIndicator(frameIndex: number): StyledLine {
-  const frame = THINKING_FRAMES[frameIndex % THINKING_FRAMES.length] ?? THINKING_FRAMES[0];
+function formatThinkingIndicator(frameIndex: number): StyledLine {
+  const frame =
+    THINKING_FRAMES[frameIndex % THINKING_FRAMES.length] ?? THINKING_FRAMES[0];
+
   return styledLine(` ${frame} Thinking `, { dim: true });
 }
 
@@ -13,10 +31,15 @@ export class ThinkingIndicator {
   private active = false;
   private frame = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
-  private renderer: StatusRenderer | null = null;
+  private renderer: Pick<
+    TerminalRenderer,
+    "isEnabled" | "setStatusLine"
+  > | null = null;
   private lineStarted = false;
 
-  setRenderer(renderer: StatusRenderer | null): void {
+  setRenderer(
+    renderer: Pick<TerminalRenderer, "isEnabled" | "setStatusLine"> | null
+  ): void {
     this.renderer = renderer;
   }
 
@@ -60,6 +83,7 @@ export class ThinkingIndicator {
     if (this.renderer?.isEnabled()) {
       this.renderer.setStatusLine(content);
       this.lineStarted = true;
+
       return;
     }
 

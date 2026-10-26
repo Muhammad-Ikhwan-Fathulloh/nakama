@@ -1,22 +1,39 @@
-import { homedir } from "node:os";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
+import { z } from "zod";
+
+import { NakamaApiError } from "./api-error";
 import {
   isValidBaseUrl,
   normalizeBaseUrl,
   parseCustomModelsJson,
+  parseWireApi,
   serializeCustomModels,
   validateDisplayName,
 } from "./compatible-provider-config";
+import { readEnvValue } from "./config";
 import type {
+  ChatgptOAuthCredentials,
   CustomModelEntry,
+  OpenRouterRoutingSettings,
   ProviderChatOptions,
   ThinkingEffort,
   ThinkingSettings,
   TranscriptionSettings,
   VisionSettings,
+  XaiOAuthCredentials,
 } from "./contract";
-import { ensureDir, readTextOrNull, writePrivateTextFile } from "./fs";
+import { ensureDir, readTextOrNull, writeTextFile } from "./fs";
+import {
+  defaultOllamaBaseUrl,
+  defaultOllamaLabel,
+  ollamaRequiresApiKey,
+  parseOllamaHostMode,
+  resolveOllamaHostMode,
+} from "./ollama-provider-config";
 import {
   apiKeyEnvVarForProvider,
   parseProviderName,
@@ -24,49 +41,98 @@ import {
 } from "./provider-resolution";
 
 export type { UserProviderName } from "./provider-resolution";
+
 export {
   apiKeyEnvVarForProvider,
-  parseProviderName,
+  isDiscoveryModelProvider,
   resolveProvider,
 } from "./provider-resolution";
 
 export interface ProviderInstance {
-  id: string;
-  type: UserProviderName;
-  label: string;
   apiKey: string;
   baseUrl?: string;
-  customModels?: CustomModelEntry[];
+  chatgptAccessToken?: string;
+  chatgptAccountId?: string;
+  chatgptRefreshToken?: string;
+  chatgptTokenExpiresAt?: string;
   createdAt: string;
+  customModels?: CustomModelEntry[];
+  hostMode?: import("./contract").OllamaHostMode;
+  id: string;
+  label: string;
+  openRouterRouting?: OpenRouterRoutingSettings;
+  type: UserProviderName;
+  wireApi?: import("./contract").WireApi;
+  xaiAccessToken?: string;
+  xaiRefreshToken?: string;
+  xaiTokenExpiresAt?: string;
 }
+
+interface UserConfigGlobalValues extends Record<string, string | undefined> {}
+
+interface ProviderSectionValues extends Record<string, string> {}
+
+const OpenRouterRoutingSchema = z.record(z.string(), z.json().optional());
+
+const XaiOAuthSchema = z.object({
+  accessToken: z.string().trim().min(1),
+  expiresAt: z.string().refine((value) => Number.isFinite(Date.parse(value))),
+  refreshToken: z.string().trim().min(1),
+});
 
 export interface UserConfig {
   defaultProviderId: string | null;
-  providers: ProviderInstance[];
-  timezone?: string;
-  thinkingEnabled?: boolean;
-  thinkingEffort?: ThinkingEffort;
-  visionModel?: string | null;
-  transcriptionModel?: string | null;
-  localAuthTokenHash?: string;
+  imageModel?: string | null;
   localAuthToken?: string;
+  localAuthTokenHash?: string;
+  providers: ProviderInstance[];
+  thinkingEffort?: ThinkingEffort;
+  thinkingEnabled?: boolean;
+  timezone?: string;
+  transcriptionModel?: string | null;
+  visionModel?: string | null;
 }
 
 export const DEFAULT_TIMEZONE = "UTC";
+
 export const DEFAULT_THINKING_ENABLED = true;
+
 export const DEFAULT_THINKING_EFFORT: ThinkingEffort = "medium";
 
 const PROVIDER_SECTION_PREFIX = "provider.";
 
 const PROVIDER_TYPE_LABELS: Record<UserProviderName, string> = {
-  openai: "OpenAI",
   anthropic: "Anthropic",
-  openrouter: "OpenRouter",
-  gemini: "Gemini",
-  deepseek: "DeepSeek",
   cerebras: "Cerebras",
+  chatgpt: "ChatGPT (Plus/Pro)",
+  cloudflare: "Cloudflare Worker AI",
+  deepseek: "DeepSeek",
+  doubao: "Doubao (Volcengine)",
+  fireworks: "Fireworks",
+  gemini: "Gemini",
+  groq: "Groq",
+  meta: "Meta Model API",
+  minimax: "MiniMax",
+  minimax_cn: "MiniMax (CN)",
+  mistral: "Mistral",
+  moonshot: "Moonshot Kimi",
+  moonshot_cn: "Moonshot Kimi (CN)",
+  netra: "Netra Runtime",
+  ollama: "Ollama",
+  openai: "OpenAI",
   openai_compatible: "Custom",
   opencode_go: "OpenCode Go",
+  openrouter: "OpenRouter",
+  perplexity: "Perplexity Sonar",
+  qwen: "Qwen (DashScope)",
+  qwen_cn: "Qwen (DashScope CN)",
+  together: "Together AI",
+  vercel_ai_gateway: "Vercel AI Gateway",
+  xai: "xAI Grok",
+  xai_oauth: "Grok (SuperGrok / Premium+)",
+  xiaomi: "Xiaomi MiMo",
+  zhipu: "GLM (Z.ai)",
+  zhipu_cn: "GLM (CN)",
 };
 
 export function createProviderInstanceId(): string {
@@ -76,7 +142,24 @@ export function createProviderInstanceId(): string {
 export function defaultProviderLabel(
   type: UserProviderName,
   existing: ProviderInstance[],
+  options?: { hostMode?: import("./contract").OllamaHostMode }
 ): string {
+  if (type === "ollama" && options?.hostMode) {
+    const base = defaultOllamaLabel(options.hostMode);
+
+    const sameMode = existing.filter(
+      (entry) =>
+        entry.type === "ollama" &&
+        resolveOllamaHostMode(entry) === options.hostMode
+    );
+
+    if (sameMode.length === 0) {
+      return base;
+    }
+
+    return `${base} (${sameMode.length + 1})`;
+  }
+
   const base = PROVIDER_TYPE_LABELS[type] ?? type.replace(/_/g, " ");
   const sameType = existing.filter((entry) => entry.type === type);
 
@@ -91,6 +174,7 @@ export function normalizeProviderInstanceLabel(
   type: UserProviderName,
   label: string | undefined,
   existing: ProviderInstance[],
+  options?: { hostMode?: import("./contract").OllamaHostMode }
 ): string {
   const trimmed = label?.trim();
 
@@ -98,18 +182,18 @@ export function normalizeProviderInstanceLabel(
     return trimmed;
   }
 
-  return defaultProviderLabel(type, existing);
+  return defaultProviderLabel(type, existing, options);
 }
 
 export function findProviderInstance(
   config: UserConfig | null | undefined,
-  providerId: string,
+  providerId: string
 ): ProviderInstance | null {
   return config?.providers.find((entry) => entry.id === providerId) ?? null;
 }
 
 export function getActiveProviderInstance(
-  config: UserConfig | null | undefined,
+  config: UserConfig | null | undefined
 ): ProviderInstance | null {
   if (!config?.defaultProviderId) {
     return null;
@@ -120,7 +204,7 @@ export function getActiveProviderInstance(
 
 export function isProviderConfigured(
   config: UserConfig | null | undefined,
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = process.env
 ): boolean {
   const active = getActiveProviderInstance(config);
 
@@ -128,8 +212,33 @@ export function isProviderConfigured(
     return false;
   }
 
+  if (active.type === "chatgpt") {
+    return isChatgptProviderConnected(active);
+  }
+
   if (active.type === "openai_compatible") {
     return Boolean(active.baseUrl?.trim() && active.label.trim());
+  }
+
+  if (active.type === "ollama") {
+    const hostMode = resolveOllamaHostMode(active);
+    const baseUrl = active.baseUrl?.trim() || defaultOllamaBaseUrl(hostMode);
+
+    if (!baseUrl) {
+      return false;
+    }
+
+    if (ollamaRequiresApiKey(hostMode)) {
+      if (active.apiKey.trim()) {
+        return true;
+      }
+
+      const envVar = apiKeyEnvVarForProvider(active.type);
+
+      return Boolean(envVar && readEnvValue(env, envVar));
+    }
+
+    return true;
   }
 
   if (active.apiKey.trim()) {
@@ -137,12 +246,14 @@ export function isProviderConfigured(
   }
 
   const envVar = apiKeyEnvVarForProvider(active.type);
-  return Boolean(envVar && env[envVar]?.trim());
+
+  return Boolean(envVar && readEnvValue(env, envVar));
 }
 
 export function isValidTimezone(timezone: string): boolean {
   try {
     Intl.DateTimeFormat(undefined, { timeZone: timezone });
+
     return true;
   } catch {
     return false;
@@ -151,7 +262,7 @@ export function isValidTimezone(timezone: string): boolean {
 
 export function validateTimezone(
   timezone: string | undefined,
-  fallback = DEFAULT_TIMEZONE,
+  fallback = DEFAULT_TIMEZONE
 ): string {
   const value = timezone?.trim() || fallback;
 
@@ -162,10 +273,28 @@ export function validateTimezone(
   return value;
 }
 
+// Org id reaches this as a path segment, so anything that could climb out of
+// the config dir is rejected here rather than at each caller.
+const ORG_ID_SEGMENT = /^[A-Za-z0-9][\w.-]{0,63}$/;
+
+export function getOrgConfigDir(orgId: string): string {
+  if (!ORG_ID_SEGMENT.test(orgId)) {
+    throw new Error(`Invalid organization id: ${orgId}`);
+  }
+
+  return join(getUserConfigDir(), "orgs", orgId);
+}
+
 export function getUserConfigDir(): string {
   const override = process.env.NAKAMA_CONFIG_DIR?.trim();
 
   if (override) {
+    if (!isAbsolute(override)) {
+      throw new Error(
+        "NAKAMA_CONFIG_DIR must be an absolute path; relative paths resolve against process.cwd() and break profile isolation."
+      );
+    }
+
     return override;
   }
 
@@ -179,7 +308,100 @@ export function getUserConfigPath(): string {
 export async function ensureUserConfigDir(): Promise<string> {
   const dir = getUserConfigDir();
   await ensureDir(dir);
+
   return dir;
+}
+
+/**
+ * Stored credentials (custom tool keys, MCP server config) are AES-256-GCM
+ * encrypted. The key lives in its own owner-only file, so a copy of
+ * config.ini or the database alone does not reveal them.
+ */
+const CREDENTIAL_KEY_FILE = "tool-credentials.key";
+
+const ErrorCodeSchema = z.object({ code: z.string().optional() });
+
+function hasErrorCode(error: Error, code: string): boolean {
+  return ErrorCodeSchema.safeParse(error).data?.code === code;
+}
+
+async function readCredentialEncryptionKey(): Promise<Buffer> {
+  const keyPath = join(getUserConfigDir(), CREDENTIAL_KEY_FILE);
+
+  try {
+    return Buffer.from((await readFile(keyPath, "utf8")).trim(), "base64url");
+  } catch (error) {
+    if (!(error instanceof Error && hasErrorCode(error, "ENOENT"))) {
+      throw error;
+    }
+  }
+
+  await ensureUserConfigDir();
+  const key = randomBytes(32);
+
+  try {
+    await writeFile(keyPath, key.toString("base64url"), {
+      flag: "wx",
+      mode: 0o600,
+    });
+
+    return key;
+  } catch (error) {
+    if (!(error instanceof Error && hasErrorCode(error, "EEXIST"))) {
+      throw error;
+    }
+
+    return Buffer.from((await readFile(keyPath, "utf8")).trim(), "base64url");
+  }
+}
+
+/**
+ * `scope` is bound as AAD, so a ciphertext copied to another scope (another
+ * org, another MCP server) does not decrypt there.
+ */
+export async function encryptCredential(
+  scope: string,
+  plaintext: string
+): Promise<string> {
+  const iv = randomBytes(12);
+
+  const cipher = createCipheriv(
+    "aes-256-gcm",
+    await readCredentialEncryptionKey(),
+    iv
+  );
+
+  cipher.setAAD(Buffer.from(scope, "utf8"));
+
+  const ciphertext = Buffer.concat([
+    cipher.update(plaintext, "utf8"),
+    cipher.final(),
+  ]);
+
+  return Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString(
+    "base64url"
+  );
+}
+
+export async function decryptCredential(
+  scope: string,
+  value: string
+): Promise<string> {
+  const encoded = Buffer.from(value, "base64url");
+
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    await readCredentialEncryptionKey(),
+    encoded.subarray(0, 12)
+  );
+
+  decipher.setAAD(Buffer.from(scope, "utf8"));
+  decipher.setAuthTag(encoded.subarray(12, 28));
+
+  return Buffer.concat([
+    decipher.update(encoded.subarray(28)),
+    decipher.final(),
+  ]).toString("utf8");
 }
 
 export async function loadUserConfig(): Promise<UserConfig | null> {
@@ -194,21 +416,29 @@ export async function loadUserConfig(): Promise<UserConfig | null> {
   const timezone = readTimezone(parsed.global);
   const providers = loadProvidersFromSections(parsed.sections);
 
-  return {
+  const config: UserConfig = {
     defaultProviderId: parsed.global.default_provider_id?.trim() || null,
+    imageModel: readImageModel(parsed.global),
     providers,
-    ...(timezone ? { timezone } : {}),
-    thinkingEnabled: thinking.enabled,
     thinkingEffort: thinking.effort,
-    visionModel: readVisionModel(parsed.global),
+    thinkingEnabled: thinking.enabled,
     transcriptionModel: readTranscriptionModel(parsed.global),
-    ...(parsed.global.local_auth_token_hash?.trim()
-      ? { localAuthTokenHash: parsed.global.local_auth_token_hash.trim() }
-      : {}),
-    ...(parsed.global.local_auth_token?.trim()
-      ? { localAuthToken: parsed.global.local_auth_token.trim() }
-      : {}),
+    visionModel: readVisionModel(parsed.global),
   };
+
+  if (timezone) {
+    config.timezone = timezone;
+  }
+
+  if (parsed.global.local_auth_token_hash?.trim()) {
+    config.localAuthTokenHash = parsed.global.local_auth_token_hash.trim();
+  }
+
+  if (parsed.global.local_auth_token?.trim()) {
+    config.localAuthToken = parsed.global.local_auth_token.trim();
+  }
+
+  return config;
 }
 
 export async function loadUserTimezone(): Promise<string> {
@@ -223,11 +453,19 @@ export async function loadUserTimezone(): Promise<string> {
 
 function readVisionModel(global: Record<string, string>): string | null {
   const trimmed = global.vision_model?.trim();
+
   return trimmed ? trimmed : null;
 }
 
 function readTranscriptionModel(global: Record<string, string>): string | null {
   const trimmed = global.transcription_model?.trim();
+
+  return trimmed ? trimmed : null;
+}
+
+function readImageModel(global: Record<string, string>): string | null {
+  const trimmed = global.image_model?.trim();
+
   return trimmed ? trimmed : null;
 }
 
@@ -239,26 +477,6 @@ export async function loadUserVisionSettings(): Promise<VisionSettings> {
   }
 
   return { model: readVisionModel(parseIniWithSections(raw).global) };
-}
-
-export async function saveUserVisionSettings(settings: VisionSettings): Promise<void> {
-  const model = settings.model?.trim() || null;
-  const existing = await loadUserConfig();
-
-  if (existing) {
-    await saveUserConfig({ ...existing, visionModel: model });
-    return;
-  }
-
-  const raw = await readTextOrNull(getUserConfigPath());
-  const parsed = raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
-  const lines = buildConfigIniLines(parsed.global, parsed.sections, {
-    vision_model: model ?? "",
-  });
-
-  await writePrivateTextFile(getUserConfigPath(), lines.join("\n"), {
-    ensureDir: getUserConfigDir(),
-  });
 }
 
 export async function loadUserTranscriptionSettings(): Promise<TranscriptionSettings> {
@@ -276,8 +494,8 @@ export async function loadUserThinkingSettings(): Promise<ThinkingSettings> {
 
   if (raw === null) {
     return {
-      enabled: DEFAULT_THINKING_ENABLED,
       effort: DEFAULT_THINKING_EFFORT,
+      enabled: DEFAULT_THINKING_ENABLED,
     };
   }
 
@@ -285,7 +503,7 @@ export async function loadUserThinkingSettings(): Promise<ThinkingSettings> {
 }
 
 export async function saveUserThinkingSettings(
-  settings: ThinkingSettings,
+  settings: ThinkingSettings
 ): Promise<void> {
   const effort = validateThinkingEffort(settings.effort);
   const enabled = settings.enabled;
@@ -294,72 +512,94 @@ export async function saveUserThinkingSettings(
   if (existing) {
     await saveUserConfig({
       ...existing,
-      thinkingEnabled: enabled,
       thinkingEffort: effort,
+      thinkingEnabled: enabled,
     });
+
     return;
   }
 
   const raw = await readTextOrNull(getUserConfigPath());
-  const parsed = raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
+
+  const parsed =
+    raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
+
   const lines = buildConfigIniLines(parsed.global, parsed.sections, {
     thinking: enabled ? "on" : "off",
     thinking_effort: effort,
   });
 
-  await writePrivateTextFile(getUserConfigPath(), lines.join("\n"), {
+  await writeTextFile(getUserConfigPath(), lines.join("\n"), {
     ensureDir: getUserConfigDir(),
   });
 }
 
 export function buildThinkingProviderOptions(
-  config: Pick<UserConfig, "thinkingEnabled" | "thinkingEffort"> | null,
+  config: Pick<UserConfig, "thinkingEnabled" | "thinkingEffort"> | null
 ): ProviderChatOptions["thinking"] | undefined {
   const enabled = config?.thinkingEnabled ?? DEFAULT_THINKING_ENABLED;
 
   if (!enabled) {
-    return undefined;
+    return;
   }
 
   return {
-    enabled: true,
     effort: config?.thinkingEffort ?? DEFAULT_THINKING_EFFORT,
+    enabled: true,
   };
 }
 
-export async function saveUserTimezone(timezone: string): Promise<void> {
-  const trimmed = timezone.trim();
+export async function saveUserTimezone(
+  // Undefined, not just empty: request bodies reach this unvalidated, so an
+  // absent field has to name itself here rather than throw a TypeError.
+  timezone: string | undefined
+): Promise<string> {
+  const trimmed = timezone?.trim() ?? "";
 
-  if (!trimmed || !isValidTimezone(trimmed)) {
-    throw new Error(`Invalid timezone: ${timezone}`);
+  if (!trimmed) {
+    throw new NakamaApiError("Timezone is required.", 400);
+  }
+
+  if (!isValidTimezone(trimmed)) {
+    throw new NakamaApiError(`Invalid timezone: ${trimmed}`, 400);
   }
 
   const existing = await loadUserConfig();
 
   if (existing) {
     await saveUserConfig({ ...existing, timezone: trimmed });
-    return;
+
+    return trimmed;
   }
 
   const raw = await readTextOrNull(getUserConfigPath());
-  const parsed = raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
+
+  const parsed =
+    raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
+
   const lines = buildConfigIniLines(parsed.global, parsed.sections, {
     timezone: trimmed,
   });
 
-  await writePrivateTextFile(getUserConfigPath(), lines.join("\n"), {
+  await writeTextFile(getUserConfigPath(), lines.join("\n"), {
     ensureDir: getUserConfigDir(),
   });
+
+  return trimmed;
 }
 
 function readWebPublicUrl(values: Record<string, string>): string | undefined {
   const trimmed = values.web_public_url?.trim();
-  return trimmed && isValidBaseUrl(trimmed) ? normalizeBaseUrl(new URL(trimmed).origin) : undefined;
+
+  return trimmed && isValidBaseUrl(trimmed)
+    ? normalizeBaseUrl(trimmed)
+    : undefined;
 }
 
 export function readUserWebPublicUrlSync(): string | null {
   try {
     const raw = readFileSync(getUserConfigPath(), "utf8");
+
     return readWebPublicUrl(parseIniWithSections(raw).global) ?? null;
   } catch {
     return null;
@@ -376,32 +616,41 @@ export async function loadUserWebPublicUrl(): Promise<string | null> {
   return readWebPublicUrl(parseIniWithSections(raw).global) ?? null;
 }
 
-export async function saveUserWebPublicUrl(webPublicUrl: string): Promise<string> {
+export async function saveUserWebPublicUrl(
+  webPublicUrl: string
+): Promise<string> {
   const trimmed = webPublicUrl.trim();
 
-  if (!trimmed || !isValidBaseUrl(trimmed)) {
+  if (!(trimmed && isValidBaseUrl(trimmed))) {
     throw new Error("webPublicUrl must be a valid http or https URL.");
   }
 
-  const normalized = normalizeBaseUrl(new URL(trimmed).origin);
+  const normalized = normalizeBaseUrl(trimmed);
   const existing = await loadUserConfig();
 
   if (existing) {
     const raw = await readTextOrNull(getUserConfigPath());
-    const parsed = raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
+
+    const parsed =
+      raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
+
     await writeParsedConfigIni(parsed.global, parsed.sections, {
       web_public_url: normalized,
     });
+
     return normalized;
   }
 
   const raw = await readTextOrNull(getUserConfigPath());
-  const parsed = raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
+
+  const parsed =
+    raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
+
   const lines = buildConfigIniLines(parsed.global, parsed.sections, {
     web_public_url: normalized,
   });
 
-  await writePrivateTextFile(getUserConfigPath(), lines.join("\n"), {
+  await writeTextFile(getUserConfigPath(), lines.join("\n"), {
     ensureDir: getUserConfigDir(),
   });
 
@@ -410,6 +659,7 @@ export async function saveUserWebPublicUrl(webPublicUrl: string): Promise<string
 
 export async function saveUserConfig(config: UserConfig): Promise<void> {
   const raw = await readTextOrNull(getUserConfigPath());
+
   const existingParsed =
     raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
 
@@ -418,18 +668,20 @@ export async function saveUserConfig(config: UserConfig): Promise<void> {
     thinking_effort: config.thinkingEffort ?? DEFAULT_THINKING_EFFORT,
   });
 
-  const global: Record<string, string | undefined> = {
+  const global: UserConfigGlobalValues = {
     ...existingParsed.global,
     default_provider_id: config.defaultProviderId ?? "",
-    timezone: config.timezone,
+    image_model: config.imageModel ?? "",
+    local_auth_token_hash: config.localAuthTokenHash,
     thinking: thinking.enabled ? "on" : "off",
     thinking_effort: thinking.effort,
-    vision_model: config.visionModel ?? "",
+    timezone: config.timezone,
     transcription_model: config.transcriptionModel ?? "",
-    local_auth_token_hash: config.localAuthTokenHash,
+    vision_model: config.visionModel ?? "",
   };
 
   const sections: Record<string, Record<string, string>> = {};
+
   for (const [sectionName, values] of Object.entries(existingParsed.sections)) {
     if (!sectionName.startsWith(PROVIDER_SECTION_PREFIX)) {
       sections[sectionName] = { ...values };
@@ -441,13 +693,18 @@ export async function saveUserConfig(config: UserConfig): Promise<void> {
     label: normalizeProviderInstanceLabel(
       provider.type,
       provider.label,
-      config.providers.slice(0, index),
+      config.providers.slice(0, index)
     ),
   }));
 
   for (const provider of providers) {
     const sectionName = `${PROVIDER_SECTION_PREFIX}${provider.id}`;
-    sections[sectionName] = buildProviderSectionValues(provider);
+    // Keep a legacy file key until the server migration moves it into the
+    // secret store; the CLI can save the config before the server starts.
+    const legacyApiKey = existingParsed.sections[sectionName]?.api_key;
+    sections[sectionName] = legacyApiKey
+      ? { ...buildProviderSectionValues(provider), api_key: legacyApiKey }
+      : buildProviderSectionValues(provider);
   }
 
   await writeParsedConfigIni(global, sections);
@@ -457,10 +714,11 @@ export async function writeParsedConfigIni(
   global: Record<string, string | undefined>,
   sections: Record<string, Record<string, string>>,
   patch: Record<string, string | undefined> = {},
+  targetPath = getUserConfigPath()
 ): Promise<void> {
   const lines = buildConfigIniLines(global, sections, patch);
-  await writePrivateTextFile(getUserConfigPath(), lines.join("\n"), {
-    ensureDir: getUserConfigDir(),
+  await writeTextFile(targetPath, lines.join("\n"), {
+    ensureDir: dirname(targetPath),
   });
 }
 
@@ -508,8 +766,45 @@ export function parseIniWithSections(raw: string): ParsedIniFile {
   return { global, sections };
 }
 
+export function validateOpenRouterRoutingSettings<Value>(
+  value: Value
+): OpenRouterRoutingSettings {
+  const parsed = OpenRouterRoutingSchema.safeParse(value);
+
+  if (!parsed.success) {
+    throw new NakamaApiError("OpenRouter routing must be an object.", 400);
+  }
+
+  const settings: OpenRouterRoutingSettings = {};
+
+  for (const [key, entry] of Object.entries(parsed.data)) {
+    if (entry === undefined) {
+      continue;
+    }
+
+    const booleanSetting = z.boolean().safeParse(entry);
+    const collectionSetting = z.enum(["allow", "deny"]).safeParse(entry);
+
+    if (
+      (key === "zdr" || key === "requireParameters") &&
+      booleanSetting.success
+    ) {
+      settings[key] = booleanSetting.data;
+    } else if (key === "dataCollection" && collectionSetting.success) {
+      settings.dataCollection = collectionSetting.data;
+    } else {
+      throw new NakamaApiError(
+        `Invalid OpenRouter routing setting: ${key}`,
+        400
+      );
+    }
+  }
+
+  return settings;
+}
+
 function loadProvidersFromSections(
-  sections: Record<string, Record<string, string>>,
+  sections: Record<string, Record<string, string>>
 ): ProviderInstance[] {
   const providers: ProviderInstance[] = [];
 
@@ -521,54 +816,154 @@ function loadProvidersFromSections(
     const id = sectionName.slice(PROVIDER_SECTION_PREFIX.length).trim();
     const type = parseProviderName(values.type);
 
-    if (!id || !type) {
+    if (!(id && type)) {
       continue;
     }
 
     const label = normalizeProviderInstanceLabel(type, values.label, providers);
-    const apiKey = values.api_key ?? "";
+    const apiKey = "";
+
     const baseUrl = values.base_url?.trim()
       ? normalizeBaseUrl(values.base_url)
       : undefined;
-    const customModels =
-      type === "openai_compatible" ||
-      type === "openrouter" ||
-      type === "cerebras" ||
-      type === "opencode_go"
-        ? parseCustomModelsJson(values.models_json)
+
+    // Writer persists models_json for every type that has a shortlist/catalog
+    // override; load any present JSON so restarts keep shortlists.
+    const customModels = parseCustomModelsJson(values.models_json);
+
+    const hostMode =
+      type === "ollama"
+        ? (parseOllamaHostMode(values.host_mode) ?? undefined)
         : undefined;
+
+    const wireApi =
+      type === "openai_compatible" ? parseWireApi(values.wire_api) : undefined;
+
     const createdAt = values.created_at?.trim() || new Date(0).toISOString();
 
-    providers.push({
-      id,
-      type,
-      label,
+    const provider: ProviderInstance = {
       apiKey,
-      ...(baseUrl ? { baseUrl } : {}),
-      ...(customModels ? { customModels } : {}),
       createdAt,
-    });
+      id,
+      label,
+      type,
+    };
+
+    if (values.xai_access_token?.trim()) {
+      provider.xaiAccessToken = values.xai_access_token.trim();
+    }
+
+    if (values.chatgpt_access_token?.trim()) {
+      provider.chatgptAccessToken = values.chatgpt_access_token.trim();
+    }
+
+    if (values.xai_refresh_token?.trim()) {
+      provider.xaiRefreshToken = values.xai_refresh_token.trim();
+    }
+
+    if (values.chatgpt_refresh_token?.trim()) {
+      provider.chatgptRefreshToken = values.chatgpt_refresh_token.trim();
+    }
+
+    if (values.chatgpt_account_id?.trim()) {
+      provider.chatgptAccountId = values.chatgpt_account_id.trim();
+    }
+
+    if (values.xai_token_expires_at?.trim()) {
+      provider.xaiTokenExpiresAt = values.xai_token_expires_at.trim();
+    }
+
+    if (values.chatgpt_token_expires_at?.trim()) {
+      provider.chatgptTokenExpiresAt = values.chatgpt_token_expires_at.trim();
+    }
+
+    if (baseUrl) {
+      provider.baseUrl = baseUrl;
+    }
+
+    if (hostMode) {
+      provider.hostMode = hostMode;
+    }
+
+    if (wireApi) {
+      provider.wireApi = wireApi;
+    }
+
+    if (customModels) {
+      provider.customModels = customModels;
+    }
+
+    if (type === "openrouter" && values.openrouter_routing_json) {
+      provider.openRouterRouting = validateOpenRouterRoutingSettings(
+        JSON.parse(values.openrouter_routing_json)
+      );
+    }
+
+    providers.push(provider);
   }
 
   return providers.sort((left, right) =>
-    left.createdAt.localeCompare(right.createdAt),
+    left.createdAt.localeCompare(right.createdAt)
   );
 }
 
-function buildProviderSectionValues(provider: ProviderInstance): Record<string, string> {
-  const values: Record<string, string> = {
-    type: provider.type,
-    label: normalizeProviderInstanceLabel(provider.type, provider.label, []),
-    api_key: provider.apiKey,
+function buildProviderSectionValues(
+  provider: ProviderInstance
+): ProviderSectionValues {
+  const values: ProviderSectionValues = {
     created_at: provider.createdAt,
+    label: normalizeProviderInstanceLabel(provider.type, provider.label, []),
+    type: provider.type,
   };
 
   if (provider.baseUrl?.trim()) {
     values.base_url = normalizeBaseUrl(provider.baseUrl);
   }
 
+  if (provider.type === "ollama" && provider.hostMode) {
+    values.host_mode = provider.hostMode;
+  }
+
+  if (provider.type === "openai_compatible" && provider.wireApi) {
+    values.wire_api = provider.wireApi;
+  }
+
   if (provider.customModels?.length) {
     values.models_json = serializeCustomModels(provider.customModels);
+  }
+
+  if (provider.type === "openrouter" && provider.openRouterRouting) {
+    values.openrouter_routing_json = JSON.stringify(
+      validateOpenRouterRoutingSettings(provider.openRouterRouting)
+    );
+  }
+
+  if (provider.xaiAccessToken?.trim()) {
+    values.xai_access_token = provider.xaiAccessToken.trim();
+  }
+
+  if (provider.chatgptAccessToken?.trim()) {
+    values.chatgpt_access_token = provider.chatgptAccessToken.trim();
+  }
+
+  if (provider.xaiRefreshToken?.trim()) {
+    values.xai_refresh_token = provider.xaiRefreshToken.trim();
+  }
+
+  if (provider.chatgptRefreshToken?.trim()) {
+    values.chatgpt_refresh_token = provider.chatgptRefreshToken.trim();
+  }
+
+  if (provider.chatgptAccountId?.trim()) {
+    values.chatgpt_account_id = provider.chatgptAccountId.trim();
+  }
+
+  if (provider.xaiTokenExpiresAt?.trim()) {
+    values.xai_token_expires_at = provider.xaiTokenExpiresAt.trim();
+  }
+
+  if (provider.chatgptTokenExpiresAt?.trim()) {
+    values.chatgpt_token_expires_at = provider.chatgptTokenExpiresAt.trim();
   }
 
   return values;
@@ -577,13 +972,29 @@ function buildProviderSectionValues(provider: ProviderInstance): Record<string, 
 function buildConfigIniLines(
   global: Record<string, string | undefined>,
   sections: Record<string, Record<string, string>>,
-  patch: Record<string, string | undefined> = {},
+  patch: Record<string, string | undefined> = {}
 ): string[] {
   const mergedGlobal = { ...global, ...patch };
   const lines = ["# Nakama user config"];
 
   if (mergedGlobal.default_provider_id !== undefined) {
-    lines.push(`default_provider_id=${mergedGlobal.default_provider_id.trim()}`);
+    lines.push(
+      `default_provider_id=${mergedGlobal.default_provider_id.trim()}`
+    );
+  }
+
+  if (mergedGlobal.image_model?.trim()) {
+    lines.push(`image_model=${mergedGlobal.image_model.trim()}`);
+  }
+
+  if (mergedGlobal.transcription_model?.trim()) {
+    lines.push(
+      `transcription_model=${mergedGlobal.transcription_model.trim()}`
+    );
+  }
+
+  if (mergedGlobal.vision_model?.trim()) {
+    lines.push(`vision_model=${mergedGlobal.vision_model.trim()}`);
   }
 
   if (mergedGlobal.timezone?.trim()) {
@@ -598,15 +1009,17 @@ function buildConfigIniLines(
     mergedGlobal.thinking === undefined
       ? DEFAULT_THINKING_ENABLED
       : mergedGlobal.thinking.trim().toLowerCase() !== "off";
+
   lines.push(`thinking=${thinkingEnabled ? "on" : "off"}`);
 
-  const effort = validateThinkingEffort(
-    mergedGlobal.thinking_effort?.trim() as ThinkingEffort | undefined,
-  );
+  const effort = validateThinkingEffort(mergedGlobal.thinking_effort?.trim());
+
   lines.push(`thinking_effort=${effort}`);
 
   if (mergedGlobal.local_auth_token_hash?.trim()) {
-    lines.push(`local_auth_token_hash=${mergedGlobal.local_auth_token_hash.trim()}`);
+    lines.push(
+      `local_auth_token_hash=${mergedGlobal.local_auth_token_hash.trim()}`
+    );
   }
 
   lines.push("");
@@ -624,31 +1037,33 @@ function buildConfigIniLines(
   return lines;
 }
 
-function readThinkingSettings(values: Record<string, string>): ThinkingSettings {
+function readThinkingSettings(
+  values: Record<string, string>
+): ThinkingSettings {
   const raw = values.thinking?.trim().toLowerCase();
 
   return {
+    effort: validateThinkingEffort(values.thinking_effort?.trim()),
     enabled: raw === undefined ? DEFAULT_THINKING_ENABLED : raw !== "off",
-    effort: validateThinkingEffort(values.thinking_effort?.trim() as ThinkingEffort | undefined),
   };
 }
 
-function validateThinkingEffort(value: ThinkingEffort | undefined): ThinkingEffort {
-  if (value === "low" || value === "medium" || value === "high") {
-    return value;
-  }
-
-  return DEFAULT_THINKING_EFFORT;
+function validateThinkingEffort(value: string | undefined): ThinkingEffort {
+  return z
+    .enum(["low", "medium", "high"])
+    .catch(DEFAULT_THINKING_EFFORT)
+    .parse(value);
 }
 
 function readTimezone(values: Record<string, string>): string | undefined {
   const timezone = values.timezone?.trim();
+
   return timezone && isValidTimezone(timezone) ? timezone : undefined;
 }
 
 export function validateProviderInstanceLabel(
   label: string,
-  type: UserProviderName,
+  type: UserProviderName
 ): string {
   const trimmed = label.trim();
 
@@ -665,4 +1080,152 @@ export function validateProviderInstanceLabel(
   }
 
   return trimmed;
+}
+
+interface ApiKeyFormatRule {
+  minLength: number;
+  prefix?: string;
+}
+
+// Self-hosted/opaque-format providers (ollama, openai_compatible, cloudflare,
+// fireworks, opencode_go) are intentionally excluded: their key formats are
+// either undocumented or vary by deployment, so a prefix/length check would
+// just produce false rejections.
+const API_KEY_FORMAT_RULES: Partial<
+  Record<UserProviderName, ApiKeyFormatRule>
+> = {
+  anthropic: { minLength: 30, prefix: "sk-ant-" },
+  cerebras: { minLength: 20, prefix: "csk-" },
+  deepseek: { minLength: 30, prefix: "sk-" },
+  openai: { minLength: 40, prefix: "sk-" },
+  openrouter: { minLength: 20, prefix: "sk-or-" },
+};
+
+export function validateProviderApiKeyFormat(
+  apiKey: string,
+  type: UserProviderName
+): string {
+  const trimmed = apiKey.trim();
+  const rule = API_KEY_FORMAT_RULES[type];
+
+  if (!(trimmed && rule)) {
+    return trimmed;
+  }
+
+  const hasWrongPrefix =
+    rule.prefix !== undefined && !trimmed.startsWith(rule.prefix);
+
+  const tooShort = trimmed.length < rule.minLength;
+
+  if (hasWrongPrefix || tooShort) {
+    const label = PROVIDER_TYPE_LABELS[type] ?? type;
+
+    const reason = hasWrongPrefix
+      ? ` (expected it to start with "${rule.prefix}")`
+      : ` (expected at least ${rule.minLength} characters)`;
+
+    throw new NakamaApiError(
+      `That doesn't look like a valid ${label} API key${reason}.`,
+      400
+    );
+  }
+
+  return trimmed;
+}
+
+export function isChatgptProviderConnected(
+  instance: ProviderInstance
+): boolean {
+  return (
+    instance.type === "chatgpt" &&
+    Boolean(instance.chatgptRefreshToken?.trim()) &&
+    Boolean(instance.chatgptAccountId?.trim())
+  );
+}
+
+export function readChatgptOAuthFromInstance(
+  instance: ProviderInstance
+): ChatgptOAuthCredentials | null {
+  const refreshToken = instance.chatgptRefreshToken?.trim();
+  const accessToken = instance.chatgptAccessToken?.trim();
+  const accountId = instance.chatgptAccountId?.trim();
+  const expiresAt = instance.chatgptTokenExpiresAt?.trim();
+
+  if (!(refreshToken && accessToken && accountId && expiresAt)) {
+    return null;
+  }
+
+  return {
+    accessToken,
+    accountId,
+    expiresAt,
+    refreshToken,
+  };
+}
+
+export function applyChatgptOAuthToInstance(
+  instance: ProviderInstance,
+  oauth: ChatgptOAuthCredentials
+): ProviderInstance {
+  return {
+    ...instance,
+    apiKey: "",
+    chatgptAccessToken: oauth.accessToken.trim(),
+    chatgptAccountId: oauth.accountId.trim(),
+    chatgptRefreshToken: oauth.refreshToken.trim(),
+    chatgptTokenExpiresAt: oauth.expiresAt.trim(),
+  };
+}
+
+export function chatgptOAuthNeedsRefresh(
+  oauth: ChatgptOAuthCredentials,
+  now = Date.now()
+): boolean {
+  const expiresAt = Date.parse(oauth.expiresAt);
+
+  if (!Number.isFinite(expiresAt)) {
+    return true;
+  }
+
+  return expiresAt - now <= 5 * 60 * 1000;
+}
+
+export function readXaiOAuthFromInstance(
+  instance: ProviderInstance | null | undefined
+): XaiOAuthCredentials | null {
+  if (instance?.type !== "xai_oauth") {
+    return null;
+  }
+
+  const accessToken = instance.xaiAccessToken?.trim();
+  const refreshToken = instance.xaiRefreshToken?.trim();
+  const expiresAt = instance.xaiTokenExpiresAt?.trim();
+
+  return accessToken && refreshToken && expiresAt
+    ? { accessToken, expiresAt, refreshToken }
+    : null;
+}
+
+export function applyXaiOAuthToInstance(
+  instance: ProviderInstance,
+  oauth: XaiOAuthCredentials
+): ProviderInstance {
+  const credentials = XaiOAuthSchema.safeParse(oauth);
+
+  if (
+    !(
+      credentials.success &&
+      Number.isFinite(Date.parse(credentials.data.expiresAt))
+    )
+  ) {
+    throw new Error("Invalid Grok OAuth credentials. Sign in again.");
+  }
+
+  return {
+    ...instance,
+    apiKey: "",
+    xaiAccessToken: credentials.data.accessToken,
+    xaiRefreshToken: credentials.data.refreshToken,
+    xaiTokenExpiresAt: credentials.data.expiresAt,
+  };
 }

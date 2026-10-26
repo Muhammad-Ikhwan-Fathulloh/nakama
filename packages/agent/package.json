@@ -5,11 +5,12 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "dependencies": {
-    "@nakama/core": "workspace:*"
-  },
   "scripts": {
     "build": "bun build ./src/index.ts --outdir dist --target bun",
     "test": "bun test"
+  },
+  "dependencies": {
+    "@nakama/core": "workspace:*",
+    "zod": "^4.6.5"
   }
 }

@@ -5,65 +5,113 @@ import type {
   ThinkingEffort,
   ToolCall,
 } from "@nakama/core";
+import { NakamaApiError } from "@nakama/core";
+import { z } from "zod";
 
-function readNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+export type ProviderJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | ProviderJsonValue[]
+  | ProviderJsonRecord;
+
+export interface ProviderJsonRecord {
+  [key: string]: ProviderJsonValue;
+}
+
+const providerNumberSchema = z.number().finite();
+
+const providerStringSchema = z.string();
+
+export function readProviderNumber<Value>(value: Value): number | undefined {
+  const parsed = providerNumberSchema.safeParse(value);
+
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function readProviderString<Value>(value: Value): string | undefined {
+  const parsed = providerStringSchema.safeParse(value);
+
+  return parsed.success ? parsed.data : undefined;
 }
 
 export function buildTokenUsage(options: {
+  cachedInputTokens?: unknown;
   inputTokens?: unknown;
   outputTokens?: unknown;
   totalTokens?: unknown;
 }): ChatCompletionResult["usage"] | undefined {
-  let inputTokens = readNumber(options.inputTokens);
-  let outputTokens = readNumber(options.outputTokens);
-  let totalTokens = readNumber(options.totalTokens);
+  const cachedInputTokens = readProviderNumber(options.cachedInputTokens);
+  let inputTokens = readProviderNumber(options.inputTokens);
+  let outputTokens = readProviderNumber(options.outputTokens);
+  let totalTokens = readProviderNumber(options.totalTokens);
 
   if (inputTokens === undefined && outputTokens === undefined) {
-    return undefined;
+    return;
   }
 
-  if (inputTokens === undefined && totalTokens !== undefined && outputTokens !== undefined) {
+  if (
+    inputTokens === undefined &&
+    totalTokens !== undefined &&
+    outputTokens !== undefined
+  ) {
     inputTokens = Math.max(totalTokens - outputTokens, 0);
   }
 
-  if (outputTokens === undefined && totalTokens !== undefined && inputTokens !== undefined) {
+  if (
+    outputTokens === undefined &&
+    totalTokens !== undefined &&
+    inputTokens !== undefined
+  ) {
     outputTokens = Math.max(totalTokens - inputTokens, 0);
   }
 
   if (inputTokens === undefined || outputTokens === undefined) {
-    return undefined;
+    return;
   }
 
   if (totalTokens === undefined) {
     totalTokens = inputTokens + outputTokens;
   }
 
-  return { inputTokens, outputTokens, totalTokens };
+  const usage: NonNullable<ChatCompletionResult["usage"]> = {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+  };
+
+  // A zero carries the same information as the provider saying nothing, and
+  // emitting it would change the shape of every existing usage object.
+  if (cachedInputTokens) {
+    usage.cachedInputTokens = cachedInputTokens;
+  }
+
+  return usage;
 }
 
-export function extractOpenAITokenUsage(value: unknown): ChatCompletionResult["usage"] | undefined {
+export function extractOpenAITokenUsage<Value>(
+  value: Value
+): ChatCompletionResult["usage"] | undefined {
   const record = readRecord(value);
+  // OpenAI counts cached tokens inside prompt_tokens, so this is a subset.
+  const details = readRecord(record.prompt_tokens_details);
+
   return buildTokenUsage({
+    cachedInputTokens: details.cached_tokens,
     inputTokens: record.prompt_tokens,
     outputTokens: record.completion_tokens,
     totalTokens: record.total_tokens,
   });
 }
 
-export function extractAnthropicTokenUsage(
-  value: unknown,
+export function extractGeminiTokenUsage<Value>(
+  value: Value
 ): ChatCompletionResult["usage"] | undefined {
   const record = readRecord(value);
-  return buildTokenUsage({
-    inputTokens: record.input_tokens,
-    outputTokens: record.output_tokens,
-  });
-}
 
-export function extractGeminiTokenUsage(value: unknown): ChatCompletionResult["usage"] | undefined {
-  const record = readRecord(value);
   return buildTokenUsage({
+    cachedInputTokens: record.cachedContentTokenCount,
     inputTokens: record.promptTokenCount,
     outputTokens: record.candidatesTokenCount,
     totalTokens: record.totalTokenCount,
@@ -73,55 +121,121 @@ export function extractGeminiTokenUsage(value: unknown): ChatCompletionResult["u
 export function notifyToolInputDelta(
   handlers: StreamChatHandlers | undefined,
   call: { id: string; name: string; arguments: string },
-  delta: string,
+  delta: string
 ): void {
-  if (!handlers?.onToolInputDelta || !call.id || !call.name || !delta) {
+  if (!(handlers?.onToolInputDelta && call.id && call.name && delta)) {
     return;
   }
 
   handlers.onToolInputDelta({
-    toolCallId: call.id,
-    tool: call.name,
-    delta,
     accumulatedArguments: call.arguments,
+    delta,
+    tool: call.name,
+    toolCallId: call.id,
   });
 }
 
 export function buildChatCompletionResult(options: {
   content: string | null | undefined;
+  providerContent?: unknown[];
   toolCalls: ToolCall[];
   thinking?: string | null | undefined;
+  truncated?: boolean;
   usage?: ChatCompletionResult["usage"];
 }): ChatCompletionResult {
   const content = options.content?.trim() ?? "";
   const thinking = options.thinking?.trim();
+
   const assistantMessage: Extract<ChatMessage, { role: "assistant" }> = {
-    role: "assistant",
     content,
-    ...(thinking ? { thinking } : {}),
-    ...(options.toolCalls.length > 0 ? { toolCalls: options.toolCalls } : {}),
+    role: "assistant",
   };
 
-  return {
+  if (options.providerContent?.length) {
+    assistantMessage.providerContent = options.providerContent;
+  }
+
+  if (thinking) {
+    assistantMessage.thinking = thinking;
+  }
+
+  if (options.toolCalls.length > 0) {
+    assistantMessage.toolCalls = options.toolCalls;
+  }
+
+  const result: ChatCompletionResult = {
+    assistantMessage,
     content,
     toolCalls: options.toolCalls,
-    assistantMessage,
-    ...(options.usage ? { usage: options.usage } : {}),
   };
+
+  if (options.truncated) {
+    result.truncated = true;
+  }
+
+  if (options.usage) {
+    result.usage = options.usage;
+  }
+
+  return result;
+}
+
+/**
+ * Drop orphaned assistant tool_calls / tool results so partial histories cannot
+ * produce provider 400s ("insufficient tool messages following tool_calls").
+ * Intact tool_call ↔ tool pairs are left untouched.
+ */
+export function sanitizeToolCallHistory(
+  messages: ChatMessage[]
+): ChatMessage[] {
+  const toolResultIds = new Set(
+    messages.flatMap((message) =>
+      message.role === "tool" ? [message.toolCallId] : []
+    )
+  );
+
+  const validToolCallIds = new Set<string>();
+
+  for (const message of messages) {
+    if (message.role !== "assistant" || !message.toolCalls?.length) {
+      continue;
+    }
+
+    const ids = message.toolCalls.map((call) => call.id);
+
+    if (ids.every((id) => toolResultIds.has(id))) {
+      for (const id of ids) {
+        validToolCallIds.add(id);
+      }
+    }
+  }
+
+  return messages.filter((message) => {
+    if (message.role === "assistant" && message.toolCalls?.length) {
+      return message.toolCalls.every((call) => validToolCallIds.has(call.id));
+    }
+
+    if (message.role === "tool") {
+      return validToolCallIds.has(message.toolCallId);
+    }
+
+    return true;
+  });
 }
 
 export interface SseEvent {
-  event: string;
   data: string;
+  event: string;
 }
 
 export async function readSseEvents(
   body: ReadableStream<Uint8Array>,
-  onEvent: (event: SseEvent) => void | Promise<void>,
-): Promise<void> {
+  onEvent: (event: SseEvent) => void | Promise<void>
+): Promise<boolean> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let sawDone = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -143,7 +257,7 @@ export async function readSseEvents(
 
       const eventBlock = buffer.slice(0, boundary.index);
       buffer = buffer.slice(boundary.index + boundary.length);
-      await emitSseEvent(eventBlock, onEvent);
+      sawDone = (await emitSseEvent(eventBlock, onEvent)) || sawDone;
     }
 
     if (done) {
@@ -152,14 +266,16 @@ export async function readSseEvents(
   }
 
   if (buffer.trim()) {
-    await emitSseEvent(buffer, onEvent);
+    sawDone = (await emitSseEvent(buffer, onEvent)) || sawDone;
   }
+
+  return sawDone;
 }
 
 async function emitSseEvent(
   eventBlock: string,
-  onEvent: (event: SseEvent) => void | Promise<void>,
-): Promise<void> {
+  onEvent: (event: SseEvent) => void | Promise<void>
+): Promise<boolean> {
   let event = "message";
   const dataLines: string[] = [];
 
@@ -181,15 +297,21 @@ async function emitSseEvent(
   const data = dataLines.join("\n");
   const normalized = data.trim();
 
-  if (!normalized || normalized === "[DONE]") {
-    return;
+  if (normalized === "[DONE]") {
+    return true;
   }
 
-  await onEvent({ event, data });
+  if (!normalized) {
+    return false;
+  }
+
+  await onEvent({ data, event });
+
+  return false;
 }
 
 function findSseBoundary(
-  buffer: string,
+  buffer: string
 ): { index: number; length: number } | null {
   const match = /\r?\n\r?\n/.exec(buffer);
 
@@ -217,7 +339,7 @@ function readSseField(line: string, prefix: string): string | null {
   return value;
 }
 
-export function parseJsonRecord(raw: string): Record<string, unknown> {
+export function parseJsonRecord(raw: string): ProviderJsonRecord {
   const trimmed = raw.trim();
 
   if (!trimmed) {
@@ -225,21 +347,83 @@ export function parseJsonRecord(raw: string): Record<string, unknown> {
   }
 
   try {
-    const parsed = JSON.parse(trimmed) as unknown;
+    const parsed = JSON.parse(trimmed);
+
     return readRecord(parsed);
   } catch {
     return {};
   }
 }
 
-export function readRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+export interface PendingToolCall {
+  arguments: string;
+  id: string;
+  name: string;
+}
+
+export function mergePendingToolCall(
+  pending: Map<number, PendingToolCall>,
+  toolDelta: {
+    index?: number;
+    id?: string;
+    function?: { name?: string; arguments?: string };
+  }
+): void {
+  const index = toolDelta.index ?? 0;
+
+  const current = pending.get(index) ?? {
+    arguments: "",
+    id: "",
+    name: "",
+  };
+
+  if (toolDelta.id) {
+    current.id = toolDelta.id;
+  }
+
+  if (toolDelta.function?.name) {
+    current.name = toolDelta.function.name;
+  }
+
+  if (toolDelta.function?.arguments) {
+    current.arguments += toolDelta.function.arguments;
+  }
+
+  pending.set(index, current);
+}
+
+export function finalizePendingToolCalls(
+  pending: Map<number, PendingToolCall>
+): ToolCall[] {
+  return [...pending.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, call]) => call)
+    .flatMap((call) => {
+      if (!(call.id && call.name)) {
+        return [];
+      }
+
+      return [
+        {
+          arguments: parseJsonRecord(call.arguments),
+          id: call.id,
+          name: call.name,
+        },
+      ];
+    });
+}
+
+export function readRecord<Value>(value: Value): ProviderJsonRecord {
+  if (!(value instanceof Object) || Array.isArray(value)) {
+    return {};
+  }
+
+  // SAFETY: Provider records come from JSON or SDK-decoded JSON payloads.
+  return value as ProviderJsonRecord;
 }
 
 export function normalizeThinkingEffort(
-  effort: ThinkingEffort | undefined,
+  effort: ThinkingEffort | undefined
 ): ThinkingEffort {
   if (effort === "low" || effort === "medium" || effort === "high") {
     return effort;
@@ -251,7 +435,7 @@ export function normalizeThinkingEffort(
 export function formatHttpErrorBody(
   label: string,
   status: number,
-  body: string,
+  body: string
 ): string {
   const trimmed = body.trim();
 
@@ -259,30 +443,53 @@ export function formatHttpErrorBody(
     return `${label} request failed (${status}).`;
   }
 
+  if (/^<!doctype\s+html|^<html[\s>]/i.test(trimmed)) {
+    return `${label} request failed (${status}): received an HTML error page.`;
+  }
+
   try {
-    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const parsed = parseJsonRecord(trimmed);
     const nested = parsed.error;
 
-    if (typeof nested === "object" && nested !== null && !Array.isArray(nested)) {
-      const record = nested as Record<string, unknown>;
-      const message =
-        typeof record.message === "string" ? record.message.trim() : "";
-      const type = typeof record.type === "string" ? record.type.trim() : "";
-
-      if (message) {
-        return `${label} request failed (${status}${type ? ` ${type}` : ""}): ${message}`;
-      }
-    }
-
-    const message =
-      typeof parsed.message === "string" ? parsed.message.trim() : "";
+    const record = readRecord(nested);
+    const message = readProviderString(record.message)?.trim() ?? "";
+    const type = readProviderString(record.type)?.trim() ?? "";
 
     if (message) {
-      return `${label} request failed (${status}): ${message}`;
+      return `${label} request failed (${status}${type ? ` ${type}` : ""}): ${message}`;
+    }
+
+    const topLevelMessage = readProviderString(parsed.message)?.trim() ?? "";
+
+    if (topLevelMessage) {
+      return `${label} request failed (${status}): ${topLevelMessage}`;
     }
   } catch {
     // fall through to raw body
   }
 
   return `${label} request failed (${status}): ${trimmed.slice(0, 500)}`;
+}
+
+/**
+ * A rejected API key is the caller's config to fix, not a Nakama bug: 400 so
+ * the global error handler's `status >= 500` check never reports it. Anything
+ * else from the provider (rate limits, 5xx, timeouts) stays worth seeing.
+ */
+/** A provider answered but the answer is unusable. The user sees the message. */
+export function buildProviderResponseError(message: string): NakamaApiError {
+  return new NakamaApiError(message, 502);
+}
+
+export function buildProviderHttpError(
+  label: string,
+  status: number,
+  body: string
+): NakamaApiError {
+  const clientStatus = status === 401 || status === 403 ? 400 : 502;
+
+  return new NakamaApiError(
+    formatHttpErrorBody(label, status, body),
+    clientStatus
+  );
 }

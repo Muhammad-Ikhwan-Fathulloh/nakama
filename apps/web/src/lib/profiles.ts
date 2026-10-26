@@ -1,22 +1,34 @@
 import type { ProfileSummary } from "@nakama/core/contract";
 
-export function findSuperBotProfile(profiles: ProfileSummary[]): ProfileSummary | undefined {
+export function findSuperNakamaProfile(
+  profiles: ProfileSummary[]
+): ProfileSummary | undefined {
   return profiles.find((profile) => profile.isSuper);
 }
 
-/** Profile id to open for Super Bot chat CTAs, or null when none exists. */
-export function resolveSuperBotChatProfileId(
-  profiles: Array<Pick<ProfileSummary, "id" | "isSuper">>,
+/** Profile id to open for Super Nakama chat CTAs, or null when none exists. */
+export function resolveSuperNakamaChatProfileId(
+  profiles: Array<Pick<ProfileSummary, "id" | "isSuper">>
 ): string | null {
   return profiles.find((profile) => profile.isSuper)?.id ?? null;
 }
 
-export function findDefaultProfile(profiles: ProfileSummary[]): ProfileSummary | undefined {
+/** True for the member who created the agent. Admin-created agents have no owner. */
+export function isProfileOwner(
+  profile: Pick<ProfileSummary, "ownerUserId"> | null | undefined,
+  userId: string | undefined
+): boolean {
+  return Boolean(userId) && profile?.ownerUserId === userId;
+}
+
+export function findDefaultProfile(
+  profiles: ProfileSummary[]
+): ProfileSummary | undefined {
   return profiles.find((profile) => profile.isDefault) ?? profiles[0];
 }
 
 export function resolveInitialProfileId(
-  profiles: Array<Pick<ProfileSummary, "id" | "isDefault">>,
+  profiles: Array<Pick<ProfileSummary, "id" | "isDefault">>
 ): string {
   return (
     profiles.find((profile) => profile.isDefault)?.id ?? profiles[0]?.id ?? ""

@@ -1,36 +1,76 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "@nakama/ui/toast";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/context/use-auth";
+import { useChannelProfileId } from "@/hooks/use-app-queries";
 import { client } from "@/lib/client";
+import { invalidateQueries } from "@/lib/query-client";
 import { queryKeys } from "@/lib/query-keys";
 
-export function useStartWorker() {
+function useWorkerMutation(
+  mutationFn: (name: string) => Promise<{ ok: boolean }>
+) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (name: string) => client.startWorker(name),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.systemStatus });
-    },
+    mutationFn,
+    onError: (error) => toast(error.message),
+    onSuccess: () =>
+      invalidateQueries(queryClient, queryKeys.systemStatus, [
+        "plugin-workers",
+      ]),
   });
+}
+
+export function useStartWorker() {
+  const profileId = useChannelProfileId();
+  const { activeOrg } = useAuth();
+  const api = client.forOrg(activeOrg?.id ?? null);
+
+  return useWorkerMutation((name) => api.startWorker(name, profileId));
 }
 
 export function useStopWorker() {
-  const queryClient = useQueryClient();
+  const profileId = useChannelProfileId();
+  const { activeOrg } = useAuth();
+  const api = client.forOrg(activeOrg?.id ?? null);
 
-  return useMutation({
-    mutationFn: (name: string) => client.stopWorker(name),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.systemStatus });
-    },
-  });
+  return useWorkerMutation((name) => api.stopWorker(name, profileId));
 }
 
 export function useRestartWorker() {
+  const profileId = useChannelProfileId();
+  const { activeOrg } = useAuth();
+  const api = client.forOrg(activeOrg?.id ?? null);
+
+  return useWorkerMutation((name) => api.restartWorker(name, profileId));
+}
+
+export function usePluginWorkers() {
+  const { activeOrg } = useAuth();
+  const orgId = activeOrg?.id;
+
+  return useQuery({
+    enabled: Boolean(orgId),
+    queryFn: () => client.listPluginWorkers(orgId),
+    queryKey: ["plugin-workers", orgId],
+    refetchInterval: 5000,
+  });
+}
+
+export function useDisconnectChannel() {
+  const profileId = useChannelProfileId();
+  const { activeOrg } = useAuth();
+  const api = client.forOrg(activeOrg?.id ?? null);
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (name: string) => client.restartWorker(name),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.systemStatus });
+    mutationFn: (name: string) => {
+      if (!profileId) {
+        throw new Error("Choose an agent connection");
+      }
+
+      return api.disconnectChannel(name, profileId);
     },
+    onSuccess: () => queryClient.invalidateQueries(),
   });
 }

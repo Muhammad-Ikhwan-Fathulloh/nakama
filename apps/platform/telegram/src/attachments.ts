@@ -1,10 +1,10 @@
-import type { Context } from "grammy";
 import type { SendMessageInput } from "@nakama/core/contract";
 import {
   MAX_DOCUMENT_BYTES,
   normalizeDocumentMediaType,
   validateDocumentAttachments,
 } from "@nakama/core/message-content";
+import type { Context } from "grammy";
 
 const ALLOWED_DOCUMENT_MEDIA_TYPES = new Set([
   "application/pdf",
@@ -32,14 +32,22 @@ export class OversizedTelegramFileError extends Error {
 
 export interface DownloadedTelegramFile {
   bytes: ArrayBuffer;
-  filePath: string;
   contentType: string | null;
+  filePath: string;
+}
+
+function buildTelegramFileDownloadUrl(token: string, filePath: string): URL {
+  const path = ["file", `bot${token}`, ...filePath.split("/").filter(Boolean)]
+    .map(encodeURIComponent)
+    .join("/");
+
+  return new URL(path, "https://api.telegram.org/");
 }
 
 export async function downloadTelegramFile(
   ctx: Context,
   fileId: string,
-  maxBytes: number,
+  maxBytes: number
 ): Promise<DownloadedTelegramFile> {
   const file = await ctx.api.getFile(fileId);
 
@@ -51,25 +59,65 @@ export async function downloadTelegramFile(
     throw new OversizedTelegramFileError();
   }
 
-  const token = ctx.api.token;
-  const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+  const url = buildTelegramFileDownloadUrl(ctx.api.token, file.file_path);
   const response = await fetch(url);
 
   if (!response.ok) {
     throw new Error(`Failed to download file (${response.status}).`);
   }
 
-  const bytes = await response.arrayBuffer();
-
-  if (bytes.byteLength > maxBytes) {
-    throw new OversizedTelegramFileError();
-  }
+  const bytes = await readResponseBodyCapped(response, maxBytes);
 
   return {
     bytes,
-    filePath: file.file_path,
     contentType: response.headers.get("content-type"),
+    filePath: file.file_path,
   };
+}
+
+async function readResponseBodyCapped(
+  response: Response,
+  maxBytes: number
+): Promise<ArrayBuffer> {
+  const reader = response.body?.getReader();
+
+  if (!reader) {
+    return new ArrayBuffer(0);
+  }
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    if (!value || value.byteLength === 0) {
+      continue;
+    }
+
+    total += value.byteLength;
+
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new OversizedTelegramFileError();
+    }
+
+    chunks.push(value);
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return merged.buffer;
 }
 
 export type TelegramDocumentBuildResult =
@@ -78,7 +126,7 @@ export type TelegramDocumentBuildResult =
   | null;
 
 export async function buildTelegramDocumentInput(
-  ctx: Context,
+  ctx: Context
 ): Promise<TelegramDocumentBuildResult> {
   const document = ctx.message?.document;
 
@@ -91,13 +139,20 @@ export async function buildTelegramDocumentInput(
   }
 
   const filename = document.file_name?.trim() || "document";
-  const mediaType = normalizeDocumentMediaType(document.mime_type ?? "", filename);
+
+  const mediaType = normalizeDocumentMediaType(
+    document.mime_type ?? "",
+    filename
+  );
 
   if (!ALLOWED_DOCUMENT_MEDIA_TYPES.has(mediaType)) {
     return { kind: "reject", message: UNSUPPORTED_DOCUMENT_TYPES_REPLY };
   }
 
-  if (document.file_size !== undefined && document.file_size > MAX_DOCUMENT_BYTES) {
+  if (
+    document.file_size !== undefined &&
+    document.file_size > MAX_DOCUMENT_BYTES
+  ) {
     return { kind: "reject", message: OVERSIZED_FILE_REPLY };
   }
 
@@ -105,24 +160,24 @@ export async function buildTelegramDocumentInput(
     const downloaded = await downloadTelegramFile(
       ctx,
       document.file_id,
-      MAX_DOCUMENT_BYTES,
+      MAX_DOCUMENT_BYTES
     );
 
     const data = Buffer.from(downloaded.bytes).toString("base64");
 
     try {
-      validateDocumentAttachments([{ filename, mediaType, data }]);
+      validateDocumentAttachments([{ data, filename, mediaType }]);
     } catch {
       return { kind: "reject", message: UNSUPPORTED_DOCUMENT_TYPES_REPLY };
     }
 
     // Base64 here is transport-only; the server persists bytes and stores document_ref in session history.
     return {
-      kind: "input",
       input: {
+        documents: [{ data, filename, mediaType }],
         message: ctx.message?.caption?.trim() ?? "",
-        documents: [{ filename, mediaType, data }],
       },
+      kind: "input",
     };
   } catch (error) {
     if (error instanceof OversizedTelegramFileError) {

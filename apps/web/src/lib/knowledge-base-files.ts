@@ -1,10 +1,25 @@
-import type { DocumentAttachment } from "@nakama/core/contract";
 import { DOCX_MEDIA_TYPE } from "@nakama/core/artifact-mime";
-import { normalizeDocumentMediaType, parseDocumentDataUrl } from "@nakama/core/message-content";
+import type { DocumentAttachment } from "@nakama/core/contract";
+import {
+  normalizeDocumentMediaType,
+  parseDocumentDataUrl,
+} from "@nakama/core/message-content";
 
-export const KNOWLEDGE_BASE_ACCEPT = `.pdf,.docx,.txt,.md,.csv,application/pdf,${DOCX_MEDIA_TYPE},text/plain,text/csv,text/markdown`;
+import { readFileAsDataUrl } from "./read-file-as-data-url";
+
+export const KNOWLEDGE_BASE_ACCEPT = `.pdf,.docx,.txt,.md,.csv,.zip,application/pdf,${DOCX_MEDIA_TYPE},text/plain,text/csv,text/markdown,application/zip`;
 
 const KB_EXTENSIONS = new Set([".pdf", ".docx", ".txt", ".md", ".csv"]);
+
+export function isKnowledgeBaseZipFile(file: File): boolean {
+  return file.name.trim().toLowerCase().endsWith(".zip");
+}
+
+export async function fileToZipBase64(file: File): Promise<string> {
+  const dataUrl = await readFileAsDataUrl(file);
+
+  return dataUrl.slice(dataUrl.indexOf(",") + 1);
+}
 
 export function isKnowledgeBaseFile(file: File): boolean {
   const filename = file.name.trim();
@@ -21,22 +36,13 @@ export function isKnowledgeBaseFile(file: File): boolean {
   );
 }
 
-export function fileToDocumentAttachment(file: File): Promise<DocumentAttachment | null> {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const result = typeof reader.result === "string" ? reader.result : null;
-      if (!result) {
-        resolve(null);
-        return;
-      }
-
-      const filename = file.name.trim() || "document";
-      resolve(parseDocumentDataUrl(result, filename));
-    };
-    reader.onerror = () => resolve(null);
-    reader.readAsDataURL(file);
-  });
+export function fileToDocumentAttachment(
+  file: File
+): Promise<DocumentAttachment | null> {
+  return readFileAsDataUrl(file).then(
+    (data) => parseDocumentDataUrl(data, file.name.trim() || "document"),
+    () => null
+  );
 }
 
 export function formatBytes(bytes: number): string {

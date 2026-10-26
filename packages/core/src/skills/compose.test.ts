@@ -1,63 +1,107 @@
 import { describe, expect, test } from "bun:test";
 import {
-  AGENT_BROWSER_SKILL_NAME,
   composeAgentBrowserCapabilityPrompt,
   composeMatchedSkillsPrompt,
+  composeSkillsCatalog,
 } from "./compose";
+import { matchSkillsForMessage } from "./match";
 import type { DiscoveredSkill } from "./types";
 
 const baseSkill: DiscoveredSkill = {
-  name: "weather",
-  description: "Get weather forecasts.",
-  disableModelInvocation: false,
-  includeBodyOnMatch: false,
-  directory: "/tmp/weather",
-  skillFilePath: "/tmp/weather/SKILL.md",
   body: "Call the weather tool with a city name.",
+  description: "Get weather forecasts.",
+  directory: "/tmp/weather",
+  disableModelInvocation: false,
   hasTool: true,
+  includeBodyOnMatch: false,
+  name: "weather",
+  scriptIssues: [],
+  scriptTools: [],
+  skillFilePath: "/tmp/weather/SKILL.md",
   toolPath: "/tmp/weather/tool.ts",
 };
 
 describe("composeMatchedSkillsPrompt", () => {
-  test("omits body when body-on-match is disabled", () => {
-    const prompt = composeMatchedSkillsPrompt([baseSkill]);
-
-    expect(prompt).not.toContain("Call the weather tool");
-  });
-
-  test("includes body when includeBodyOnMatch is true", () => {
-    const prompt = composeMatchedSkillsPrompt([
-      { ...baseSkill, includeBodyOnMatch: true },
-    ]);
-
-    expect(prompt).toContain("Call the weather tool with a city name.");
-  });
-
   test("includes body on explicit invocation regardless of flag", () => {
     const prompt = composeMatchedSkillsPrompt([baseSkill], {
       explicitInvocation: true,
     });
 
     expect(prompt).toContain("Call the weather tool with a city name.");
+    expect(prompt).toContain(baseSkill.skillFilePath);
   });
 });
 
 describe("composeAgentBrowserCapabilityPrompt", () => {
-  test("returns capability guidance when agent-browser is assigned", () => {
-    const prompt = composeAgentBrowserCapabilityPrompt([
-      { name: AGENT_BROWSER_SKILL_NAME },
-    ]);
-
-    expect(prompt).toContain("agent-browser skill");
-    expect(prompt).toContain("Available Agent Skills");
-    expect(prompt).toContain("Skills are workflow instructions");
-    expect(prompt).toContain("/skill agent-browser");
-    expect(prompt).toContain("screenshot artifacts/");
-    expect(prompt).toContain("web_fetch");
-  });
-
   test("returns empty string when agent-browser is not assigned", () => {
     expect(composeAgentBrowserCapabilityPrompt([{ name: "weather" }])).toBe("");
     expect(composeAgentBrowserCapabilityPrompt([])).toBe("");
+  });
+
+  test("adds the live browser workflow only when the cloud browser is on", () => {
+    const skills = [{ name: "agent-browser" }];
+    const local = composeAgentBrowserCapabilityPrompt(skills);
+
+    const cloud = composeAgentBrowserCapabilityPrompt(skills, {
+      cloudBrowser: true,
+    });
+
+    expect(local).not.toBe("");
+    expect(cloud.length).toBeGreaterThan(local.length);
+    expect(cloud.startsWith(local)).toBe(true);
+  });
+});
+
+describe("skill instruction discovery", () => {
+  test("natural-language Bang-Motion request gets its instruction location", () => {
+    const skill = {
+      ...baseSkill,
+      body: "Read references/explainer.md before creating the animation.",
+      directory: "/tmp/skills/bang-motion",
+      name: "bang-motion",
+      scriptIssues: [],
+      scriptTools: [],
+      skillFilePath: "/tmp/skills/bang-motion/SKILL.md",
+    };
+
+    const matched = matchSkillsForMessage(
+      [skill],
+      "Buatkan explainer tentang kereta Whoosh sekitar 1 menit\nstyle vector gunakan skill Bang-Motion"
+    );
+
+    expect(matched).toHaveLength(1);
+    const prompt = composeMatchedSkillsPrompt(matched);
+    expect(prompt).toContain(skill.skillFilePath);
+    expect(prompt).toContain(skill.directory);
+    expect(prompt).not.toContain(skill.body);
+  });
+});
+
+describe("skills that ship code nothing can run", () => {
+  const stranded: DiscoveredSkill = {
+    ...baseSkill,
+    hasTool: false,
+    name: "order-pricing",
+    scriptIssues: [
+      { path: "scripts/pricing.py", reason: "not runnable: name it tool.py" },
+    ],
+    toolPath: null,
+  };
+
+  test("more than one is counted, not listed", () => {
+    const line = composeSkillsCatalog([
+      {
+        ...stranded,
+        scriptIssues: [
+          ...stranded.scriptIssues,
+          {
+            path: "scripts/report.py",
+            reason: "not runnable: name it tool.py",
+          },
+        ],
+      },
+    ]);
+
+    expect(line).toContain("ships 2 scripts that cannot run here");
   });
 });

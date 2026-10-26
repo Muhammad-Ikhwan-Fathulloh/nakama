@@ -1,9 +1,5 @@
 import { wrapText } from "./text-measure";
 
-export function formatInputForDisplay(value: string): string {
-  return normalizePastedText(value);
-}
-
 export function normalizePastedText(text: string): string {
   return text.replace(/\r\n?/g, "\n");
 }
@@ -11,7 +7,7 @@ export function normalizePastedText(text: string): string {
 export function splitInputDisplayLines(
   display: string,
   prefixLength: number,
-  width: number,
+  width: number
 ): string[] {
   const terminalWidth = Math.max(1, width);
   const lineCapacity = Math.max(1, terminalWidth - prefixLength);

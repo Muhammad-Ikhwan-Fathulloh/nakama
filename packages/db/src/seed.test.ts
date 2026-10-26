@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { BUILTIN_TOOL_IDS } from "@nakama/core/tools/protected";
-import { createInMemoryDatabaseAdapter } from "./adapters/in-memory";
+import {
+  BUILTIN_TOOL_IDS,
+  GENERATE_IMAGE_TOOL_ID,
+} from "@nakama/core/tools/protected";
+import { createInMemoryDatabaseAdapter } from "./index";
+import { ensureGenerateImageToolDefinition } from "./org-profiles";
 import {
   ensureBuiltinToolDefinitions,
   ensurePreinstalledMcpServers,
@@ -11,27 +15,124 @@ import {
 } from "./seed";
 
 describe("seed cleanup", () => {
+  test("preserves plugin tools and their profile assignments across startup", async () => {
+    const db = createInMemoryDatabaseAdapter();
+    const now = new Date().toISOString();
+    await db.upsertProfile({
+      createdAt: now,
+      id: "plugin_profile",
+      isSuper: false,
+      model: null,
+      name: "Plugin profile",
+      systemPrompt: "",
+      updatedAt: now,
+    });
+    await db.upsertTool({
+      createdAt: now,
+      description: "Save memory",
+      handlerConfig: {},
+      handlerType: "plugin",
+      id: "plugin_memory",
+      name: "plugin_supermemory__remember",
+      pluginId: "supermemory",
+      pluginKey: "remember",
+      updatedAt: now,
+    });
+    await db.assignToolToProfile("plugin_profile", "plugin_memory");
+    await seedDatabase(db);
+    await seedDatabase(db);
+    expect(await db.getTool("plugin_memory")).not.toBeNull();
+    expect(
+      (await db.listToolsForProfile("plugin_profile")).map((tool) => tool.id)
+    ).toContain("plugin_memory");
+  });
+  test("keeps a tool an operator unassigned from a profile", async () => {
+    const db = createInMemoryDatabaseAdapter();
+    const now = new Date().toISOString();
+
+    await db.upsertProfile({
+      createdAt: now,
+      id: "profile_stripped",
+      isSuper: false,
+      model: null,
+      name: "Stripped",
+      systemPrompt: "",
+      updatedAt: now,
+    });
+    await ensureBuiltinToolDefinitions(db);
+    await db.assignToolToProfile("profile_stripped", BUILTIN_TOOL_IDS.sqlite);
+    await db.unassignToolFromProfile(
+      "profile_stripped",
+      BUILTIN_TOOL_IDS.sqlite
+    );
+
+    await seedDatabase(db);
+
+    const tools = await db.listToolsForProfile("profile_stripped");
+    expect(tools.map((tool) => tool.id)).not.toContain(BUILTIN_TOOL_IDS.sqlite);
+  });
+
+  test("deleteTool unassigns every profile before deleting", async () => {
+    const db = createInMemoryDatabaseAdapter();
+    const now = new Date().toISOString();
+
+    await db.upsertProfile({
+      createdAt: now,
+      id: "profile_a",
+      isSuper: false,
+      model: null,
+      name: "A",
+      systemPrompt: "a",
+      updatedAt: now,
+    });
+    await db.upsertProfile({
+      createdAt: now,
+      id: "profile_b",
+      isSuper: false,
+      model: null,
+      name: "B",
+      systemPrompt: "b",
+      updatedAt: now,
+    });
+    await db.upsertTool({
+      createdAt: now,
+      description: "doomed",
+      handlerConfig: {},
+      handlerType: "custom",
+      id: "tool_doomed",
+      name: "doomed-custom",
+      updatedAt: now,
+    });
+    await db.assignToolToProfile("profile_a", "tool_doomed");
+    await db.assignToolToProfile("profile_b", "tool_doomed");
+
+    expect(await db.deleteTool("tool_doomed")).toBe(true);
+    expect(await db.getTool("tool_doomed")).toBeNull();
+    expect(await db.listToolsForProfile("profile_a")).toHaveLength(0);
+    expect(await db.listToolsForProfile("profile_b")).toHaveLength(0);
+  });
+
   test("removes unsupported tool handler types", async () => {
     const db = createInMemoryDatabaseAdapter();
     const now = new Date().toISOString();
 
     await db.upsertProfile({
+      createdAt: now,
       id: "profile_test",
+      isSuper: false,
+      model: null,
       name: "Test",
       systemPrompt: "test",
-      model: null,
-      isSuper: false,
-      createdAt: now,
       updatedAt: now,
     });
 
     await db.upsertTool({
+      createdAt: now,
+      description: "Old unsupported tool",
+      handlerConfig: {},
+      handlerType: "custom",
       id: "tool_custom",
       name: "legacy-custom",
-      description: "Old unsupported tool",
-      handlerType: "custom",
-      handlerConfig: {},
-      createdAt: now,
       updatedAt: now,
     });
 
@@ -43,131 +144,36 @@ describe("seed cleanup", () => {
     expect(await db.listToolsForProfile("profile_test")).toHaveLength(0);
   });
 
-  test("removes deprecated builtin tools", async () => {
+  test.each([
+    "archive_profile_memory",
+    "update_profile_memory",
+    "create_skill",
+    "save_artifact",
+  ])("removes deprecated builtin %s and its assignments", async (name) => {
     const db = createInMemoryDatabaseAdapter();
     const now = new Date().toISOString();
-
     await db.upsertProfile({
+      createdAt: now,
       id: "profile_test",
+      isSuper: false,
+      model: null,
       name: "Test",
       systemPrompt: "test",
-      model: null,
-      isSuper: false,
-      createdAt: now,
       updatedAt: now,
     });
-
+    const id = `tool_${name}`;
     await db.upsertTool({
-      id: "tool_archive_profile_memory",
-      name: "archive_profile_memory",
-      description: "Deprecated archive tool",
+      createdAt: now,
+      description: "Deprecated tool",
+      handlerConfig: { name },
       handlerType: "builtin",
-      handlerConfig: { name: "archive_profile_memory" },
-      createdAt: now,
+      id,
+      name,
       updatedAt: now,
     });
-
-    await db.assignToolToProfile("profile_test", "tool_archive_profile_memory");
-
+    await db.assignToolToProfile("profile_test", id);
     await removeDeprecatedBuiltinTools(db);
-
-    expect(await db.getTool("tool_archive_profile_memory")).toBeNull();
-    expect(await db.listToolsForProfile("profile_test")).toHaveLength(0);
-  });
-
-  test("removes deprecated update_profile_memory tool", async () => {
-    const db = createInMemoryDatabaseAdapter();
-    const now = new Date().toISOString();
-
-    await db.upsertProfile({
-      id: "profile_test",
-      name: "Test",
-      systemPrompt: "test",
-      model: null,
-      isSuper: false,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await db.upsertTool({
-      id: "tool_update_profile_memory",
-      name: "update_profile_memory",
-      description: "Deprecated memory tool",
-      handlerType: "builtin",
-      handlerConfig: { name: "update_profile_memory" },
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await db.assignToolToProfile("profile_test", "tool_update_profile_memory");
-
-    await removeDeprecatedBuiltinTools(db);
-
-    expect(await db.getTool("tool_update_profile_memory")).toBeNull();
-    expect(await db.listToolsForProfile("profile_test")).toHaveLength(0);
-  });
-
-  test("removes deprecated create_skill tool", async () => {
-    const db = createInMemoryDatabaseAdapter();
-    const now = new Date().toISOString();
-
-    await db.upsertProfile({
-      id: "profile_test",
-      name: "Test",
-      systemPrompt: "test",
-      model: null,
-      isSuper: false,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await db.upsertTool({
-      id: "tool_create_skill",
-      name: "create_skill",
-      description: "Deprecated skill creation tool",
-      handlerType: "builtin",
-      handlerConfig: { name: "create_skill" },
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await db.assignToolToProfile("profile_test", "tool_create_skill");
-
-    await removeDeprecatedBuiltinTools(db);
-
-    expect(await db.getTool("tool_create_skill")).toBeNull();
-    expect(await db.listToolsForProfile("profile_test")).toHaveLength(0);
-  });
-
-  test("removes deprecated save_artifact tool", async () => {
-    const db = createInMemoryDatabaseAdapter();
-    const now = new Date().toISOString();
-
-    await db.upsertProfile({
-      id: "profile_test",
-      name: "Test",
-      systemPrompt: "test",
-      model: null,
-      isSuper: false,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await db.upsertTool({
-      id: "tool_save_artifact",
-      name: "save_artifact",
-      description: "Deprecated artifact tool",
-      handlerType: "builtin",
-      handlerConfig: { name: "save_artifact" },
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await db.assignToolToProfile("profile_test", "tool_save_artifact");
-
-    await removeDeprecatedBuiltinTools(db);
-
-    expect(await db.getTool("tool_save_artifact")).toBeNull();
+    expect(await db.getTool(id)).toBeNull();
     expect(await db.listToolsForProfile("profile_test")).toHaveLength(0);
   });
 });
@@ -178,12 +184,12 @@ describe("seed built-in tools", () => {
     const now = new Date().toISOString();
 
     await db.upsertProfile({
+      createdAt: now,
       id: "profile_custom",
+      isSuper: false,
+      model: null,
       name: "Custom Bot",
       systemPrompt: "custom",
-      model: null,
-      isSuper: false,
-      createdAt: now,
       updatedAt: now,
     });
 
@@ -193,6 +199,19 @@ describe("seed built-in tools", () => {
 
     expect(profiles.map((profile) => profile.id)).toEqual(["profile_custom"]);
     expect(await db.getTool(BUILTIN_TOOL_IDS.web_search)).not.toBeNull();
+    expect(await db.getTool(BUILTIN_TOOL_IDS.sqlite)).not.toBeNull();
+    expect(await db.getTool(GENERATE_IMAGE_TOOL_ID)).not.toBeNull();
+  });
+
+  test("retains generate_image through unsupported-handler cleanup", async () => {
+    const db = createInMemoryDatabaseAdapter();
+
+    await ensureGenerateImageToolDefinition(db);
+    await removeUnsupportedTools(db);
+
+    const tool = await db.getTool(GENERATE_IMAGE_TOOL_ID);
+    expect(tool).not.toBeNull();
+    expect(tool?.handlerType).toBe("generate_image");
   });
 
   test("ensureBuiltinToolDefinitions upserts built-in tools idempotently", async () => {
@@ -213,23 +232,23 @@ describe("seed built-in tools", () => {
     const now = new Date().toISOString();
 
     await db.upsertTool({
+      createdAt: now,
+      description: "Delegate coding",
+      handlerConfig: {},
+      handlerType: "bash",
       id: "tool_delegate_coding_task",
       name: "delegate_coding_task",
-      description: "Delegate coding",
-      handlerType: "bash",
-      handlerConfig: {},
-      createdAt: now,
       updatedAt: now,
     });
     await db.upsertProfile({
-      id: "profile_test",
-      name: "Test",
-      systemPrompt: "",
-      model: null,
-      isSuper: false,
-      orgId: "org_test",
-      isDefault: true,
       createdAt: now,
+      id: "profile_test",
+      isDefault: true,
+      isSuper: false,
+      model: null,
+      name: "Test",
+      orgId: "org_test",
+      systemPrompt: "",
       updatedAt: now,
     });
     await db.assignToolToProfile("profile_test", "tool_delegate_coding_task");
@@ -237,9 +256,9 @@ describe("seed built-in tools", () => {
     await removeDeprecatedServerTools(db);
 
     expect(await db.getTool("tool_delegate_coding_task")).toBeNull();
-    expect((await db.listToolsForProfile("profile_test")).map((tool) => tool.id)).not.toContain(
-      "tool_delegate_coding_task",
-    );
+    expect(
+      (await db.listToolsForProfile("profile_test")).map((tool) => tool.id)
+    ).not.toContain("tool_delegate_coding_task");
   });
 });
 
@@ -250,6 +269,143 @@ describe("seed preinstalled MCP servers", () => {
     await ensurePreinstalledMcpServers(db);
     await ensurePreinstalledMcpServers(db);
 
-    expect((await db.listMcpServers()).length).toBe(2);
+    expect(
+      (await db.listMcpServers()).map((server) => server.id).sort()
+    ).toEqual(["mcp_exa", "mcp_firecrawl"]);
+  });
+
+  test("seeds firecrawl keyless HTTP MCP unassigned", async () => {
+    const db = createInMemoryDatabaseAdapter();
+
+    await ensurePreinstalledMcpServers(db);
+
+    const firecrawl = await db.getMcpServer("mcp_firecrawl");
+
+    expect(firecrawl).toMatchObject({
+      enabled: true,
+      id: "mcp_firecrawl",
+      name: "firecrawl",
+      transport: "http",
+    });
+    expect(firecrawl?.config).toEqual({
+      url: "https://mcp.firecrawl.dev/v2/mcp",
+    });
+    expect(await db.listProfilesForMcpServer("mcp_firecrawl")).toEqual([]);
+  });
+
+  test("preserves HTTP headers and enabled on re-seed", async () => {
+    const db = createInMemoryDatabaseAdapter();
+    const now = new Date().toISOString();
+
+    await ensurePreinstalledMcpServers(db);
+
+    const firecrawl = await db.getMcpServer("mcp_firecrawl");
+    const exa = await db.getMcpServer("mcp_exa");
+
+    expect(firecrawl).not.toBeNull();
+    expect(exa).not.toBeNull();
+
+    await db.upsertMcpServer({
+      ...firecrawl!,
+      cachedTools: [{ description: "search", name: "firecrawl_search" }],
+      config: {
+        headers: { Authorization: "Bearer fc-test" },
+        url: "https://mcp.firecrawl.dev/v2/mcp",
+      },
+      enabled: false,
+      lastError: "previous error",
+      status: "error",
+      updatedAt: now,
+    });
+    await db.upsertMcpServer({
+      ...exa!,
+      config: {
+        headers: { "x-api-key": "exa-secret" },
+        url: "https://mcp.exa.ai/mcp",
+      },
+      updatedAt: now,
+    });
+
+    await ensurePreinstalledMcpServers(db);
+
+    const reseededFirecrawl = await db.getMcpServer("mcp_firecrawl");
+    const reseededExa = await db.getMcpServer("mcp_exa");
+
+    expect(reseededFirecrawl?.config).toEqual({
+      headers: { Authorization: "Bearer fc-test" },
+      url: "https://mcp.firecrawl.dev/v2/mcp",
+    });
+    expect(reseededFirecrawl?.enabled).toBe(false);
+    expect(reseededFirecrawl?.cachedTools).toEqual([
+      { description: "search", name: "firecrawl_search" },
+    ]);
+    expect(reseededFirecrawl?.lastError).toBe("previous error");
+    expect(reseededFirecrawl?.status).toBe("error");
+    expect(reseededExa?.config).toEqual({
+      headers: { "x-api-key": "exa-secret" },
+      url: "https://mcp.exa.ai/mcp",
+    });
+  });
+
+  test("skips insert when another server already owns the catalog name", async () => {
+    const db = createInMemoryDatabaseAdapter();
+    const now = new Date().toISOString();
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warns.push(args.map(String).join(" "));
+    };
+
+    await db.upsertMcpServer({
+      cachedTools: [],
+      config: {
+        headers: { Authorization: "Bearer fc-custom" },
+        url: "https://mcp.firecrawl.dev/v2/mcp",
+      },
+      createdAt: now,
+      enabled: true,
+      id: "mcp_custom_firecrawl",
+      lastError: null,
+      name: "firecrawl",
+      status: "disconnected",
+      transport: "http",
+      updatedAt: now,
+    });
+
+    try {
+      await ensurePreinstalledMcpServers(db);
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect(await db.getMcpServer("mcp_firecrawl")).toBeNull();
+    expect(await db.getMcpServerByName("firecrawl")).toMatchObject({
+      id: "mcp_custom_firecrawl",
+    });
+    expect(warns.join("\n")).toContain("mcp_custom_firecrawl");
+    expect(warns.join("\n")).not.toContain("fc-custom");
+    expect(warns.join("\n")).not.toContain("Authorization");
+  });
+
+  test("migrates a Firecrawl key-in-URL into an Authorization header", async () => {
+    const db = createInMemoryDatabaseAdapter();
+    const now = new Date().toISOString();
+
+    await ensurePreinstalledMcpServers(db);
+    const firecrawl = await db.getMcpServer("mcp_firecrawl");
+    expect(firecrawl).not.toBeNull();
+
+    await db.upsertMcpServer({
+      ...firecrawl!,
+      config: { url: "https://mcp.firecrawl.dev/fc-legacy/v2/mcp" },
+      updatedAt: now,
+    });
+
+    await ensurePreinstalledMcpServers(db);
+
+    expect((await db.getMcpServer("mcp_firecrawl"))?.config).toEqual({
+      headers: { Authorization: "Bearer fc-legacy" },
+      url: "https://mcp.firecrawl.dev/v2/mcp",
+    });
   });
 });

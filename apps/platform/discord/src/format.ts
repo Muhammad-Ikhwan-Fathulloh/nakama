@@ -1,20 +1,18 @@
-import { formatClientError } from "@nakama/core/api-error";
 import type { AgentTodo } from "@nakama/core/contract";
 
 const DISCORD_MAX_MESSAGE_LENGTH = 2000;
 
-type DiscordTodoRunState = "working" | "completed" | "stopped" | "failed";
+export type DiscordTodoRunState =
+  | "working"
+  | "completed"
+  | "stopped"
+  | "failed";
 
-export function formatError(error: unknown): string {
-  return formatClientError(error);
-}
-
-export function prepareDiscordReply(text: string): string {
-  return text.trim();
-}
-
-export function splitDiscordMessage(text: string, maxLen = DISCORD_MAX_MESSAGE_LENGTH): string[] {
-  const trimmed = prepareDiscordReply(text);
+export function splitDiscordMessage(
+  text: string,
+  maxLen = DISCORD_MAX_MESSAGE_LENGTH
+): string[] {
+  const trimmed = text.trim();
 
   if (!trimmed) {
     return [];
@@ -86,7 +84,7 @@ function hardSplit(text: string, maxLen: number): string[] {
 
 export function renderDiscordTodoStatus(
   todos: AgentTodo[],
-  state: DiscordTodoRunState,
+  state: DiscordTodoRunState
 ): string {
   const header =
     state === "completed"
@@ -121,8 +119,12 @@ export const HELP_TEXT = `Nakama Discord commands:
 /clear — clear chat history
 /compact — compact conversation history
 /new — start a new conversation
-/org — choose or switch organization (send as text)
-/profile — choose or switch bot profile (send as text)
+/sessions — pick an earlier conversation from this chat to resume
+/resume — resume a conversation by the ID shown in /sessions
+/close — close this bot conversation thread
+/allow — add a Discord user to the allowed list (admin)
+/org — choose an organization from a dropdown
+/profile — choose a bot profile from a dropdown
 /status — server and model status
 
-In servers, @mention the bot or reply to it to chat. Pair in a DM first.`;
+In servers, @mention the bot (or a role it holds) or reply to it to chat — each mention in a parent channel opens a new thread. @mention inside another thread claims it. Pair in a DM first.`;

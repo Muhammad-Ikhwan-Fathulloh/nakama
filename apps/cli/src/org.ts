@@ -1,8 +1,89 @@
 import type { NakamaClient } from "@nakama/client";
-import { loadSavedCliOrgId, saveCliOrgId } from "./cli-config";
+import { type AgentChannel, pickProfileForOrg } from "@nakama/core";
+import {
+  loadSavedCliOrgId,
+  saveCliOrgId,
+  saveCliProfileId,
+} from "./cli-config";
+
+export async function switchChatOrg(
+  client: NakamaClient,
+  orgRef: string,
+  channel: AgentChannel,
+  write: (line: string) => void,
+  codingWorkspaceRoot?: string
+) {
+  if (!orgRef) {
+    const { orgs } = await client.listUserOrgs();
+
+    for (const org of orgs) {
+      write(`${org.slug}  ${org.name}`);
+    }
+
+    write("Use /org <slug> to switch.");
+
+    return;
+  }
+
+  const orgId = await assertOrgMembership(client, orgRef);
+  // Prepare an independent scope so failed switches leave the current chat intact.
+  const nextClient = client.forOrg(orgId);
+  const { profiles } = await nextClient.listProfiles();
+
+  const profile =
+    profiles.find((entry) => entry.isSuper) ?? pickProfileForOrg(profiles);
+
+  const health = await nextClient.health();
+
+  const session = await nextClient.createSession(channel, {
+    codingWorkspaceRoot,
+    profileId: profile.id,
+  });
+
+  await saveCliProfileId(profile.id);
+  await saveCliOrgId(orgId);
+
+  return {
+    client: nextClient,
+    offline: !health.providerConfigured,
+    orgId,
+    profile,
+    session,
+  };
+}
 
 export interface CliOrgOptions {
   orgId?: string;
+}
+
+export class InvalidOrgArgError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidOrgArgError";
+  }
+}
+
+/** Org ids (`org_…`) plus slugs resolved by `assertOrgMembership`. */
+const ORG_ID_PATTERN = /^org_[A-Za-z0-9]+$/;
+
+const ORG_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/i;
+
+const MAX_ORG_REF_LENGTH = 128;
+
+function assertOrgRef(value: string): string {
+  if (value.length > MAX_ORG_REF_LENGTH) {
+    throw new InvalidOrgArgError(
+      `Invalid --org value: exceeds ${MAX_ORG_REF_LENGTH} characters.`
+    );
+  }
+
+  if (ORG_ID_PATTERN.test(value) || ORG_SLUG_PATTERN.test(value)) {
+    return value;
+  }
+
+  throw new InvalidOrgArgError(
+    `Invalid --org value "${value}". Expected org_<id> or a slug.`
+  );
 }
 
 export function parseCliOrgArgs(argv = process.argv.slice(2)): CliOrgOptions {
@@ -12,13 +93,29 @@ export function parseCliOrgArgs(argv = process.argv.slice(2)): CliOrgOptions {
     const arg = argv[index];
 
     if (arg === "--org" || arg === "-o") {
-      orgId = argv[index + 1]?.trim();
+      const raw = argv[index + 1]?.trim();
+
+      if (!raw || raw.startsWith("-")) {
+        throw new InvalidOrgArgError(
+          "Missing value for --org. Use --org org_<id> or a slug."
+        );
+      }
+
+      orgId = assertOrgRef(raw);
       index += 1;
       continue;
     }
 
     if (arg.startsWith("--org=")) {
-      orgId = arg.slice("--org=".length).trim();
+      const raw = arg.slice("--org=".length).trim();
+
+      if (!raw) {
+        throw new InvalidOrgArgError(
+          "Missing value for --org. Use --org=org_<id> or a slug."
+        );
+      }
+
+      orgId = assertOrgRef(raw);
     }
   }
 
@@ -27,15 +124,18 @@ export function parseCliOrgArgs(argv = process.argv.slice(2)): CliOrgOptions {
 
 export async function resolveCliOrgId(
   client: NakamaClient,
-  options: CliOrgOptions = {},
+  options: CliOrgOptions = {}
 ): Promise<string> {
   const explicitOrgId =
-    options.orgId?.trim() || process.env.NAKAMA_ORG_ID?.trim() || (await loadSavedCliOrgId());
+    options.orgId?.trim() ||
+    process.env.NAKAMA_ORG_ID?.trim() ||
+    (await loadSavedCliOrgId());
 
   if (explicitOrgId) {
     const orgId = await assertOrgMembership(client, explicitOrgId);
     client.setOrgId(orgId);
     await saveCliOrgId(orgId);
+
     return orgId;
   }
 
@@ -44,19 +144,22 @@ export async function resolveCliOrgId(
   if (me.activeOrgId?.trim()) {
     client.setOrgId(me.activeOrgId);
     await saveCliOrgId(me.activeOrgId);
+
     return me.activeOrgId;
   }
 
   const { orgs } = await client.listUserOrgs();
+  const [onlyOrg] = orgs;
 
-  if (orgs.length === 0) {
+  if (!onlyOrg) {
     throw new Error("No organizations found.");
   }
 
   if (orgs.length === 1) {
-    client.setOrgId(orgs[0]!.id);
-    await saveCliOrgId(orgs[0]!.id);
-    return orgs[0]!.id;
+    client.setOrgId(onlyOrg.id);
+    await saveCliOrgId(onlyOrg.id);
+
+    return onlyOrg.id;
   }
 
   throw new Error(
@@ -65,15 +168,19 @@ export async function resolveCliOrgId(
       "Pass --org <id> (or set NAKAMA_ORG_ID).",
       "",
       ...orgs.map((org) => `  ${org.id}  ${org.name}`),
-    ].join("\n"),
+    ].join("\n")
   );
 }
 
-async function assertOrgMembership(client: NakamaClient, orgRef: string): Promise<string> {
+async function assertOrgMembership(
+  client: NakamaClient,
+  orgRef: string
+): Promise<string> {
   const { orgs } = await client.listUserOrgs();
   const normalized = orgRef.trim().toLowerCase();
+
   const match = orgs.find(
-    (org) => org.id === orgRef || org.slug.toLowerCase() === normalized,
+    (org) => org.id === orgRef || org.slug.toLowerCase() === normalized
   );
 
   if (!match) {

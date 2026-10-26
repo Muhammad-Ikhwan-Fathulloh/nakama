@@ -6,7 +6,7 @@ const EXPLICIT_SKILL_PATTERN =
 export function matchSkillsForMessage(
   skills: DiscoveredSkill[],
   userMessage: string,
-  options: SkillMatchOptions = {},
+  options: SkillMatchOptions = {}
 ): DiscoveredSkill[] {
   const message = userMessage.trim();
 
@@ -40,6 +40,7 @@ export function matchSkillsForMessage(
 
 export function extractExplicitSkillName(message: string): string | null {
   const match = message.match(EXPLICIT_SKILL_PATTERN);
+
   return match?.[1]?.toLowerCase() ?? null;
 }
 
@@ -52,7 +53,18 @@ function messageMatchesSkill(message: string, skill: DiscoveredSkill): boolean {
 
   const keywords = extractKeywords(skill.description);
 
-  return keywords.some((keyword) => containsWord(normalized, keyword));
+  return keywords.some(
+    (keyword) =>
+      containsWord(normalized, keyword) ||
+      containsWord(normalized, singularize(keyword))
+  );
+}
+
+/** Descriptions list plurals ("artifacts"); users often type the singular. */
+function singularize(word: string): string {
+  return word.length > 4 && word.endsWith("s") && !word.endsWith("ss")
+    ? word.slice(0, -1)
+    : word;
 }
 
 function extractKeywords(description: string): string[] {
@@ -103,7 +115,10 @@ function extractKeywords(description: string): string[] {
 }
 
 function containsWord(haystack: string, word: string): boolean {
-  const pattern = new RegExp(`(?:^|[^a-z0-9-])${escapeRegExp(word)}(?:[^a-z0-9-]|$)`);
+  const pattern = new RegExp(
+    `(?:^|[^a-z0-9-])${escapeRegExp(word)}(?:[^a-z0-9-]|$)`
+  );
+
   return pattern.test(haystack);
 }
 

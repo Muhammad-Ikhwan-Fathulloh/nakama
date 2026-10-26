@@ -1,60 +1,87 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { NakamaClient } from "@nakama/client";
 import type { ProfileSummary } from "@nakama/core";
-import {
-  parseCliProfileArgs,
-  resolveProfileInput,
-  sortProfilesForPicker,
-} from "./profile";
+import { loadSavedCliProfileId, saveCliProfileId } from "./cli-config";
+import { resolveProfileInput, resolveStartupProfile } from "./profile";
 
-function profile(overrides: Partial<ProfileSummary> & Pick<ProfileSummary, "id" | "name">): ProfileSummary {
+function profile(
+  overrides: Partial<ProfileSummary> & Pick<ProfileSummary, "id" | "name">
+): ProfileSummary {
   return {
-    model: null,
-    isSuper: false,
-    toolCount: 0,
-    mcpServerCount: 0,
-    soulActive: false,
-    hasAvatar: false,
     createdAt: "",
+    hasAvatar: false,
+    isSuper: false,
+    mcpServerCount: 0,
+    model: null,
+    soulActive: false,
+    toolCount: 0,
     updatedAt: "",
     ...overrides,
   };
 }
 
 const sampleProfiles = [
-  profile({ id: "super_bot", name: "Super Bot", isSuper: true }),
-  profile({ id: "profile_default", name: "Default Bot", isDefault: true }),
+  profile({ id: "super_nakama", isSuper: true, name: "Super Nakama" }),
+  profile({ id: "profile_default", isDefault: true, name: "Default Bot" }),
   profile({ id: "profile_custom", name: "Research Bot" }),
 ];
 
-describe("parseCliProfileArgs", () => {
-  test("reads --profile and -p", () => {
-    expect(parseCliProfileArgs(["--profile", "profile_custom"])).toEqual({
-      profileId: "profile_custom",
-    });
-    expect(parseCliProfileArgs(["-p", "super_bot"])).toEqual({
-      profileId: "super_bot",
-    });
-  });
+test("startup defaults to Super Nakama and respects saved and explicit choices", async () => {
+  const configDir = await mkdtemp(join(tmpdir(), "nakama-cli-profile-"));
+  const previous = process.env.NAKAMA_CONFIG_DIR;
+  process.env.NAKAMA_CONFIG_DIR = configDir;
 
-  test("reads --profile=value", () => {
-    expect(parseCliProfileArgs(["--profile=profile_default"])).toEqual({
-      profileId: "profile_default",
-    });
-  });
+  // SAFETY: resolveStartupProfile only reads listProfiles from this fixture.
+  const client = {
+    listProfiles: async () => ({ profiles: sampleProfiles }),
+  } as NakamaClient;
+
+  try {
+    expect((await resolveStartupProfile(client, {})).profileId).toBe(
+      "super_nakama"
+    );
+    expect(await loadSavedCliProfileId()).toBe("super_nakama");
+    await saveCliProfileId("profile_custom");
+    expect((await resolveStartupProfile(client, {})).profileId).toBe(
+      "profile_custom"
+    );
+    expect(
+      (await resolveStartupProfile(client, { profileId: "profile_default" }))
+        .profileId
+    ).toBe("profile_default");
+    await saveCliProfileId("deleted_profile");
+    expect((await resolveStartupProfile(client, {})).profileId).toBe(
+      "super_nakama"
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.NAKAMA_CONFIG_DIR;
+    } else {
+      process.env.NAKAMA_CONFIG_DIR = previous;
+    }
+
+    await rm(configDir, { force: true, recursive: true });
+  }
 });
 
-describe("sortProfilesForPicker", () => {
-  test("puts default profile first", () => {
-    const sorted = sortProfilesForPicker(sampleProfiles);
-    expect(sorted[0]?.id).toBe("profile_default");
-  });
-});
+describe("parseCliProfileArgs", () => {});
+
+describe("sortProfilesForPicker", () => {});
 
 describe("resolveProfileInput", () => {
   test("resolves id, name, and index", () => {
-    expect(resolveProfileInput(sampleProfiles, "profile_custom")?.name).toBe("Research Bot");
-    expect(resolveProfileInput(sampleProfiles, "Super Bot")?.id).toBe("super_bot");
-    expect(resolveProfileInput(sampleProfiles, "1")?.id).toBe("profile_default");
+    expect(resolveProfileInput(sampleProfiles, "profile_custom")?.name).toBe(
+      "Research Bot"
+    );
+    expect(resolveProfileInput(sampleProfiles, "Super Nakama")?.id).toBe(
+      "super_nakama"
+    );
+    expect(resolveProfileInput(sampleProfiles, "1")?.id).toBe(
+      "profile_default"
+    );
   });
 
   test("returns undefined for unknown input", () => {

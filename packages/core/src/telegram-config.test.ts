@@ -1,18 +1,29 @@
-import { mkdir, writeFile, mkdtemp, rm } from "node:fs/promises";
-import * as os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, symlink, utimes, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { withTempHome } from "./channel-test-helpers";
 import {
-  generateHandshakeCode,
+  claimLegacyTelegramConfig,
+  getTelegramConfigDir,
   isTelegramUserAuthorized,
+  listTelegramAccessRequests,
+  listTelegramConfigOrgIds,
   loadTelegramConfigFile,
   maskBotToken,
-  normalizeHandshakeInput,
   parseAllowedUserIds,
+  recordTelegramAccessRequest,
+  regenerateTelegramHandshake,
+  removeTelegramAccessRequest,
   resolveTelegramConfigFromSources,
   saveTelegramConfig,
   verifyAndPairTelegramUser,
 } from "./telegram-config";
+import {
+  describeSharedChannelConfigTests,
+  withTempHomedir,
+} from "./testing/channel-config-fixtures";
+import { getUserConfigDir } from "./user-config";
 
 describe("parseAllowedUserIds", () => {
   test("parses comma-separated ids", () => {
@@ -20,274 +31,226 @@ describe("parseAllowedUserIds", () => {
   });
 
   test("rejects invalid ids", () => {
-    expect(() => parseAllowedUserIds("abc")).toThrow("Invalid Telegram user ID");
+    expect(() => parseAllowedUserIds("abc")).toThrow(
+      "Invalid Telegram user ID"
+    );
     expect(() => parseAllowedUserIds("0")).toThrow("Invalid Telegram user ID");
     expect(() => parseAllowedUserIds("-5")).toThrow("Invalid Telegram user ID");
   });
 });
 
-describe("maskBotToken", () => {
-  test("masks long tokens", () => {
-    expect(maskBotToken("12345678901234567890")).toBe("••••••••••••7890");
-  });
-
-  test("returns null for empty", () => {
-    expect(maskBotToken("")).toBeNull();
-  });
-});
-
-describe("normalizeHandshakeInput", () => {
-  test("strips spaces and uppercases", () => {
-    expect(normalizeHandshakeInput(" ab cd12 ")).toBe("ABCD12");
-  });
-});
-
-describe("isTelegramUserAuthorized", () => {
-  test("accepts paired or allowlisted users", () => {
-    expect(
-      isTelegramUserAuthorized(1, { pairedUserIds: [1], allowedUserIds: [] }),
-    ).toBe(true);
-    expect(
-      isTelegramUserAuthorized(2, { pairedUserIds: [], allowedUserIds: [2] }),
-    ).toBe(true);
-    expect(
-      isTelegramUserAuthorized(3, { pairedUserIds: [], allowedUserIds: [] }),
-    ).toBe(false);
-  });
-});
-
-describe("generateHandshakeCode", () => {
-  test("returns 8 uppercase hex chars", () => {
-    expect(generateHandshakeCode()).toMatch(/^[0-9A-F]{8}$/);
-  });
-});
-
-describe("verifyAndPairTelegramUser", () => {
-  let tempHome = "";
-  let homedirSpy: ReturnType<typeof spyOn<typeof os, "homedir">> | null = null;
-
-  afterEach(async () => {
-    homedirSpy?.mockRestore();
-    homedirSpy = null;
-
-    if (tempHome) {
-      await rm(tempHome, { recursive: true, force: true });
-      tempHome = "";
-    }
-  });
-
-  async function useTempTelegramHome(
-    config: Parameters<typeof writeTelegramConfig>[1],
-    run: () => Promise<void>,
-  ): Promise<void> {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-tg-home-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-    await writeTelegramConfig(tempHome, config);
-    await run();
-  }
-
-  test("pairs a user and clears the handshake code", async () => {
-    await useTempTelegramHome(
-      {
-        botToken: "1234567890:TEST",
-        handshakeCode: "AABBCCDD",
-      },
-      async () => {
-        const result = await verifyAndPairTelegramUser("aa bb cc dd", 9001);
-
-        expect(result).toEqual({
-          ok: true,
-          message: "Linked successfully. You can chat with Nakama now.",
-        });
-
-        const config = await loadTelegramConfigFile();
-        expect(config?.pairedUserIds).toEqual([9001]);
-        expect(config?.handshakeCode).toBeNull();
-      },
-    );
-  });
-
-  test("rejects invalid pairing codes", async () => {
-    await useTempTelegramHome(
-      {
-        botToken: "1234567890:TEST",
-        handshakeCode: "AABBCCDD",
-      },
-      async () => {
-        const result = await verifyAndPairTelegramUser("DEADBEEF", 9001);
-
-        expect(result).toEqual({
-          ok: false,
-          message: "Invalid pairing code. Copy it from Integrations → Telegram and try again.",
-        });
-
-        const config = await loadTelegramConfigFile();
-        expect(config?.pairedUserIds).toEqual([]);
-        expect(config?.handshakeCode).toBe("AABBCCDD");
-      },
-    );
-  });
-
-  test("rejects pairing when telegram is not configured", async () => {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-tg-home-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-
-    const result = await verifyAndPairTelegramUser("AABBCCDD", 9001);
-
-    expect(result).toEqual({
-      ok: false,
-      message: "Telegram is not configured on the server yet.",
-    });
-  });
-
-  test("returns already linked for paired users", async () => {
-    await useTempTelegramHome(
-      {
-        botToken: "1234567890:TEST",
-        pairedUserIds: [9001],
-      },
-      async () => {
-        const result = await verifyAndPairTelegramUser("anything", 9001);
-
-        expect(result).toEqual({
-          ok: true,
-          message: "This chat is already linked.",
-        });
-      },
-    );
-  });
-});
-
-describe("saveTelegramConfig", () => {
-  let tempHome = "";
-  let homedirSpy: ReturnType<typeof spyOn<typeof os, "homedir">> | null = null;
-
-  afterEach(async () => {
-    homedirSpy?.mockRestore();
-    homedirSpy = null;
-
-    if (tempHome) {
-      await rm(tempHome, { recursive: true, force: true });
-      tempHome = "";
-    }
-  });
-
-  async function useTempTelegramHome(run: () => Promise<void>): Promise<void> {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-tg-home-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-    await run();
-  }
-
-  test("generates a handshake code for a new unrestricted config", async () => {
-    await useTempTelegramHome(async () => {
-      const result = await saveTelegramConfig({ botToken: "1234567890:TEST" });
-
-      expect(result.handshakeCode).toMatch(/^[0-9A-F]{8}$/);
-
-      const saved = await loadTelegramConfigFile();
-      expect(saved?.handshakeCode).toBe(result.handshakeCode);
-      expect(saved?.allowedUserIds).toEqual([]);
-    });
-  });
-
-  test("does not generate a handshake code when allowlist is set", async () => {
-    await useTempTelegramHome(async () => {
-      const result = await saveTelegramConfig({
-        botToken: "1234567890:TEST",
-        allowedUserIds: "42, 43",
-      });
-
-      expect(result.handshakeCode).toBeNull();
-
-      const saved = await loadTelegramConfigFile();
-      expect(saved?.allowedUserIds).toEqual([42, 43]);
-      expect(saved?.handshakeCode).toBeNull();
-    });
-  });
-});
-
-describe("resolveTelegramConfigFromSources", () => {
-  test("returns null when no bot token is available", () => {
-    expect(
-      resolveTelegramConfigFromSources({
-        env: {},
-        file: null,
-      }),
-    ).toBeNull();
-  });
-
-  test("prefers env bot token and allowlist over file config", () => {
-    const resolved = resolveTelegramConfigFromSources({
-      env: {
-        TELEGRAM_BOT_TOKEN: "env-token",
-        TELEGRAM_ALLOWED_USER_IDS: "42, 43",
-      },
-      file: {
-        botToken: "file-token",
-        profileId: "profile_from_file",
-        handshakeCode: "ABCD1234",
-        pairedUserIds: [1],
-        allowedUserIds: [99],
-      },
-    });
-
-    expect(resolved).toEqual({
-      botToken: "env-token",
-      profileId: "profile_from_file",
-      handshakeCode: "ABCD1234",
-      pairedUserIds: [1],
-      allowedUserIds: [42, 43],
-    });
-  });
-
-  test("falls back to file config when env token is absent", () => {
-    const resolved = resolveTelegramConfigFromSources({
-      env: {},
-      file: {
-        botToken: "file-token",
-        profileId: "profile_from_file",
-        handshakeCode: null,
-        pairedUserIds: [],
-        allowedUserIds: [7],
-      },
-    });
-
-    expect(resolved?.botToken).toBe("file-token");
-    expect(resolved?.allowedUserIds).toEqual([7]);
-  });
-});
-
-async function writeTelegramConfig(
-  homeDir: string,
-  config: {
-    botToken: string;
-    profileId?: string;
-    handshakeCode?: string | null;
-    pairedUserIds?: number[];
-    allowedUserIds?: number[];
+describeSharedChannelConfigTests({
+  allowlistInput: "42, 43",
+  allowlistParsed: [42, 43],
+  authorize: {
+    allowlisted: 2,
+    paired: 1,
+    unauthorized: 3,
   },
-): Promise<void> {
-  const dir = path.join(homeDir, ".nakama", "telegram");
-  await mkdir(dir, { recursive: true });
+  botToken: "1234567890:TEST",
+  env: {
+    allowlistKey: "TELEGRAM_ALLOWED_USER_IDS",
+    allowlistParsed: [42, 43],
+    allowlistValue: "42, 43",
+    botTokenKey: "TELEGRAM_BOT_TOKEN",
+  },
+  isUserAuthorized: isTelegramUserAuthorized,
+  loadConfigFile: () => loadTelegramConfigFile(null),
+  mask: maskBotToken,
+  name: "telegram",
+  regenerate: () => regenerateTelegramHandshake(null),
+  resolveConfigFromSources: resolveTelegramConfigFromSources,
+  resolveFile: {
+    allowedUserIds: [99],
+    pairedUserIds: [1],
+  },
+  sampleId: 9001,
+  saveConfig: (input) => saveTelegramConfig(null, input),
+  verifyAndPair: (handshakeInput, userId) =>
+    verifyAndPairTelegramUser(null, handshakeInput, userId),
+});
 
-  const lines = [
-    "# Nakama Telegram bridge",
-    `bot_token=${config.botToken}`,
-    `profile_id=${config.profileId ?? "default"}`,
-  ];
+describe("per-org telegram config", () => {
+  test("claims a bot once even with concurrent rotated tokens", async () => {
+    await withTempHomedir("nakama-telegram-claim-race-", async () => {
+      const results = await Promise.allSettled([
+        saveTelegramConfig(
+          { orgId: "org_a", profileId: "a" },
+          { botToken: "111:OLD" }
+        ),
+        saveTelegramConfig(
+          { orgId: "org_b", profileId: "b" },
+          { botToken: "111:NEW" }
+        ),
+      ]);
 
-  if (config.handshakeCode) {
-    lines.push(`handshake_code=${config.handshakeCode}`);
-  }
+      expect(
+        results.filter((result) => result.status === "fulfilled")
+      ).toHaveLength(1);
+    });
+  });
 
-  if (config.pairedUserIds?.length) {
-    lines.push(`paired_user_ids=${config.pairedUserIds.join(",")}`);
-  }
+  test("refuses symlinked credential directories", async () => {
+    await withTempHomedir("nakama-telegram-symlink-", async (home) => {
+      const owner = { orgId: "org_a", profileId: "a" };
+      const directory = getTelegramConfigDir(owner);
+      await mkdir(join(directory, ".."), { recursive: true });
+      await symlink(home, directory);
+      await expect(
+        saveTelegramConfig(owner, { botToken: "111:AAA" })
+      ).rejects.toThrow();
+    });
+  });
 
-  if (config.allowedUserIds?.length) {
-    lines.push(`allowed_user_ids=${config.allowedUserIds.join(",")}`);
-  }
+  test("isolates agent credentials and pairing within an organization", async () => {
+    await withTempHomedir("nakama-telegram-profile-", async () => {
+      const first = { orgId: "org_a", profileId: "agent_a" };
+      const second = { orgId: "org_a", profileId: "agent_b" };
+      const saved = await saveTelegramConfig(first, { botToken: "111:AAA" });
+      await saveTelegramConfig(second, { botToken: "222:BBB" });
+      await verifyAndPairTelegramUser(first, saved.handshakeCode!, 42);
+      expect((await loadTelegramConfigFile(first))?.pairedUserIds).toEqual([
+        42,
+      ]);
+      expect((await loadTelegramConfigFile(second))?.pairedUserIds).toEqual([]);
+      expect((await loadTelegramConfigFile(first))?.profileId).toBe("agent_a");
+      expect(await loadTelegramConfigFile("org_a")).toBeNull();
+      expect(
+        await loadTelegramConfigFile({ ...first, orgId: "org_b" })
+      ).toBeNull();
+      expect(() =>
+        getTelegramConfigDir({ ...first, profileId: "../escape" })
+      ).toThrow();
+    });
+  });
 
-  lines.push("");
-  await writeFile(path.join(dir, "config.ini"), lines.join("\n"), "utf8");
-}
+  test("keeps each org's credentials out of the other scopes", async () => {
+    await withTempHomedir("nakama-telegram-org-", async () => {
+      await saveTelegramConfig("org_a", { botToken: "111:AAA" });
+
+      expect(await loadTelegramConfigFile("org_b")).toBeNull();
+      expect(await loadTelegramConfigFile(null)).toBeNull();
+      expect((await loadTelegramConfigFile("org_a"))?.botToken).toBe("111:AAA");
+      expect(await listTelegramConfigOrgIds()).toEqual(["org_a"]);
+    });
+  });
+
+  test("refuses a bot token another scope already runs", async () => {
+    await withTempHomedir("nakama-telegram-dup-", async () => {
+      await saveTelegramConfig(null, { botToken: "111:AAA" });
+
+      await expect(
+        saveTelegramConfig("org_b", { botToken: "111:AAA" })
+      ).rejects.toThrow("already in use by another organization");
+    });
+  });
+
+  test("claims the install-wide config for a sole org, once", async () => {
+    await withTempHomedir("nakama-telegram-claim-", async () => {
+      await saveTelegramConfig(null, { botToken: "111:AAA" });
+
+      expect(await claimLegacyTelegramConfig("org_a")).toBe(true);
+      expect((await loadTelegramConfigFile("org_a"))?.botToken).toBe("111:AAA");
+      expect(await loadTelegramConfigFile(null)).toBeNull();
+      expect(await claimLegacyTelegramConfig("org_a")).toBe(false);
+    });
+  });
+
+  test("rejects an org id that would escape the config dir", () => {
+    expect(() => getTelegramConfigDir("../../etc")).toThrow(
+      "Invalid organization id"
+    );
+  });
+});
+
+describe("telegram access requests", () => {
+  test("records each sender once and removes on resolve", async () => {
+    await withTempHomedir("nakama-telegram-requests-", async () => {
+      await recordTelegramAccessRequest(null, { userId: 7, username: "jane" });
+      await recordTelegramAccessRequest(null, { userId: 7, username: "other" });
+      await recordTelegramAccessRequest(null, { userId: 8 });
+
+      expect(await listTelegramAccessRequests(null)).toMatchObject([
+        { userId: 7, username: "jane" },
+        { userId: 8, username: null },
+      ]);
+
+      const remaining = await removeTelegramAccessRequest(null, 7);
+
+      expect(remaining.map((request) => request.userId)).toEqual([8]);
+    });
+  });
+
+  test("drops new senders once the list is full", async () => {
+    await withTempHomedir("nakama-telegram-requests-cap-", async () => {
+      for (let userId = 1; userId <= 20; userId += 1) {
+        await recordTelegramAccessRequest(null, { userId });
+      }
+
+      expect(await recordTelegramAccessRequest(null, { userId: 99 })).toBe(
+        false
+      );
+
+      expect(await listTelegramAccessRequests(null)).toHaveLength(20);
+    });
+  });
+});
+
+describe("telegram bot claims", () => {
+  const token = "123456789:AAEexampletoken";
+
+  test("a claim with no connection behind it is taken over", async () => {
+    await withTempHome("nakama-telegram-stale-claim-", async () => {
+      const dir = join(getUserConfigDir(), "channel-claims", "telegram");
+
+      const claim = join(
+        dir,
+        createHash("sha256").update("123456789").digest("hex")
+      );
+
+      await mkdir(dir, { recursive: true });
+
+      await writeFile(claim, JSON.stringify(["org_a", "gone"]));
+
+      const hourAgo = new Date(Date.now() - 3_600_000);
+
+      await utimes(claim, hourAgo, hourAgo);
+
+      await saveTelegramConfig(
+        { orgId: "org_a", profileId: "fresh" },
+        { botToken: token }
+      );
+
+      expect(JSON.parse(await readFile(claim, "utf8"))).toEqual([
+        "org_a",
+        "fresh",
+      ]);
+    });
+  });
+
+  test("a live connection still blocks, and says which org holds it", async () => {
+    await withTempHome("nakama-telegram-live-claim-", async () => {
+      await saveTelegramConfig(
+        { orgId: "org_a", profileId: "alpha" },
+        { botToken: token }
+      );
+
+      // A revoked and reissued token keeps the bot id the claim is keyed on.
+      const reissued = "123456789:AAEreissuedtoken";
+
+      await expect(
+        saveTelegramConfig(
+          { orgId: "org_a", profileId: "beta" },
+          { botToken: reissued }
+        )
+      ).rejects.toThrow(/in this organization/);
+
+      await expect(
+        saveTelegramConfig(
+          { orgId: "org_b", profileId: "gamma" },
+          { botToken: reissued }
+        )
+      ).rejects.toThrow(/in another organization/);
+    });
+  });
+});

@@ -12,30 +12,30 @@ import { getProfileSoulDir } from "./soul/resolve";
 
 const AVATAR_BASENAME = "avatar";
 
-const MEDIA_TYPE_TO_EXTENSION: Record<string, string> = {
+const MEDIA_TYPE_TO_EXTENSION = {
+  "image/gif": "gif",
   "image/jpeg": "jpg",
   "image/png": "png",
-  "image/gif": "gif",
   "image/webp": "webp",
-};
+} satisfies Record<string, string>;
 
-const EXTENSION_TO_MEDIA_TYPE: Record<string, string> = {
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  png: "image/png",
+const EXTENSION_TO_MEDIA_TYPE = {
   gif: "image/gif",
+  jpeg: "image/jpeg",
+  jpg: "image/jpeg",
+  png: "image/png",
   webp: "image/webp",
-};
+} satisfies Record<string, string>;
 
 export interface ProfileAvatarData {
-  mediaType: string;
   bytes: Buffer;
+  mediaType: string;
 }
 
 export function getProfileAvatarPath(
   orgId: string,
   profileId: string,
-  mediaType?: string,
+  mediaType?: string
 ): string {
   const directory = getProfileSoulDir(orgId, profileId);
 
@@ -43,7 +43,9 @@ export function getProfileAvatarPath(
     return join(directory, AVATAR_BASENAME);
   }
 
-  const extension = MEDIA_TYPE_TO_EXTENSION[mediaType];
+  const extension = Object.entries(MEDIA_TYPE_TO_EXTENSION).find(
+    ([type]) => type === mediaType
+  )?.[1];
 
   if (!extension) {
     throw new Error(`Unsupported avatar media type: ${mediaType}`);
@@ -52,14 +54,17 @@ export function getProfileAvatarPath(
   return join(directory, `${AVATAR_BASENAME}.${extension}`);
 }
 
-export async function hasProfileAvatar(orgId: string, profileId: string): Promise<boolean> {
+export async function hasProfileAvatar(
+  orgId: string,
+  profileId: string
+): Promise<boolean> {
   return (await findProfileAvatarFile(orgId, profileId)) !== null;
 }
 
 export async function saveProfileAvatar(
   orgId: string,
   profileId: string,
-  attachment: ImageAttachment,
+  attachment: ImageAttachment
 ): Promise<void> {
   validateImageAttachments([attachment]);
 
@@ -70,6 +75,7 @@ export async function saveProfileAvatar(
   const base64 = attachment.data.includes(",")
     ? (attachment.data.split(",")[1] ?? "")
     : attachment.data;
+
   const bytes = Buffer.from(base64, "base64");
   const filePath = getProfileAvatarPath(orgId, profileId, attachment.mediaType);
 
@@ -78,7 +84,7 @@ export async function saveProfileAvatar(
 
 export async function readProfileAvatar(
   orgId: string,
-  profileId: string,
+  profileId: string
 ): Promise<ProfileAvatarData | null> {
   const filePath = await findProfileAvatarFile(orgId, profileId);
 
@@ -87,7 +93,10 @@ export async function readProfileAvatar(
   }
 
   const extension = filePath.slice(filePath.lastIndexOf(".") + 1).toLowerCase();
-  const mediaType = EXTENSION_TO_MEDIA_TYPE[extension];
+
+  const mediaType = Object.entries(EXTENSION_TO_MEDIA_TYPE).find(
+    ([candidate]) => candidate === extension
+  )?.[1];
 
   if (!mediaType) {
     return null;
@@ -95,10 +104,13 @@ export async function readProfileAvatar(
 
   const bytes = await readBytes(filePath);
 
-  return { mediaType, bytes };
+  return { bytes, mediaType };
 }
 
-export async function deleteProfileAvatar(orgId: string, profileId: string): Promise<boolean> {
+export async function deleteProfileAvatar(
+  orgId: string,
+  profileId: string
+): Promise<boolean> {
   const directory = getProfileSoulDir(orgId, profileId);
   const entries = await readDirectoryOrEmpty(directory);
   let removed = false;
@@ -115,7 +127,10 @@ export async function deleteProfileAvatar(orgId: string, profileId: string): Pro
   return removed;
 }
 
-async function findProfileAvatarFile(orgId: string, profileId: string): Promise<string | null> {
+async function findProfileAvatarFile(
+  orgId: string,
+  profileId: string
+): Promise<string | null> {
   const directory = getProfileSoulDir(orgId, profileId);
   const entries = await readDirectoryOrEmpty(directory);
 
@@ -126,7 +141,11 @@ async function findProfileAvatarFile(orgId: string, profileId: string): Promise<
 
     const extension = entry.slice(entry.lastIndexOf(".") + 1).toLowerCase();
 
-    if (EXTENSION_TO_MEDIA_TYPE[extension]) {
+    if (
+      Object.entries(EXTENSION_TO_MEDIA_TYPE).some(
+        ([candidate]) => candidate === extension
+      )
+    ) {
       return join(directory, entry);
     }
   }

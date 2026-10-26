@@ -1,18 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createClientId, syncRowKeys } from "./client-id";
-
-describe("createClientId", () => {
-  test("returns a non-empty opaque string without crypto.randomUUID", () => {
-    const id = createClientId();
-    expect(typeof id).toBe("string");
-    expect(id.length).toBeGreaterThan(0);
-  });
-
-  test("returns unique values", () => {
-    const ids = new Set(Array.from({ length: 50 }, () => createClientId()));
-    expect(ids.size).toBe(50);
-  });
-});
+import { syncRowKeys } from "./client-id";
 
 describe("syncRowKeys", () => {
   test("grows and shrinks the key list to match length", () => {
@@ -22,5 +9,21 @@ describe("syncRowKeys", () => {
     const first = keys[0];
     syncRowKeys(keys, 1);
     expect(keys).toEqual([first]);
+  });
+
+  test("middle splice keeps sibling keys stable after remove-and-readd", () => {
+    const keys: string[] = [];
+    syncRowKeys(keys, 3);
+    const [first, , third] = keys;
+
+    keys.splice(1, 1);
+    syncRowKeys(keys, 2);
+    expect(keys).toEqual([first, third]);
+
+    syncRowKeys(keys, 3);
+    expect(keys[0]).toBe(first);
+    expect(keys[1]).toBe(third);
+    expect(keys[2]).not.toBe(first);
+    expect(keys[2]).not.toBe(third);
   });
 });

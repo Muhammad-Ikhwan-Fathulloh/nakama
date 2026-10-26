@@ -1,33 +1,26 @@
-import type { ProfileSummary } from "@nakama/core/contract";
-import { ProfileAvatar } from "@/components/ProfileAvatar";
-import { WorkerActionBar } from "@/components/WorkerActionBar";
+import { Button } from "@nakama/ui/button";
+import { Card, CardContent } from "@nakama/ui/card";
+import { Switch } from "@nakama/ui/switch";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
+  ChannelConnectionStep,
+  ChannelSettings,
   IntegrationSettingsFooter,
-  IntegrationStatusHeader,
   SettingsRow,
 } from "@/components/integration-settings.shared";
-import { WhatsAppSettingsLinkingSection } from "@/components/whatsapp-settings-linking-section";
+import { WorkerActionBar } from "@/components/WorkerActionBar";
+import {
+  WhatsAppLinkStatusCard,
+  WhatsAppSettingsLinkingSection,
+} from "@/components/whatsapp-settings-linking-section";
 
 export function WhatsAppSettingsCardContent({
-  embedded,
-  headerSubtitle,
-  statusBadge,
+  connected,
   configured,
   paired,
   running,
   showQr,
   linkedNumber,
-  profileId,
-  profiles,
   savePending,
-  onProfileChange,
   pairingCode,
   copied,
   onCopyPairingCode,
@@ -35,8 +28,9 @@ export function WhatsAppSettingsCardContent({
   regeneratePending,
   qrCode,
   linkingAfterScan,
-  bridgeStarting,
   awaitingQr,
+  linkError,
+  linkOwner,
   showReconnect,
   onReconnect,
   reconnectPending,
@@ -46,20 +40,21 @@ export function WhatsAppSettingsCardContent({
   loadError,
   canSave,
   actionLabel,
+  allowedPhoneSummary,
+  onManageAllowedPhones,
+  requireGroupMention,
+  onRequireGroupMentionChange,
+  allowUnpairedGroupMembers,
+  onAllowUnpairedGroupMembersChange,
   onSave,
 }: {
-  embedded: boolean;
-  headerSubtitle: string;
-  statusBadge: string;
+  connected: boolean;
   configured: boolean;
   paired: boolean;
   running: boolean;
   showQr: boolean;
   linkedNumber: string | null;
-  profileId: string;
-  profiles: ProfileSummary[];
   savePending: boolean;
-  onProfileChange: (profileId: string) => void;
   pairingCode: string | null;
   copied: boolean;
   onCopyPairingCode: () => void;
@@ -67,104 +62,173 @@ export function WhatsAppSettingsCardContent({
   regeneratePending: boolean;
   qrCode: string | null;
   linkingAfterScan: boolean;
-  bridgeStarting: boolean;
   awaitingQr: boolean;
+  linkError: string | null;
+  linkOwner: { agentName: string; orgName: string } | null;
   showReconnect: boolean;
   onReconnect: () => void;
   reconnectPending: boolean;
-  worker: { process?: { managed?: boolean } } | null | undefined;
+  worker:
+    | { process?: { error?: string; managed?: boolean } }
+    | null
+    | undefined;
   statusLine: string | null;
   formError: string | null;
   loadError: unknown;
   canSave: boolean;
   actionLabel: string;
+  allowedPhoneSummary: string;
+  onManageAllowedPhones: () => void;
+  requireGroupMention: boolean;
+  onRequireGroupMentionChange: (value: boolean) => void;
+  allowUnpairedGroupMembers: boolean;
+  onAllowUnpairedGroupMembersChange: (value: boolean) => void;
   onSave: () => void;
 }) {
-  return (
-    <div className="divide-y divide-border">
-      {!embedded ? (
-        <IntegrationStatusHeader
-          title="WhatsApp"
-          subtitle={headerSubtitle}
-          statusBadge={statusBadge}
-          configured={configured}
-          connected={paired && running && !showQr}
-        />
-      ) : null}
+  const paneItemClass = "px-4 py-3";
 
-      {linkedNumber ? (
-        <SettingsRow label="Linked account" description="From your WhatsApp session">
-          <span className="text-sm text-foreground">{linkedNumber}</span>
-        </SettingsRow>
-      ) : null}
+  const linking = (
+    <WhatsAppSettingsLinkingSection
+      copied={copied}
+      onCopyPairingCode={onCopyPairingCode}
+      onReconnect={onReconnect}
+      onRegeneratePairingCode={onRegeneratePairingCode}
+      paired={paired}
+      pairingCode={pairingCode}
+      reconnectPending={reconnectPending}
+      regeneratePending={regeneratePending}
+      rowClassName={paneItemClass}
+      savePending={savePending}
+      showReconnect={showReconnect}
+    />
+  );
 
-      <SettingsRow label="Reply as" description="Which agent answers on WhatsApp">
-        <Select
-          value={profileId}
-          disabled={savePending || profiles.length === 0}
-          onValueChange={(value) => {
-            if (value) {
-              onProfileChange(String(value));
-            }
-          }}
-        >
-          <SelectTrigger id="whatsapp-profile" className="w-[11rem] sm:w-[13rem]">
-            <SelectValue placeholder="Profile">
-              {profiles.find((profile) => profile.id === profileId)?.name}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent align="end">
-            {profiles.map((profile) => (
-              <SelectItem key={profile.id} value={profile.id}>
-                <span className="flex items-center gap-2">
-                  <ProfileAvatar profile={profile} size="sm" />
-                  <span>{profile.name}</span>
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </SettingsRow>
+  const footer = (
+    <IntegrationSettingsFooter
+      canSave={canSave}
+      className={paneItemClass}
+      formError={formError}
+      loadError={loadError}
+      onSave={onSave}
+      savePending={savePending}
+      showSave={canSave || savePending}
+      statusLine={statusLine}
+      submitLabel={actionLabel}
+    />
+  );
 
-      {configured ? (
-        <WhatsAppSettingsLinkingSection
-          paired={paired}
-          pairingCode={pairingCode}
-          copied={copied}
-          savePending={savePending}
-          regeneratePending={regeneratePending}
-          onCopyPairingCode={onCopyPairingCode}
-          onRegeneratePairingCode={onRegeneratePairingCode}
-          showQr={showQr}
-          qrCode={qrCode}
-          linkingAfterScan={linkingAfterScan}
-          bridgeStarting={bridgeStarting}
-          awaitingQr={awaitingQr}
-          showReconnect={showReconnect}
-          reconnectPending={reconnectPending}
-          onReconnect={onReconnect}
-        />
-      ) : null}
+  const linkingInProgress = showQr || awaitingQr || linkingAfterScan;
 
-      {configured ? (
-        <SettingsRow label="Bridge worker" description={running ? "Running" : "Stopped"}>
-          <WorkerActionBar
-            workerName="whatsapp"
+  const isConnected = running && connected;
+  const managed = worker?.process?.managed === true;
+
+  const workerActions = (
+    <WorkerActionBar
+      compact
+      pm2Error={worker?.process?.error}
+      pm2Managed={managed}
+      running={running}
+      workerName="whatsapp"
+    />
+  );
+
+  if (!(configured && paired) || linkingInProgress) {
+    return (
+      <WhatsAppLinkStatusCard
+        awaitingQr={awaitingQr}
+        configured={configured}
+        footer={statusLine || canSave || savePending ? footer : null}
+        linkError={linkError}
+        linkingAfterScan={linkingAfterScan}
+        linkOwner={linkOwner}
+        onReconnect={onReconnect}
+        qrCode={qrCode}
+        reconnectPending={reconnectPending}
+        running={running}
+        savePending={savePending}
+        showQr={showQr}
+        startConnection={
+          <ChannelConnectionStep
+            managed={managed}
+            platform="whatsapp"
             running={running}
-            pm2Managed={worker?.process?.managed ?? false}
+            starting={savePending}
+          >
+            {workerActions}
+          </ChannelConnectionStep>
+        }
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div
+        className="group flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 data-[connected=true]:border-border data-[connected=true]:bg-card"
+        data-connected={isConnected}
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          <span
+            aria-hidden
+            className="size-2.5 shrink-0 rounded-full bg-amber-500 group-data-[connected=true]:bg-emerald-600"
+          />
+          <div className="min-w-0">
+            <p className="font-semibold text-sm">
+              {isConnected ? "Connected" : "Offline"}
+            </p>
+            <p
+              className="break-all text-muted-foreground text-xs"
+              hidden={!linkedNumber}
+            >
+              {linkedNumber}
+            </p>
+          </div>
+        </div>
+        {workerActions}
+      </div>
+      <Card className="w-full overflow-hidden shadow-none">
+        <CardContent className="divide-y divide-border p-0">
+          <SettingsRow label="Who can message this agent?">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <span className="text-muted-foreground text-xs">
+                {allowedPhoneSummary}
+              </span>
+              <Button
+                disabled={savePending}
+                onClick={onManageAllowedPhones}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                Edit
+              </Button>
+            </div>
+          </SettingsRow>
+        </CardContent>
+      </Card>
+      <ChannelSettings>
+        <SettingsRow label="Only reply when mentioned in groups">
+          <Switch
+            aria-label="Only reply when mentioned in groups"
+            checked={requireGroupMention}
+            disabled={savePending}
+            id="whatsapp-require-group-mention"
+            onCheckedChange={onRequireGroupMentionChange}
           />
         </SettingsRow>
-      ) : null}
+        <SettingsRow label="Reply to unpaired group members">
+          <Switch
+            aria-label="Reply to unpaired group members"
+            checked={allowUnpairedGroupMembers}
+            disabled={savePending}
+            id="whatsapp-allow-unpaired-group-members"
+            onCheckedChange={onAllowUnpairedGroupMembersChange}
+          />
+        </SettingsRow>
+        {linking}
+      </ChannelSettings>
 
-      <IntegrationSettingsFooter
-        statusLine={statusLine}
-        formError={formError}
-        loadError={loadError}
-        savePending={savePending}
-        canSave={canSave}
-        submitLabel={actionLabel}
-        onSave={onSave}
-      />
+      {footer}
     </div>
   );
 }

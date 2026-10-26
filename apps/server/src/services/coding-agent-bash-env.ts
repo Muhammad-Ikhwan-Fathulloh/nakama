@@ -1,99 +1,160 @@
+import {
+  NakamaApiError,
+  type ToolContext,
+  type UserConfig,
+} from "@nakama/core";
 import type { DatabaseAdapter } from "@nakama/db";
-import type { ToolContext } from "@nakama/core";
+import type { BashInput } from "../tools/bash";
 import {
-  buildSpawnEnvForHarness,
-  getInferenceGatewayBaseUrl,
-  normalizeCodingAgentModel,
-} from "./coding-agent-spawn-env";
-import {
+  inferCodingAgentHarnessKind,
   isCodingAgentCommand,
   loadCodingAgentWorkspaceSettings,
   resolveCodingAgentHarness,
 } from "./coding-agent-harness-service";
-import { loadLocalAuthToken } from "@nakama/core";
+import {
+  mergeCodingAgentSpawnEnv,
+  resolveCodingAgentSpawnBundle,
+} from "./coding-agent-spawn-env";
+import type { OrgService } from "./org-service";
+import {
+  modelExistsOnInstance,
+  resolveConfiguredModelInstance,
+} from "./provider-instance-helpers";
 
-export async function resolveProfileModelId(
+async function resolveProfileModelId(
   db: DatabaseAdapter,
   profileId: string,
+  context: ToolContext,
+  userConfig: UserConfig | null | undefined,
+  orgService?: OrgService
 ): Promise<string | null> {
-  const profile = await db.getProfile(profileId);
+  const profile = context.orgId
+    ? await db.getProfileForOrg(profileId, context.orgId)
+    : await db.getProfile(profileId);
+
+  if (!profile) {
+    throw new NakamaApiError("Profile not found.", 404);
+  }
+
+  if (
+    profile.orgId &&
+    (await db.getSharedAgentInstance(profile.orgId, profileId))
+  ) {
+    if (!(context.orgId && orgService)) {
+      throw new NakamaApiError("Shared agent is unavailable.", 503);
+    }
+
+    const shared = await orgService.resolveSharedAgentProfile(
+      context.orgId,
+      profileId
+    );
+
+    if (!shared) {
+      throw new NakamaApiError("Shared agent is unavailable.", 404);
+    }
+
+    const selected = resolveConfiguredModelInstance(userConfig, shared.model, {
+      invalid: "Select a configured model.",
+      missingProvider: "The model provider is unavailable.",
+    });
+
+    if (
+      selected &&
+      !modelExistsOnInstance(selected.instance, selected.modelId)
+    ) {
+      throw new NakamaApiError("Select a configured model.", 400);
+    }
+
+    return shared.model?.trim() || null;
+  }
 
   return profile?.model?.trim() || null;
 }
 
 export async function enrichCodingAgentBashInput(
   db: DatabaseAdapter,
-  input: unknown,
+  input: BashInput,
   context: ToolContext,
-): Promise<unknown> {
-  if (typeof input !== "object" || input === null) {
-    return input;
-  }
-
-  const record = input as Record<string, unknown>;
-  const command = typeof record.command === "string" ? record.command.trim() : "";
+  userConfig: UserConfig | null | undefined,
+  orgService?: OrgService
+): Promise<BashInput> {
+  const command = input.command.trim();
 
   if (!command) {
     return input;
   }
 
-  const settings = await loadCodingAgentWorkspaceSettings(db);
-  const codingAgentRequested = record.codingAgent === true;
-  const matchesHarness = isCodingAgentCommand(command, settings.harnesses);
+  const workspace = await loadCodingAgentWorkspaceSettings(db);
+  const codingAgentRequested = input.codingAgent === true;
+  const matchesHarness = isCodingAgentCommand(command, workspace.harnesses);
 
-  if (!codingAgentRequested && !matchesHarness) {
+  const inferredKind = inferCodingAgentHarnessKind(
+    command,
+    workspace.harnesses
+  );
+
+  if (!(codingAgentRequested || matchesHarness)) {
     return input;
   }
 
-  const harness = await resolveCodingAgentHarness(db);
-  const profileId = context.profileId?.trim();
+  if (codingAgentRequested && !inferredKind) {
+    throw new Error(
+      "codingAgent was set but the bash command does not start with a known coding-agent CLI (codex, claude, opencode, pi, or agent). Use the harness binary as argv0 so Nakama can merge the correct provider passthrough env."
+    );
+  }
+
   const profileModel =
-    profileId !== undefined && profileId.length > 0
-      ? normalizeCodingAgentModel(await resolveProfileModelId(db, profileId))
+    context.profileId !== undefined && context.profileId.length > 0
+      ? await resolveProfileModelId(
+          db,
+          context.profileId,
+          context,
+          userConfig,
+          orgService
+        )
       : null;
-  const gatewayBaseUrl = getInferenceGatewayBaseUrl();
-  const authToken = gatewayBaseUrl ? await resolveInferenceAuthToken() : null;
-  const spawnEnv = buildSpawnEnvForHarness(harness.kind, {
-    model: profileModel,
-    gatewayBaseUrl,
-    authToken,
-    orgId: context.orgId,
-    profileId: context.profileId,
+
+  const harness = await resolveCodingAgentHarness(db, inferredKind, {
+    profileModel,
+    providerPassthroughEnabled: workspace.providerPassthroughEnabled,
+    userConfig,
   });
-  const explicitEnv = readStringRecord(record.env);
-  const mergedEnv = { ...spawnEnv, ...explicitEnv };
+
+  if (
+    !workspace.providerPassthroughEnabled ||
+    harness.kind === "cursor_agent"
+  ) {
+    return {
+      ...input,
+      codingAgent: true,
+    };
+  }
+
+  const { spawn } = await resolveCodingAgentSpawnBundle({
+    harnessKind: harness.kind,
+    profileModel,
+    userConfig,
+  });
+
+  const explicitEnv = input.env;
+
+  const mergedEnv = mergeCodingAgentSpawnEnv(process.env, spawn.env, {
+    callerEnv: explicitEnv,
+    protectCredentialKeys: spawn.env && Object.keys(spawn.env).length > 0,
+  });
 
   if (Object.keys(mergedEnv).length === 0 && !codingAgentRequested) {
     return input;
   }
 
-  return {
-    ...record,
+  const enriched: BashInput = {
+    ...input,
     codingAgent: true,
-    ...(Object.keys(mergedEnv).length > 0 ? { env: mergedEnv } : {}),
   };
-}
 
-function readStringRecord(value: unknown): Record<string, string> {
-  if (typeof value !== "object" || value === null) {
-    return {};
+  if (Object.keys(mergedEnv).length > 0) {
+    enriched.env = mergedEnv;
   }
 
-  const entries = Object.entries(value as Record<string, unknown>).flatMap(([key, entry]) => {
-    if (typeof entry !== "string") {
-      return [];
-    }
-
-    return [[key, entry] as const];
-  });
-
-  return Object.fromEntries(entries);
-}
-
-async function resolveInferenceAuthToken(): Promise<string | null> {
-  try {
-    return await loadLocalAuthToken();
-  } catch {
-    return null;
-  }
+  return enriched;
 }

@@ -1,11 +1,53 @@
-import { plainLine, styledLine, type StyledLine } from "./styled-text";
+import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import {
+  plainLine,
+  type StyledLine,
+  styledLine,
+  styledLineFromAnsi,
+  styledLineText,
+} from "./styled-text";
 import { visibleLength, wrapText } from "./text-measure";
 
 export type MessageKind = "user" | "output" | "assistant" | "tool";
 
 export interface VirtualMessage {
-  text: string;
   kind: MessageKind;
+  text: string;
+}
+
+const markdownStyle = (codes: string) => (text: string) =>
+  `\x1b[${codes}m${text}\x1b[0m`;
+
+const MARKDOWN_THEME: MarkdownTheme = {
+  bold: markdownStyle("1"),
+  code: markdownStyle("33"),
+  codeBlock: markdownStyle("33"),
+  codeBlockBorder: markdownStyle("2;36"),
+  heading: markdownStyle("1;36"),
+  hr: markdownStyle("2"),
+  italic: markdownStyle("3"),
+  link: markdownStyle("36"),
+  linkUrl: markdownStyle("2;36"),
+  listBullet: markdownStyle("36"),
+  quote: markdownStyle("2"),
+  quoteBorder: markdownStyle("2"),
+  strikethrough: markdownStyle("9"),
+  underline: markdownStyle("4"),
+};
+
+export function renderMarkdownLines(text: string, width: number): StyledLine[] {
+  return new Markdown(text, 1, 0, MARKDOWN_THEME).render(width).map((line) => {
+    const trimmed = line.replace(/\s+$/, "");
+
+    if (!trimmed) {
+      return plainLine("");
+    }
+
+    const rendered = styledLineFromAnsi(trimmed);
+    rendered.segments.push({ text: " " });
+
+    return rendered;
+  });
 }
 
 /**
@@ -27,6 +69,9 @@ export interface VirtualMessage {
 export class VirtualMessageList {
   private static readonly HORIZONTAL_PADDING = 1;
   private static readonly MESSAGE_GAP_LINES = 1;
+  // Display-only history: persisted conversations are unaffected. The open
+  // message stays separate and is never truncated while it is being written.
+  private static readonly MAX_RETAINED_MESSAGES = 1000;
   private messages: VirtualMessage[] = [];
   private currentText: string[] = [];
   private currentKind: MessageKind = "output";
@@ -36,7 +81,7 @@ export class VirtualMessageList {
   // Guarantee: offsets.length === messages.length + 1 when fully computed.
   private cachedWidth = 0;
   private offsets: number[] = [0];
-  private wrappedCache = new Map<number, string[]>();
+  private wrappedCache = new Map<number, StyledLine[]>();
 
   // ── Mutation ──────────────────────────────────────────────────────
 
@@ -58,20 +103,24 @@ export class VirtualMessageList {
   appendLine(text: string): void {
     if (this.hasOpenMessage) {
       this.currentText.push(text);
+
       return;
     }
 
     // Implicit single-line message
-    this.messages.push({ text, kind: "output" });
+    this.messages.push({ kind: "output", text });
     this.invalidateOffsets();
   }
 
   /** Finalize the current multi-line message, if any. */
   sealMessage(): void {
-    if (!this.hasOpenMessage || this.currentText.length === 0) return;
+    if (!this.hasOpenMessage || this.currentText.length === 0) {
+      return;
+    }
+
     this.messages.push({
-      text: this.currentText.join("\n"),
       kind: this.currentKind,
+      text: this.currentText.join("\n"),
     });
     this.currentText = [];
     this.hasOpenMessage = false;
@@ -95,6 +144,26 @@ export class VirtualMessageList {
   // ── Internal offset management ────────────────────────────────────
 
   private invalidateOffsets(): void {
+    const excess =
+      this.messages.length - VirtualMessageList.MAX_RETAINED_MESSAGES;
+
+    if (excess > 0) {
+      this.messages.splice(0, excess);
+      const retainedCache = new Map<number, StyledLine[]>();
+
+      for (const [index, lines] of this.wrappedCache) {
+        // Rewrap the new first message to remove its former leading gap.
+        if (index > excess) {
+          retainedCache.set(index - excess, lines);
+        }
+      }
+
+      this.wrappedCache = retainedCache;
+      this.offsets = [0];
+
+      return;
+    }
+
     // Keep offsets up to the last known message count so incremental
     // recompute can pick up from there.
     if (this.offsets.length > this.messages.length + 1) {
@@ -108,7 +177,10 @@ export class VirtualMessageList {
    * reused. A width change forces a full rewrap.
    */
   private ensureWidth(width: number): void {
-    if (width === this.cachedWidth && this.offsets.length === this.messages.length + 1) {
+    if (
+      width === this.cachedWidth &&
+      this.offsets.length === this.messages.length + 1
+    ) {
       return; // fully up to date
     }
 
@@ -125,17 +197,20 @@ export class VirtualMessageList {
 
     // Incrementally compute offsets for uncached messages
     const startFrom = Math.max(0, this.offsets.length - 1);
+
     for (let i = startFrom; i < this.messages.length; i++) {
       let lines = this.wrappedCache.get(i);
+
       if (!lines) {
         lines = this.formatMessageLines(
           this.messages[i].text,
           width,
           this.shouldInsertLeadingGap(i, this.messages[i].kind),
-          this.messages[i].kind,
+          this.messages[i].kind
         );
         this.wrappedCache.set(i, lines);
       }
+
       this.offsets.push(this.offsets[this.offsets.length - 1] + lines.length);
     }
   }
@@ -168,31 +243,62 @@ export class VirtualMessageList {
     return `${text}${" ".repeat(Math.max(0, Math.max(1, width) - visibleLength(text)))}`;
   }
 
-  private formatUserMessageLines(text: string, width: number): string[] {
+  private formatUserMessageLines(text: string, width: number): StyledLine[] {
     const contentWidth = Math.max(1, width);
-    const lines = this.wrapMessageText(text, width + VirtualMessageList.HORIZONTAL_PADDING * 2).map(
-      (line) => this.surfaceLine(line, contentWidth),
-    );
+
+    const lines = text
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .flatMap((line) => {
+        const prefix = line.match(/^(?:[>›] | +)/)?.[0] ?? "";
+        const prefixWidth = visibleLength(prefix);
+
+        const wrapped = wrapText(
+          line.slice(prefix.length),
+          Math.max(1, contentWidth - prefixWidth - 1)
+        );
+
+        return wrapped.map((part, index) =>
+          plainLine(
+            this.surfaceLine(
+              `${index === 0 ? prefix : " ".repeat(prefixWidth)}${part}`,
+              contentWidth
+            )
+          )
+        );
+      });
+
     // Submitted user messages intentionally keep a padded blank row above and
     // below the content to preserve the "bubble" treatment in the CLI.
-    return [this.surfaceLine("", contentWidth), ...lines, this.surfaceLine("", contentWidth)];
+    return [
+      plainLine(this.surfaceLine("", contentWidth)),
+      ...lines,
+      plainLine(this.surfaceLine("", contentWidth)),
+    ];
   }
 
   private formatMessageLines(
     text: string,
     width: number,
     withLeadingGap: boolean,
-    kind: MessageKind,
-  ): string[] {
+    kind: MessageKind
+  ): StyledLine[] {
     const lines =
       kind === "user"
         ? this.formatUserMessageLines(text, width)
-        : this.wrapMessageText(text, width).map((line) => this.padLine(line));
+        : kind === "assistant"
+          ? renderMarkdownLines(text, width)
+          : this.wrapMessageText(text, width).map((line) =>
+              styledLine(this.padLine(line))
+            );
+
     if (!withLeadingGap) {
       return lines;
     }
 
-    return Array.from({ length: VirtualMessageList.MESSAGE_GAP_LINES }, () => "").concat(lines);
+    return Array.from({ length: VirtualMessageList.MESSAGE_GAP_LINES }, () =>
+      plainLine("")
+    ).concat(lines);
   }
 
   private shouldInsertLeadingGap(index: number, kind: MessageKind): boolean {
@@ -200,10 +306,14 @@ export class VirtualMessageList {
       return false;
     }
 
-    return kind === "assistant" || kind === "user" || kind === "tool";
+    return (
+      kind === "assistant" ||
+      kind === "user" ||
+      (kind === "tool" && this.messages[index - 1]?.kind !== "tool")
+    );
   }
 
-  private openMessageLines(width: number): string[] {
+  private openMessageLines(width: number): StyledLine[] {
     if (!this.hasOpenMessage || this.currentText.length === 0) {
       return [];
     }
@@ -212,7 +322,7 @@ export class VirtualMessageList {
       this.currentText.join("\n"),
       width,
       this.shouldInsertLeadingGap(this.messages.length, this.currentKind),
-      this.currentKind,
+      this.currentKind
     );
   }
 
@@ -221,7 +331,10 @@ export class VirtualMessageList {
   /** Total number of wrapped lines at the given width. */
   totalLines(width: number): number {
     this.ensureWidth(width);
-    return this.offsets[this.messages.length] + this.openMessageLines(width).length;
+
+    return (
+      this.offsets[this.messages.length] + this.openMessageLines(width).length
+    );
   }
 
   /**
@@ -237,40 +350,50 @@ export class VirtualMessageList {
       const msgStart = this.offsets[i];
       const msgEnd = this.offsets[i + 1];
 
-      if (msgEnd <= start) continue;
-      if (msgStart >= end) break;
+      if (msgEnd <= start) {
+        continue;
+      }
+
+      if (msgStart >= end) {
+        break;
+      }
 
       let lines = this.wrappedCache.get(i);
+
       if (!lines) {
         lines = this.formatMessageLines(
           this.messages[i].text,
           width,
           this.shouldInsertLeadingGap(i, this.messages[i].kind),
-          this.messages[i].kind,
+          this.messages[i].kind
         );
         this.wrappedCache.set(i, lines);
       }
 
       const localStart = Math.max(0, start - msgStart);
       const localEnd = Math.min(lines.length, end - msgStart);
+
       for (let j = localStart; j < localEnd; j++) {
         result.push(this.styledMessageLine(this.messages[i].kind, lines[j]));
       }
     }
 
     const openLines = this.openMessageLines(width);
+
     if (openLines.length === 0) {
       return result;
     }
 
     const openStart = this.offsets[this.messages.length];
     const openEnd = openStart + openLines.length;
+
     if (openEnd <= start || openStart >= end) {
       return result;
     }
 
     const localStart = Math.max(0, start - openStart);
     const localEnd = Math.min(openLines.length, end - openStart);
+
     for (let i = localStart; i < localEnd; i++) {
       result.push(this.styledMessageLine(this.currentKind, openLines[i]));
     }
@@ -288,26 +411,47 @@ export class VirtualMessageList {
    *   message if already at the start of the current).
    * - direction "down": snap to the start of the next message.
    */
-  snapToMessage(currentLine: number, direction: "up" | "down", width: number): number {
+  snapToMessage(
+    currentLine: number,
+    direction: "up" | "down",
+    width: number
+  ): number {
     this.ensureWidth(width);
     const openLines = this.openMessageLines(width);
     const count = this.messages.length + (openLines.length > 0 ? 1 : 0);
-    if (count === 0) return currentLine;
+
+    if (count === 0) {
+      return currentLine;
+    }
 
     for (let i = 0; i < count; i++) {
       const msgStart = this.offsets[i];
-      const msgEnd =
-        i < this.messages.length ? this.offsets[i + 1] : msgStart + openLines.length;
 
-      if (currentLine < msgStart || currentLine >= msgEnd) continue;
+      const msgEnd =
+        i < this.messages.length
+          ? this.offsets[i + 1]
+          : msgStart + openLines.length;
+
+      if (currentLine < msgStart || currentLine >= msgEnd) {
+        continue;
+      }
 
       if (direction === "up") {
-        if (currentLine - msgStart > 0) return msgStart;
-        if (i > 0) return this.offsets[i - 1];
+        if (currentLine - msgStart > 0) {
+          return msgStart;
+        }
+
+        if (i > 0) {
+          return this.offsets[i - 1];
+        }
+
         return msgStart;
       }
 
-      if (i + 1 < count) return this.offsets[i + 1];
+      if (i + 1 < count) {
+        return this.offsets[i + 1];
+      }
+
       return msgEnd - 1;
     }
 
@@ -315,22 +459,29 @@ export class VirtualMessageList {
   }
 
   /** Return the message index and local line offset for a given global line. */
-  messageAtLine(line: number, width: number): { index: number; lineOffset: number } | null {
+  messageAtLine(
+    line: number,
+    width: number
+  ): { index: number; lineOffset: number } | null {
     this.ensureWidth(width);
+
     for (let i = 0; i < this.messages.length; i++) {
       const msgStart = this.offsets[i];
       const msgEnd = this.offsets[i + 1];
+
       if (line >= msgStart && line < msgEnd) {
         return { index: i, lineOffset: line - msgStart };
       }
     }
 
     const openLines = this.openMessageLines(width);
+
     if (openLines.length === 0) {
       return null;
     }
 
     const openStart = this.offsets[this.messages.length];
+
     if (line >= openStart && line < openStart + openLines.length) {
       return { index: this.messages.length, lineOffset: line - openStart };
     }
@@ -341,26 +492,34 @@ export class VirtualMessageList {
   /** The wrapped line content for a single message (cached). */
   messageLines(index: number, width: number): string[] {
     this.ensureWidth(width);
+
     if (index === this.messages.length) {
-      return this.openMessageLines(width);
+      return this.openMessageLines(width).map(styledLineText);
     }
+
     const cached = this.wrappedCache.get(index);
-    if (cached) return cached;
+
+    if (cached) {
+      return cached.map(styledLineText);
+    }
+
     const lines = this.formatMessageLines(
       this.messages[index].text,
       width,
       this.shouldInsertLeadingGap(index, this.messages[index].kind),
-      this.messages[index].kind,
+      this.messages[index].kind
     );
+
     this.wrappedCache.set(index, lines);
-    return lines;
+
+    return lines.map(styledLineText);
   }
 
-  private styledMessageLine(kind: MessageKind, line: string): StyledLine {
-    if (kind === "user" && line !== "") {
-      return styledLine(line, { background: "surface" });
+  private styledMessageLine(kind: MessageKind, line: StyledLine): StyledLine {
+    if (kind === "user" && styledLineText(line) !== "") {
+      return styledLine(styledLineText(line), { background: "surface" });
     }
 
-    return plainLine(line);
+    return line;
   }
 }

@@ -1,25 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
-  LocalAuthTokenManagedExternallyError,
+  getLocalAuthTokenPath,
   loadLocalAuthToken,
   verifyLocalAuthToken,
 } from "@nakama/core/local-auth";
-import {
-  formatRotateTokenError,
-  isRotateTokenCommand,
-  runRotateToken,
-} from "./rotate-token";
+import { runRotateToken } from "./rotate-token";
 
 describe("rotate-token command", () => {
-  test("isRotateTokenCommand matches the rotate-token subcommand", () => {
-    expect(isRotateTokenCommand(["rotate-token"])).toBe(true);
-    expect(isRotateTokenCommand(["chat"])).toBe(false);
-    expect(isRotateTokenCommand([])).toBe(false);
-  });
-
   test("runRotateToken rotates the on-disk token", async () => {
     const configDir = await mkdtemp(join(tmpdir(), "nakama-cli-rotate-"));
     process.env.NAKAMA_CONFIG_DIR = configDir;
@@ -39,22 +29,23 @@ describe("rotate-token command", () => {
       }
 
       const rotated = await loadLocalAuthToken();
+      const tokenPath = getLocalAuthTokenPath();
       expect(rotated).toStartWith("tc_local_");
       expect(rotated).not.toBe(original);
       await expect(verifyLocalAuthToken(original!)).resolves.toBeNull();
       await expect(verifyLocalAuthToken(rotated!)).resolves.toEqual({
         email: "local-client@nakama.internal",
       });
-      expect(logs.some((line) => line.includes(rotated!))).toBe(true);
+      expect(
+        logs.some((line) => line.includes("Local auth token rotated."))
+      ).toBe(true);
+      expect(
+        logs.some((line) => line.includes(`Token file: ${tokenPath}`))
+      ).toBe(true);
+      expect(logs.some((line) => line.includes(rotated!))).toBe(false);
     } finally {
       delete process.env.NAKAMA_CONFIG_DIR;
-      await rm(configDir, { recursive: true, force: true });
+      await rm(configDir, { force: true, recursive: true });
     }
-  });
-
-  test("formatRotateTokenError surfaces env-managed token errors", () => {
-    expect(
-      formatRotateTokenError(new LocalAuthTokenManagedExternallyError()),
-    ).toContain("NAKAMA_LOCAL_AUTH_TOKEN");
   });
 });

@@ -1,125 +1,245 @@
-import { createClient } from "@nakama/client";
-import { ChannelOrgStore, getChannelOrgSelectionPath } from "@nakama/core/channel-org";
-import { ensureServerRunning, stopSpawnedServer } from "@nakama/core/ensure-server";
+import { join } from "node:path";
+import { NakamaClient } from "@nakama/client";
+import {
+  installErrorHandlers,
+  installErrorTrackingSink,
+  log,
+} from "@nakama/core";
+import { hasActiveStreams } from "@nakama/core/channel-active-stream";
+import { ChannelOrgStore } from "@nakama/core/channel-org";
+import { ChannelSessionStore } from "@nakama/core/channel-session-store";
+import {
+  ensureServerRunning,
+  stopSpawnedServer,
+} from "@nakama/core/ensure-server";
 import { loadLocalAuthToken } from "@nakama/core/local-auth";
 import { resolveWebPublicUrl } from "@nakama/core/runtime";
+import { getTelegramConfigDir } from "@nakama/core/telegram-config";
 import {
-  clearTelegramWorkerHeartbeat,
+  createTelegramWorkerHeartbeat,
   isHeartbeatAlive,
-  readTelegramWorkerHeartbeat,
-  writeTelegramWorkerHeartbeat,
 } from "@nakama/core/telegram-worker";
 import { TelegramAuthStore } from "./auth-store";
 import { createBot } from "./bot";
-import { loadConfig } from "./config";
-import { SessionStore } from "./session-store";
+import { loadTelegramIdentities, type TelegramBridgeConfig } from "./config";
+
+installErrorHandlers("worker:telegram");
+
+void installErrorTrackingSink();
+
+type StartedIdentity = {
+  clearHeartbeat: () => Promise<void>;
+  stop: () => void;
+  writeHeartbeat: () => Promise<void>;
+};
 
 let spawnedChild: Bun.Subprocess | null = null;
-let botStop: (() => void) | null = null;
+
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
-registerCleanupHandlers(() => {
-  botStop?.();
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
+const started: StartedIdentity[] = [];
+
+registerCleanupHandlers(async () => {
+  await stopAll();
+
+  if (hasActiveStreams()) {
+    console.warn(
+      "Leaving the spawned Nakama server running so in-flight agent turns can finish; the next worker start will reuse it."
+    );
+  } else {
+    stopSpawnedServer(spawnedChild);
   }
-  void clearTelegramWorkerHeartbeat();
-  stopSpawnedServer(spawnedChild);
 });
 
 try {
-  const existingHeartbeat = await readTelegramWorkerHeartbeat();
+  const identities = await loadTelegramIdentities();
 
-  if (
-    existingHeartbeat &&
-    existingHeartbeat.pid !== process.pid &&
-    isHeartbeatAlive(existingHeartbeat)
-  ) {
-    console.error(
-      `Another Nakama Telegram bridge is already running (pid ${existingHeartbeat.pid}). ` +
-        "Stop the existing bridge worker or disable it in the dashboard before starting a new one.",
-    );
-    process.exit(1);
-  }
+  const { serverUrl, spawnedChild: child } = await ensureServerRunning({
+    spawn: false,
+  });
 
-  const config = await loadConfig();
-  const { serverUrl, spawnedChild: child } = await ensureServerRunning();
   spawnedChild = child;
 
-  const client = createClient({
+  const authToken =
+    (await loadLocalAuthToken("telegram@nakama.internal")) ?? undefined;
+
+  const probe = new NakamaClient({
+    authToken,
     baseUrl: serverUrl,
-    authToken: (await loadLocalAuthToken("telegram@nakama.internal")) ?? undefined,
     clientOrigin: resolveWebPublicUrl(),
   });
-  const health = await client.health();
 
-  if (!health.providerConfigured) {
-    console.warn(
-      "Server has no provider configured. Chat runs in offline mode until an API key is set.",
-    );
-  }
+  const health = await probe.health();
 
   try {
-    await client.listUserOrgs();
+    await probe.listUserOrgs();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(
       `Nakama API authentication failed: ${message}\n` +
         "Restart the server so it can provision the local client user:\n" +
-        "  bun run dev:server",
+        "  bun run dev:server"
     );
     process.exit(1);
   }
 
-  const sessionStore = new SessionStore();
-  await sessionStore.load();
+  if (!health.providerConfigured) {
+    console.warn(
+      "Server has no provider configured. Chat runs in offline mode until an API key is set."
+    );
+  }
 
-  const orgStore = new ChannelOrgStore(getChannelOrgSelectionPath("telegram"));
-  await orgStore.load();
+  const running: Promise<void>[] = [];
 
-  const authStore = new TelegramAuthStore();
-  await authStore.reload();
+  for (const config of identities) {
+    const bot = await startIdentity(config, serverUrl, authToken);
 
-  const bot = await createBot(config, {
-    client,
-    sessionStore,
-    authStore,
-    orgStore,
+    if (bot) {
+      running.push(bot.running);
+    }
+  }
+
+  if (running.length === 0) {
+    console.error(
+      "Every configured Telegram bot is already claimed by a running bridge."
+    );
+    process.exit(1);
+  }
+
+  log("info", "worker.started", {
+    count: running.length,
+    worker: "telegram",
   });
-
-  console.log("Nakama Telegram bridge running (long polling).");
   console.log(`Server: ${serverUrl}`);
-  console.log(`Profile: ${config.profileId}`);
-  const authConfig = authStore.getConfig();
-  const paired = authConfig?.pairedUserIds.length ?? 0;
-  const pendingHandshake = authConfig?.handshakeCode ? "yes" : "no";
-  console.log(`Paired users: ${paired} · Pending handshake: ${pendingHandshake}`);
 
-  botStop = () => bot.stop();
-
-  await writeTelegramWorkerHeartbeat();
   heartbeatTimer = setInterval(() => {
-    void writeTelegramWorkerHeartbeat();
+    for (const identity of started) {
+      void identity.writeHeartbeat();
+    }
   }, 15_000);
 
-  await bot.start({
-    onStart: (info) => {
-      console.log(`Bot @${info.username} is listening.`);
-    },
-  });
+  await Promise.all(running);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
+  // Await before exit: void + process.exit can leave a stale heartbeat file.
+  await stopAll();
+  stopSpawnedServer(spawnedChild);
   process.exit(1);
 } finally {
   stopSpawnedServer(spawnedChild);
 }
 
-function registerCleanupHandlers(cleanup: () => void): void {
+/**
+ * Starts one bot for one config scope, or returns null when another process
+ * already holds that identity. Telegram drops updates for whichever poller is
+ * not last, so a second claim has to be refused rather than raced.
+ */
+async function startIdentity(
+  config: TelegramBridgeConfig,
+  serverUrl: string,
+  authToken: string | undefined
+): Promise<{ running: Promise<void> } | null> {
+  const label = config.orgId ? `org ${config.orgId}` : "install-wide config";
+
+  const heartbeat = createTelegramWorkerHeartbeat(
+    config.owner ?? config.orgId ?? null
+  );
+
+  const existing = await heartbeat.read();
+
+  if (existing && existing.pid !== process.pid && isHeartbeatAlive(existing)) {
+    console.error(
+      `Another Nakama Telegram bridge already runs the ${label} bot (pid ${existing.pid}). Skipping it.`
+    );
+
+    return null;
+  }
+
+  await heartbeat.acquire();
+  const configDir = getTelegramConfigDir(config.owner ?? config.orgId ?? null);
+
+  const client = new NakamaClient({
+    authToken,
+    baseUrl: serverUrl,
+    clientOrigin: resolveWebPublicUrl(),
+    orgId: config.orgId,
+  });
+
+  const sessionStore = new ChannelSessionStore(
+    join(configDir, "chat-sessions.json")
+  );
+
+  await sessionStore.load();
+
+  const orgStore = new ChannelOrgStore(join(configDir, "org-selection.json"));
+  await orgStore.load();
+
+  const authStore = new TelegramAuthStore(config.owner ?? config.orgId ?? null);
+  await authStore.reload();
+
+  const bot = await createBot(config, {
+    authStore,
+    client,
+    orgStore,
+    sessionStore,
+  });
+
+  const writeHeartbeat = () =>
+    heartbeat.write({ pid: process.pid, updatedAt: new Date().toISOString() });
+
+  started.push({
+    clearHeartbeat: heartbeat.clear,
+    stop: () => bot.stop(),
+    writeHeartbeat,
+  });
+
+  await writeHeartbeat();
+
+  const authConfig = authStore.getConfig();
+  console.log(
+    `${label}: profile ${config.profileId} · paired ${authConfig?.pairedUserIds.length ?? 0} · pending handshake ${authConfig?.handshakeCode ? "yes" : "no"}`
+  );
+
+  return {
+    running: bot.start({
+      onStart: (info) => {
+        console.log(`Bot @${info.username} is listening for ${label}.`);
+      },
+    }),
+  };
+}
+
+async function stopAll(): Promise<void> {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+
+  await Promise.all(
+    started.map((identity) => {
+      identity.stop();
+
+      return identity.clearHeartbeat();
+    })
+  );
+}
+
+function registerCleanupHandlers(cleanup: () => void | Promise<void>): void {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    process.on(signal, () => {
-      cleanup();
+    process.on(signal, async () => {
+      await cleanup();
       process.exit(0);
+    });
+  }
+
+  // pm2 stops Windows workers with a "shutdown" message instead of a signal.
+  if (process.platform === "win32") {
+    process.on("message", async (message) => {
+      if (message === "shutdown") {
+        await cleanup();
+        process.exit(0);
+      }
     });
   }
 }

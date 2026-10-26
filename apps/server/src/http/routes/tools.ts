@@ -1,214 +1,656 @@
 import { createRoute, z } from "@hono/zod-openapi";
-import type {
-  AssignToolRequest,
-  CreateToolRequest,
-  ListToolsResponse,
-  ProfileResponse,
-  RunToolRequest,
-  RunToolResponse,
-  SuggestToolParamsRequest,
-  SuggestToolParamsResponse,
-  ToolResponse,
-  ToolSourceResponse,
-} from "@nakama/core";
-import { json, readJson } from "../shared";
 import {
+  formatServerError,
+  type ListToolsResponse,
+  NakamaApiError,
+  type ProfileResponse,
+  type RunToolResponse,
+  type SuggestToolParamsResponse,
+  type ToolResponse,
+  type ToolSourceResponse,
+} from "@nakama/core";
+import {
+  approveToolSetup,
+  getToolApiKeyStatus,
+  loadToolEnv,
+  loadToolSetup,
+  manageToolApiKey,
+  readToolEnvDeclarations,
+  rejectToolSetup,
+  saveToolApiKey,
+  saveToolEnv,
+} from "../../services/custom-tool-shared";
+import { omitUnavailableToolDetails } from "../../services/tool-resolver";
+import type { ServerOptions } from "../context";
+import {
+  requireActiveOrgIdFromContext,
   requireOrgAdminOrPlatformAdminFromContext,
   requirePlatformAdminFromContext,
-  requireActiveOrgIdFromContext,
+  requireProfileManageFromContext,
 } from "../org-guards";
+import { json, readJson } from "../shared";
 import type { HonoApp } from "../types";
-import type { ServerOptions } from "../context";
 
 export function registerToolRoutes(app: HonoApp, options: ServerOptions): void {
   const { agent } = options;
-  const errorSchema = z.object({ error: z.string() }).openapi("ApiErrorResponse");
+
+  const setupInputSchema = z
+    .object({
+      profileId: z.string().trim().min(1).max(256).optional(),
+      apiKey: z
+        .string()
+        .trim()
+        .min(1)
+        .max(8192)
+        .regex(/^[^\r\n\0]+$/)
+        .optional(),
+    })
+    .strict();
+
+  const setupParams = z.object({ setupId: z.string().uuid() });
+
+  for (const method of ["get", "post", "delete"] as const) {
+    app.openAPIRegistry.registerPath(
+      createRoute({
+        method,
+        path: "/v1/tool-setups/{setupId}",
+        request: {
+          params: setupParams,
+          body:
+            method === "post"
+              ? {
+                  required: true,
+                  content: {
+                    "application/json": { schema: setupInputSchema },
+                  },
+                }
+              : undefined,
+        },
+        responses: {
+          200: {
+            description:
+              "Tool setup plan and status; never includes credentials",
+            content: {
+              "application/json": { schema: z.object({}).passthrough() },
+            },
+          },
+        },
+        tags: ["Tools"],
+      })
+    );
+  }
+
+  app.get("/v1/tool-setups/:setupId", async (c) => {
+    requireOrgAdminOrPlatformAdminFromContext(c);
+
+    return json(
+      await loadToolSetup(
+        requireActiveOrgIdFromContext(c),
+        c.req.param("setupId")
+      )
+    );
+  });
+  app.post("/v1/tool-setups/:setupId", async (c) => {
+    requireOrgAdminOrPlatformAdminFromContext(c);
+    const orgId = requireActiveOrgIdFromContext(c);
+
+    const body = setupInputSchema.safeParse(
+      await readJson(c.req.raw, z.unknown())
+    );
+
+    if (!body.success) {
+      return json({ error: "Invalid setup input" }, 400);
+    }
+
+    // Validate the target within this organization before saving any credential.
+    if (body.data.profileId) {
+      await agent.getProfile(orgId, body.data.profileId);
+    }
+
+    return json(
+      await approveToolSetup(orgId, c.req.param("setupId"), body.data)
+    );
+  });
+  app.delete("/v1/tool-setups/:setupId", async (c) => {
+    requireOrgAdminOrPlatformAdminFromContext(c);
+
+    return json(
+      await rejectToolSetup(
+        requireActiveOrgIdFromContext(c),
+        c.req.param("setupId")
+      )
+    );
+  });
+
+  const errorSchema = z
+    .object({ error: z.string() })
+    .openapi("ApiErrorResponse");
+
   const toolIdParam = z.object({
-    toolId: z.string().openapi({ param: { name: "toolId", in: "path" } }),
+    toolId: z.string().openapi({ param: { in: "path", name: "toolId" } }),
   });
+
   const profileIdParam = z.object({
-    profileId: z.string().openapi({ param: { name: "profileId", in: "path" } }),
+    profileId: z.string().openapi({ param: { in: "path", name: "profileId" } }),
   });
+
   const profileToolParams = z.object({
-    profileId: z.string().openapi({ param: { name: "profileId", in: "path" } }),
-    toolId: z.string().openapi({ param: { name: "toolId", in: "path" } }),
+    profileId: z.string().openapi({ param: { in: "path", name: "profileId" } }),
+    toolId: z.string().openapi({ param: { in: "path", name: "toolId" } }),
   });
-  const listToolsSchema = z.object({}).passthrough().openapi("ListToolsResponse");
-  const toolSchema = z.object({}).passthrough().openapi("ToolResponse");
-  const createToolSchema = z.object({}).passthrough().openapi("CreateToolRequest");
-  const createToolResponseSchema = z.object({}).passthrough().openapi("CreateToolResponse");
-  const toolSourceSchema = z.object({}).passthrough().openapi("ToolSourceResponse");
-  const assignToolSchema = z.object({}).passthrough().openapi("AssignToolRequest");
+
+  const toolDetailSchema = z
+    .object({
+      publicationId: z.string().optional(),
+      scope: z.literal("parent").optional(),
+      sourceOrganization: z
+        .object({ id: z.string(), name: z.string() })
+        .optional(),
+    })
+    .passthrough();
+
+  const listToolsSchema = z
+    .object({ tools: z.array(toolDetailSchema) })
+    .passthrough()
+    .openapi("ListToolsResponse");
+
+  const toolSchema = z
+    .object({ tool: toolDetailSchema })
+    .passthrough()
+    .openapi("ToolResponse");
+
+  const createToolSchema = z
+    .object({
+      description: z.string(),
+      handlerConfig: z.unknown().optional(),
+      handlerType: z.string().optional(),
+      name: z.string(),
+    })
+    .passthrough()
+    .openapi("CreateToolRequest");
+
+  const createToolResponseSchema = z
+    .object({})
+    .passthrough()
+    .openapi("CreateToolResponse");
+
+  const toolSourceSchema = z
+    .object({})
+    .passthrough()
+    .openapi("ToolSourceResponse");
+
+  const assignToolSchema = z
+    .object({ toolId: z.string() })
+    .passthrough()
+    .openapi("AssignToolRequest");
+
   const profileSchema = z.object({}).passthrough().openapi("ProfileResponse");
-  const runToolSchema = z.object({}).passthrough().openapi("RunToolRequest");
-  const runToolResponseSchema = z.object({}).passthrough().openapi("RunToolResponse");
-  const suggestToolParamsSchema = z.object({}).passthrough().openapi("SuggestToolParamsRequest");
+
+  const runToolSchema = z
+    .object({ parameters: z.record(z.string(), z.unknown()) })
+    .openapi("RunToolRequest");
+
+  const runToolResponseSchema = z
+    .object({})
+    .passthrough()
+    .openapi("RunToolResponse");
+
+  const suggestToolParamsSchema = z
+    .object({ prompt: z.string() })
+    .passthrough()
+    .openapi("SuggestToolParamsRequest");
+
   const suggestToolParamsResponseSchema = z
     .object({})
     .passthrough()
     .openapi("SuggestToolParamsResponse");
 
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/tools",
-    tags: ["Tools"],
-    summary: "List all tools",
-    operationId: "listTools",
-    responses: { 200: { description: "Tool list", content: { "application/json": { schema: listToolsSchema } } } },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/tools",
-    tags: ["Tools"],
-    summary: "Register a tool",
-    operationId: "createTool",
-    request: { body: { required: true, content: { "application/json": { schema: createToolSchema } } } },
-    responses: {
-      201: { description: "Tool created", content: { "application/json": { schema: createToolResponseSchema } } },
-      500: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-    },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/tools/{toolId}/source",
-    tags: ["Tools"],
-    summary: "Get tool source code",
-    operationId: "getToolSource",
-    request: { params: toolIdParam },
-    responses: {
-      200: { description: "Tool source", content: { "application/json": { schema: toolSourceSchema } } },
-      404: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-      500: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-    },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/tools/{toolId}",
-    tags: ["Tools"],
-    summary: "Get a tool",
-    operationId: "getTool",
-    request: { params: toolIdParam },
-    responses: {
-      200: { description: "Tool detail", content: { "application/json": { schema: toolSchema } } },
-      404: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-      500: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-    },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "delete",
-    path: "/v1/tools/{toolId}",
-    tags: ["Tools"],
-    summary: "Delete a registered tool",
-    operationId: "deleteTool",
-    request: { params: toolIdParam },
-    responses: {
-      204: { description: "Tool deleted" },
-      500: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-    },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/tools/{toolId}/run",
-    tags: ["Tools"],
-    summary: "Run a custom JavaScript tool in the playground",
-    operationId: "runTool",
-    request: {
-      params: toolIdParam,
-      body: { required: true, content: { "application/json": { schema: runToolSchema } } },
-    },
-    responses: {
-      200: {
-        description: "Tool run result",
-        content: { "application/json": { schema: runToolResponseSchema } },
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "listTools",
+      path: "/v1/tools",
+      responses: {
+        200: {
+          content: { "application/json": { schema: listToolsSchema } },
+          description: "Tool list",
+        },
       },
-      400: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-      403: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-    },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/tools/{toolId}/params/suggest",
-    tags: ["Tools"],
-    summary: "Suggest playground parameters for a tool",
-    operationId: "suggestToolParams",
-    request: {
-      params: toolIdParam,
-      body: {
-        required: true,
-        content: { "application/json": { schema: suggestToolParamsSchema } },
+      summary: "List all tools",
+      tags: ["Tools"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "createTool",
+      path: "/v1/tools",
+      request: {
+        body: {
+          content: { "application/json": { schema: createToolSchema } },
+          required: true,
+        },
       },
-    },
-    responses: {
-      200: {
-        description: "Suggested parameters",
-        content: { "application/json": { schema: suggestToolParamsResponseSchema } },
+      responses: {
+        201: {
+          content: { "application/json": { schema: createToolResponseSchema } },
+          description: "Tool created",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
       },
-      400: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-      403: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-    },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "get",
-    path: "/v1/profiles/{profileId}/tools",
-    tags: ["Profiles", "Tools"],
-    summary: "List tools assigned to a profile",
-    operationId: "listProfileTools",
-    request: { params: profileIdParam },
-    responses: {
-      200: { description: "Tool list", content: { "application/json": { schema: listToolsSchema } } },
-      500: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-    },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "post",
-    path: "/v1/profiles/{profileId}/tools",
-    tags: ["Profiles", "Tools"],
-    summary: "Assign a tool to a profile",
-    operationId: "assignToolToProfile",
-    request: { params: profileIdParam, body: { required: true, content: { "application/json": { schema: assignToolSchema } } } },
-    responses: {
-      200: { description: "Tool assigned", content: { "application/json": { schema: profileSchema } } },
-      500: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-    },
-  }));
-  app.openAPIRegistry.registerPath(createRoute({
-    method: "delete",
-    path: "/v1/profiles/{profileId}/tools/{toolId}",
-    tags: ["Profiles", "Tools"],
-    summary: "Unassign a tool from a profile",
-    operationId: "unassignToolFromProfile",
-    request: { params: profileToolParams },
-    responses: {
-      200: { description: "Tool unassigned", content: { "application/json": { schema: profileSchema } } },
-      500: { description: "Error", content: { "application/json": { schema: errorSchema } } },
-    },
-  }));
+      summary: "Register a tool",
+      tags: ["Tools"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getToolSource",
+      path: "/v1/tools/{toolId}/source",
+      request: { params: toolIdParam },
+      responses: {
+        200: {
+          content: { "application/json": { schema: toolSourceSchema } },
+          description: "Tool source",
+        },
+        404: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Get tool source code",
+      tags: ["Tools"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "getTool",
+      path: "/v1/tools/{toolId}",
+      request: { params: toolIdParam },
+      responses: {
+        200: {
+          content: { "application/json": { schema: toolSchema } },
+          description: "Tool detail",
+        },
+        404: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Get a tool",
+      tags: ["Tools"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "delete",
+      operationId: "deleteTool",
+      path: "/v1/tools/{toolId}",
+      request: { params: toolIdParam },
+      responses: {
+        204: { description: "Tool deleted" },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Delete a registered tool",
+      tags: ["Tools"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "runTool",
+      path: "/v1/tools/{toolId}/run",
+      request: {
+        body: {
+          content: { "application/json": { schema: runToolSchema } },
+          required: true,
+        },
+        params: toolIdParam,
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: runToolResponseSchema } },
+          description: "Tool run result",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+        403: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Run a custom JavaScript or Python tool in the playground",
+      tags: ["Tools"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "suggestToolParams",
+      path: "/v1/tools/{toolId}/params/suggest",
+      request: {
+        body: {
+          content: { "application/json": { schema: suggestToolParamsSchema } },
+          required: true,
+        },
+        params: toolIdParam,
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: suggestToolParamsResponseSchema },
+          },
+          description: "Suggested parameters",
+        },
+        400: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+        403: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Suggest playground parameters for a tool",
+      tags: ["Tools"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "get",
+      operationId: "listProfileTools",
+      path: "/v1/profiles/{profileId}/tools",
+      request: { params: profileIdParam },
+      responses: {
+        200: {
+          content: { "application/json": { schema: listToolsSchema } },
+          description: "Tool list",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "List tools assigned to a profile",
+      tags: ["Profiles", "Tools"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "post",
+      operationId: "assignToolToProfile",
+      path: "/v1/profiles/{profileId}/tools",
+      request: {
+        body: {
+          content: { "application/json": { schema: assignToolSchema } },
+          required: true,
+        },
+        params: profileIdParam,
+      },
+      responses: {
+        200: {
+          content: { "application/json": { schema: profileSchema } },
+          description: "Tool assigned",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Assign a tool to a profile",
+      tags: ["Profiles", "Tools"],
+    })
+  );
+  app.openAPIRegistry.registerPath(
+    createRoute({
+      method: "delete",
+      operationId: "unassignToolFromProfile",
+      path: "/v1/profiles/{profileId}/tools/{toolId}",
+      request: { params: profileToolParams },
+      responses: {
+        200: {
+          content: { "application/json": { schema: profileSchema } },
+          description: "Tool unassigned",
+        },
+        500: {
+          content: { "application/json": { schema: errorSchema } },
+          description: "Error",
+        },
+      },
+      summary: "Unassign a tool from a profile",
+      tags: ["Profiles", "Tools"],
+    })
+  );
 
-  app.get("/v1/tools", async () => {
-    return json<ListToolsResponse>(await agent.listTools());
+  app.get("/v1/tools", async (c) => {
+    const orgId = requireActiveOrgIdFromContext(c);
+    // Unavailable Meet capture must not hide unrelated tools.
+    await options.googleMeetService
+      ?.ensureOrganization(orgId)
+      .catch(() => undefined);
+
+    return json<ListToolsResponse>(
+      await omitUnavailableToolDetails(await agent.listTools(orgId))
+    );
   });
 
   app.post("/v1/tools", async (c) => {
     requirePlatformAdminFromContext(c);
-    const body = await readJson<CreateToolRequest>(c.req.raw);
-    return json(await agent.createTool(body), 201);
+    const body = await readJson(c.req.raw, createToolSchema);
+
+    return json(
+      await agent.createTool(body, requireActiveOrgIdFromContext(c)),
+      201
+    );
   });
+
+  const credentialStatusSchema = z.object({
+    configured: z.boolean(),
+    envName: z.string(),
+    savedAvailable: z.boolean(),
+    source: z.enum(["environment", "settings", "missing"]),
+    env: z
+      .array(
+        z.object({
+          configured: z.boolean(),
+          name: z.string(),
+          secret: z.boolean(),
+          value: z.string().optional(),
+        })
+      )
+      .optional(),
+  });
+
+  const credentialInputSchema = z.union([
+    z.object({ apiKey: z.string().min(1).max(8192) }).strict(),
+    z.object({ env: z.record(z.string(), z.string().max(8192)) }).strict(),
+  ]);
+
+  for (const method of ["get", "put"] as const) {
+    app.openAPIRegistry.registerPath(
+      createRoute({
+        method,
+        operationId:
+          method === "get" ? "getToolCredentialStatus" : "saveToolCredential",
+        path: "/v1/tools/{toolId}/credentials",
+        request: {
+          params: toolIdParam,
+          body:
+            method === "put"
+              ? {
+                  required: true,
+                  content: {
+                    "application/json": { schema: credentialInputSchema },
+                  },
+                }
+              : undefined,
+        },
+        responses: {
+          200: {
+            description: "Credential status (never returns the key)",
+            content: { "application/json": { schema: credentialStatusSchema } },
+          },
+        },
+        tags: ["Tools"],
+      })
+    );
+  }
+
+  for (const [method, suffix, operationId] of [
+    ["delete", "", "clearToolCredential"],
+    ["post", "/use-stored", "useStoredToolCredential"],
+  ] as const) {
+    app.openAPIRegistry.registerPath(
+      createRoute({
+        method,
+        operationId,
+        path: `/v1/tools/{toolId}/credentials${suffix}`,
+        request: { params: toolIdParam },
+        responses: {
+          200: {
+            content: { "application/json": { schema: credentialStatusSchema } },
+            description: "Credential status",
+          },
+        },
+        tags: ["Tools"],
+      })
+    );
+  }
+
+  async function requireCredentialTool(orgId: string, toolId: string) {
+    const { tools } = await agent.listTools(orgId);
+    const tool = tools.find((entry) => entry.id === toolId);
+
+    if (!tool) {
+      throw new NakamaApiError("Tool not found.", 404);
+    }
+
+    if (!(tool.handlerType === "javascript" || tool.handlerType === "python")) {
+      throw new NakamaApiError(
+        "Only custom JavaScript or Python tools take an API key.",
+        400
+      );
+    }
+
+    return readToolEnvDeclarations(tool.handlerConfig);
+  }
+
+  async function credentialStatus(orgId: string, toolId: string) {
+    const declared = await requireCredentialTool(orgId, toolId);
+    const status = await getToolApiKeyStatus(orgId, toolId);
+
+    if (declared.length === 0) {
+      return status;
+    }
+
+    const saved = await loadToolEnv(orgId, toolId);
+
+    return {
+      ...status,
+      // Secret values never leave the server; plain values such as a base
+      // URL come back so an admin can see and edit them.
+      env: declared.map((entry) => ({
+        configured: Boolean(saved[entry.name]),
+        name: entry.name,
+        secret: entry.secret,
+        value: entry.secret ? undefined : saved[entry.name] || undefined,
+      })),
+    };
+  }
+
+  app.get("/v1/tools/:toolId/credentials", async (c) => {
+    requireOrgAdminOrPlatformAdminFromContext(c);
+    const orgId = requireActiveOrgIdFromContext(c);
+    const toolId = c.req.param("toolId");
+
+    return json(await credentialStatus(orgId, toolId));
+  });
+
+  app.put("/v1/tools/:toolId/credentials", async (c) => {
+    requireOrgAdminOrPlatformAdminFromContext(c);
+    const orgId = requireActiveOrgIdFromContext(c);
+    const toolId = c.req.param("toolId");
+    const declared = await requireCredentialTool(orgId, toolId);
+
+    const body = credentialInputSchema.safeParse(
+      await readJson(c.req.raw, z.unknown())
+    );
+
+    if (!body.success) {
+      throw new NakamaApiError("Enter a valid value.", 400);
+    }
+
+    if ("env" in body.data) {
+      await saveToolEnv(orgId, toolId, declared, body.data.env);
+    } else {
+      await saveToolApiKey(orgId, toolId, body.data.apiKey);
+    }
+
+    return json(await credentialStatus(orgId, toolId));
+  });
+
+  for (const [method, suffix, action] of [
+    ["delete", "", "clear"],
+    ["post", "/use-stored", "use-stored"],
+  ] as const) {
+    app[method](`/v1/tools/:toolId/credentials${suffix}`, async (c) => {
+      requireOrgAdminOrPlatformAdminFromContext(c);
+      const orgId = requireActiveOrgIdFromContext(c);
+      const toolId = c.req.param("toolId");
+      await requireCredentialTool(orgId, toolId);
+
+      return json(await manageToolApiKey(orgId, toolId, action));
+    });
+  }
 
   app.get("/v1/tools/:toolId/source", async (c) => {
     requireOrgAdminOrPlatformAdminFromContext(c);
+    const toolId = decodeURIComponent(c.req.param("toolId"));
+
     return json<ToolSourceResponse>(
-      await agent.getToolSource(decodeURIComponent(c.req.param("toolId"))),
+      await agent.getToolSource(toolId, requireActiveOrgIdFromContext(c))
     );
   });
 
   app.get("/v1/tools/:toolId", async (c) => {
     requireOrgAdminOrPlatformAdminFromContext(c);
-    return json<ToolResponse>(await agent.getTool(decodeURIComponent(c.req.param("toolId"))));
+
+    return json<ToolResponse>(
+      await agent.getTool(
+        decodeURIComponent(c.req.param("toolId")),
+        requireActiveOrgIdFromContext(c)
+      )
+    );
   });
 
   app.delete("/v1/tools/:toolId", async (c) => {
     requirePlatformAdminFromContext(c);
-    await agent.deleteTool(decodeURIComponent(c.req.param("toolId")));
+    const toolId = decodeURIComponent(c.req.param("toolId"));
+    const existing = await agent.getTool(toolId);
+
+    if (existing.tool.pluginId) {
+      throw new NakamaApiError("Plugin-owned tools cannot be deleted.", 409);
+    }
+
+    await agent.deleteTool(toolId);
+
     return new Response(null, { status: 204 });
   });
 
@@ -216,64 +658,96 @@ export function registerToolRoutes(app: HonoApp, options: ServerOptions): void {
     const auth = requireOrgAdminOrPlatformAdminFromContext(c);
     const orgId = requireActiveOrgIdFromContext(c);
     const toolId = decodeURIComponent(c.req.param("toolId"));
-    const body = await readJson<RunToolRequest>(c.req.raw);
+    const body = await readJson(c.req.raw, runToolSchema);
 
     try {
       return json<RunToolResponse>(
         await agent.runToolPlayground(toolId, body.parameters ?? {}, {
           orgId,
           userId: auth.user.id,
-        }),
+        })
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const status = message.includes("not found") ? 404 : 400;
-      return json({ error: message }, status);
+      const status = error instanceof NakamaApiError ? error.status : 400;
+
+      return json({ error: formatServerError(error) }, status);
     }
   });
 
   app.post("/v1/tools/:toolId/params/suggest", async (c) => {
     requireOrgAdminOrPlatformAdminFromContext(c);
+    const orgId = requireActiveOrgIdFromContext(c);
     const toolId = decodeURIComponent(c.req.param("toolId"));
-    const body = await readJson<SuggestToolParamsRequest>(c.req.raw);
+    const body = await readJson(c.req.raw, suggestToolParamsSchema);
 
     try {
       return json<SuggestToolParamsResponse>(
-        await agent.suggestToolPlaygroundParams(toolId, body.prompt ?? ""),
+        await agent.suggestToolPlaygroundParams(
+          toolId,
+          body.prompt ?? "",
+          orgId
+        )
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const status = message.includes("not found") ? 404 : 400;
-      return json({ error: message }, status);
+      const status = error instanceof NakamaApiError ? error.status : 400;
+
+      return json({ error: formatServerError(error) }, status);
     }
   });
 
   app.get("/v1/profiles/:profileId/tools", async (c) => {
-    requirePlatformAdminFromContext(c);
+    await requireProfileManageFromContext(c, agent, { allowOrgAdmin: true });
     const orgId = requireActiveOrgIdFromContext(c);
+
     return json<ListToolsResponse>(
-      await agent.listProfileTools(orgId, decodeURIComponent(c.req.param("profileId"))),
+      await agent.listProfileTools(
+        orgId,
+        decodeURIComponent(c.req.param("profileId"))
+      )
     );
   });
 
   app.post("/v1/profiles/:profileId/tools", async (c) => {
-    requirePlatformAdminFromContext(c);
+    const auth = await requireProfileManageFromContext(c, agent, {
+      allowOrgAdmin: true,
+    });
+
     const orgId = requireActiveOrgIdFromContext(c);
-    const body = await readJson<AssignToolRequest>(c.req.raw);
+    const body = await readJson(c.req.raw, assignToolSchema);
+
+    // Members may not hand their agent a host shell.
+    if (auth.orgRole !== "admin" && !auth.isPlatformAdmin) {
+      const tool = await options.databaseAdapter?.getTool(body.toolId);
+
+      if (tool?.handlerType === "bash") {
+        throw new NakamaApiError("Forbidden", 403);
+      }
+    }
+
     return json<ProfileResponse>(
-      await agent.assignTool(orgId, decodeURIComponent(c.req.param("profileId")), body),
+      await agent.assignTool(
+        orgId,
+        decodeURIComponent(c.req.param("profileId")),
+        body,
+        { actorUserId: auth.user.id, source: "dashboard" }
+      )
     );
   });
 
   app.delete("/v1/profiles/:profileId/tools/:toolId", async (c) => {
-    requirePlatformAdminFromContext(c);
+    const auth = await requireProfileManageFromContext(c, agent, {
+      allowOrgAdmin: true,
+    });
+
     const orgId = requireActiveOrgIdFromContext(c);
+
     return json<ProfileResponse>(
       await agent.unassignTool(
         orgId,
         decodeURIComponent(c.req.param("profileId")),
         decodeURIComponent(c.req.param("toolId")),
-      ),
+        { actorUserId: auth.user.id, source: "dashboard" }
+      )
     );
   });
 }

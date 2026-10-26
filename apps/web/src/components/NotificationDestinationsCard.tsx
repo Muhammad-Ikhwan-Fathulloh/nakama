@@ -1,23 +1,75 @@
-import { useState } from "react";
-import type { NotificationDestinationWithSecret } from "@nakama/core/contract";
-import { CheckIcon, CopyIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
+import type {
+  CreateNotificationDestinationRequest,
+  NotificationDestinationChannel,
+  NotificationDestinationSummary,
+  NotificationDestinationWithSecret,
+} from "@nakama/core/contract";
+import { normalizeCreateNotificationDestinationRequest } from "@nakama/core/notification-destinations";
+import { Button } from "@nakama/ui/button";
+import { ConfirmDialog } from "@nakama/ui/dialog";
+import { Input } from "@nakama/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@nakama/ui/select";
+import { Spinner } from "@nakama/ui/spinner";
+import { cn } from "@nakama/ui/utils";
+import {
+  CheckmarkCircle01Icon,
+  Copy01Icon,
+  Delete02Icon,
+  RefreshIcon,
+  ViewIcon,
+  ViewOffIcon,
+} from "hugeicons-react";
+import { useEffect, useState } from "react";
+import { useAuth } from "@/context/use-auth";
+import { useProfilesQuery } from "@/hooks/use-app-queries";
 import {
   useCreateNotificationDestination,
   useDeleteNotificationDestination,
   useNotificationDestinations,
+  useNotificationWhatsAppSettings,
   useRegenerateNotificationDestinationKey,
   useUpdateNotificationDestination,
 } from "@/hooks/use-notification-destinations";
 import { formatError } from "@/lib/client";
 import {
   buildNotificationWebhookUrl,
-  formatTelegramDestinationLabel,
+  formatNotificationDestinationLabel,
+  maskWebhookApiKey,
   parseTelegramTopicLink,
 } from "@/lib/notification-destinations";
+
+function CopyButtonIcon({ copied }: { copied: boolean }) {
+  const iconTransition =
+    "absolute inset-0 size-3.5 transition-[opacity,transform,filter] duration-150 ease-[cubic-bezier(0.2,0,0,1)]";
+
+  return (
+    <span aria-hidden className="relative size-3.5 shrink-0">
+      <Copy01Icon
+        className={cn(
+          iconTransition,
+          copied
+            ? "scale-[0.25] opacity-0 blur-[4px]"
+            : "scale-100 opacity-100 blur-0"
+        )}
+      />
+      <CheckmarkCircle01Icon
+        className={cn(
+          iconTransition,
+          "text-emerald-600 dark:text-emerald-400",
+          copied
+            ? "scale-100 opacity-100 blur-0"
+            : "scale-[0.25] opacity-0 blur-[4px]"
+        )}
+      />
+    </span>
+  );
+}
 
 function LatestSecret({
   latestSecret,
@@ -26,18 +78,26 @@ function LatestSecret({
 }) {
   const [copiedCurl, setCopiedCurl] = useState(false);
   const [copiedApiKey, setCopiedApiKey] = useState(false);
+  const [revealed, setRevealed] = useState(false);
 
   if (!latestSecret) {
     return null;
   }
 
   const apiKey = latestSecret.apiKey;
+  const displayApiKey = revealed ? apiKey : maskWebhookApiKey(apiKey);
   const origin = typeof window === "undefined" ? "" : window.location.origin;
-  const webhookUrl = buildNotificationWebhookUrl(origin, latestSecret.destination.webhookPath);
+
+  const webhookUrl = buildNotificationWebhookUrl(
+    origin,
+    latestSecret.destination.webhookPath
+  );
+
   const curlExample = [
     `curl -X POST '${webhookUrl}' \\`,
     `  -H 'Content-Type: application/json' \\`,
     `  -H 'X-API-Key: ${apiKey}' \\`,
+    `  -H "Idempotency-Key: evt_$(date +%s)_$$" \\`,
     `  -d '{`,
     `    "title": "New notification",`,
     `    "body": "Hello from Nakama",`,
@@ -69,40 +129,70 @@ function LatestSecret({
     <div className="rounded-lg border border-border bg-muted/30 p-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-foreground">Latest webhook credentials ready</p>
-          <p className="text-xs text-muted-foreground">
-            Copy the curl command, or expand details if you need the raw URL and API key.
+          <p className="font-medium text-foreground text-sm">
+            Latest webhook credentials ready
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" size="sm" variant="outline" onClick={() => void copyCurlExample()}>
-            {copiedCurl ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
+          <Button
+            aria-label={revealed ? "Hide API key" : "Reveal API key"}
+            className="min-w-[6.75rem] justify-center"
+            onClick={() => setRevealed((current) => !current)}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            {revealed ? (
+              <ViewOffIcon className="size-3.5" />
+            ) : (
+              <ViewIcon className="size-3.5" />
+            )}
+            {revealed ? "Hide" : "Reveal"}
+          </Button>
+          <Button
+            className="min-w-[6.75rem] justify-center"
+            onClick={() => void copyCurlExample()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <CopyButtonIcon copied={copiedCurl} />
             {copiedCurl ? "Copied" : "Copy curl"}
           </Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => void copyApiKey()}>
-            {copiedApiKey ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
+          <Button
+            className="min-w-[7.5rem] justify-center"
+            onClick={() => void copyApiKey()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <CopyButtonIcon copied={copiedApiKey} />
             {copiedApiKey ? "Copied key" : "Copy API key"}
           </Button>
         </div>
       </div>
 
-      <details className="mt-3 group">
-        <summary className="cursor-pointer text-xs text-muted-foreground transition-colors hover:text-foreground">
+      <details className="group mt-3">
+        <summary className="cursor-pointer rounded-md px-1 py-1.5 text-muted-foreground text-xs transition-colors hover:text-foreground">
           Show webhook details
         </summary>
         <div className="mt-3 space-y-3">
           <div>
-            <p className="text-xs text-muted-foreground">Webhook URL</p>
-            <code className="block break-all text-xs text-foreground">{webhookUrl}</code>
+            <p className="text-muted-foreground text-xs">Webhook URL</p>
+            <code className="block break-all text-foreground text-xs">
+              {webhookUrl}
+            </code>
           </div>
           <div>
-            <p className="text-xs text-muted-foreground">API key</p>
-            <code className="block break-all text-xs text-foreground">{apiKey}</code>
+            <p className="text-muted-foreground text-xs">API key</p>
+            <code className="block break-all text-foreground text-xs">
+              {displayApiKey}
+            </code>
           </div>
           <div>
-            <p className="text-xs text-muted-foreground">Example curl</p>
-            <pre className="mt-1 overflow-x-auto rounded-md border border-border bg-background p-3 text-xs text-foreground">
-              <code>{curlExample}</code>
+            <p className="text-muted-foreground text-xs">Example curl</p>
+            <pre className="mt-1 overflow-x-auto rounded-md border border-border bg-background p-3 text-foreground text-xs">
+              <code>{curlExample.replace(apiKey, displayApiKey)}</code>
             </pre>
           </div>
         </div>
@@ -111,287 +201,602 @@ function LatestSecret({
   );
 }
 
+const CHANNEL_LABELS: Record<NotificationDestinationChannel, string> = {
+  discord: "Discord",
+  telegram: "Telegram",
+  whatsapp: "WhatsApp",
+};
+
+const CHANNELS: NotificationDestinationChannel[] = [
+  "discord",
+  "telegram",
+  "whatsapp",
+];
+
+function AgentSelect({
+  profiles,
+  value,
+  onChange,
+}: {
+  profiles: Array<{ id: string; name: string }>;
+  value: string;
+  onChange: (profileId: string) => void;
+}) {
+  const selected = profiles.find((profile) => profile.id === value);
+
+  return (
+    <Select onValueChange={(next) => onChange(next ?? "")} value={value}>
+      <SelectTrigger className="w-full">
+        <SelectValue>{selected?.name ?? "Choose an agent"}</SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {profiles.map((profile) => (
+          <SelectItem key={profile.id} value={profile.id}>
+            {profile.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function isWhatsAppRecipientReady(
+  settings: ReturnType<typeof useNotificationWhatsAppSettings>
+): boolean {
+  return !!settings.data?.pairedJid && !settings.isLoading && !settings.error;
+}
+
+function isDestinationRequestValid<Value>(value: Value) {
+  try {
+    normalizeCreateNotificationDestinationRequest(value);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function NotificationDestinationsCard() {
-  const { data, isLoading, error } = useNotificationDestinations();
-  const createMutation = useCreateNotificationDestination();
-  const rotateMutation = useRegenerateNotificationDestinationKey();
-  const deleteMutation = useDeleteNotificationDestination();
-  const updateMutation = useUpdateNotificationDestination();
+  const { activeOrg } = useAuth();
+  const orgId = activeOrg?.id ?? "";
+
+  return <NotificationDestinationsCardForOrg key={orgId} orgId={orgId} />;
+}
+
+function NotificationDestinationsCardForOrg({ orgId }: { orgId: string }) {
+  const { data: profiles = [] } = useProfilesQuery();
+  const [profileId, setProfileId] = useState("");
+
+  const [channel, setChannel] =
+    useState<NotificationDestinationChannel>("telegram");
+
+  const [target, setTarget] = useState("");
+
+  const whatsapp = useNotificationWhatsAppSettings(
+    profileId,
+    channel === "whatsapp"
+  );
+
+  const whatsappReady = isWhatsAppRecipientReady(whatsapp);
+  const { data, isLoading, error } = useNotificationDestinations(orgId);
+  const createMutation = useCreateNotificationDestination(orgId);
+  const rotateMutation = useRegenerateNotificationDestinationKey(orgId);
+  const deleteMutation = useDeleteNotificationDestination(orgId);
+
+  const [deleteTarget, setDeleteTarget] =
+    useState<NotificationDestinationSummary | null>(null);
 
   const [name, setName] = useState("");
-  const [topicLink, setTopicLink] = useState("");
-  const [latestSecret, setLatestSecret] = useState<NotificationDestinationWithSecret | null>(
-    null,
-  );
+
+  const [latestSecret, setLatestSecret] =
+    useState<NotificationDestinationWithSecret | null>(null);
+
   const [formError, setFormError] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingTopicId, setEditingTopicId] = useState("");
-  const [editingError, setEditingError] = useState<string | null>(null);
 
   const destinations = data?.destinations ?? [];
 
+  const configs = {
+    discord: { channelId: target, profileId },
+    telegram: { ...parseTelegramTopicLink(target), profileId },
+    whatsapp: { profileId },
+  };
+
+  const defaultNames = {
+    discord: `Discord channel ${target.trim()}`,
+    telegram: `Telegram topic ${configs.telegram.topicId ?? ""}`,
+    whatsapp: "WhatsApp notifications",
+  };
+
+  const requestInput = {
+    channel,
+    name: name.trim() || defaultNames[channel],
+    [channel]: configs[channel],
+  };
+
+  useEffect(() => {
+    if (!latestSecret) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setLatestSecret(null);
+    }, 60_000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [latestSecret]);
+
   function resetForm() {
     setName("");
-    setTopicLink("");
+    setTarget("");
   }
 
   function handleCreate() {
     setFormError(null);
-    const parsedTopic = parseTelegramTopicLink(topicLink);
 
-    if (!parsedTopic) {
-      setFormError("Paste a Telegram topic link like https://t.me/c/3734526664/167.");
+    if (channel === "whatsapp" && !whatsappReady) {
+      setFormError("Pair this agent's WhatsApp connection first.");
+
       return;
     }
 
-    createMutation.mutate(
-      {
-        name: name.trim() || `Telegram topic ${parsedTopic.topicId}`,
-        channel: "telegram",
-        telegram: {
-          chatId: parsedTopic.chatId,
-          topicId: parsedTopic.topicId,
-        },
+    let request: CreateNotificationDestinationRequest;
+
+    try {
+      request = normalizeCreateNotificationDestinationRequest(requestInput);
+    } catch (error) {
+      setFormError(formatError(error));
+
+      return;
+    }
+
+    createMutation.mutate(request, {
+      onError: (mutationError) => {
+        setFormError(formatError(mutationError));
       },
-      {
-        onSuccess: (created) => {
-          setLatestSecret(created);
-          resetForm();
-        },
-        onError: (mutationError) => {
-          setFormError(formatError(mutationError));
-        },
+      onSuccess: (created) => {
+        setLatestSecret(created);
+        resetForm();
       },
-    );
+    });
   }
 
   async function handleRotate(destinationId: string) {
     setFormError(null);
 
     rotateMutation.mutate(destinationId, {
-      onSuccess: (rotated) => {
-        setLatestSecret(rotated);
-      },
       onError: (mutationError) => {
         setFormError(formatError(mutationError));
+      },
+      onSuccess: (rotated) => {
+        setLatestSecret(rotated);
       },
     });
   }
 
   async function handleDelete(destinationId: string) {
     setFormError(null);
+    await deleteMutation.mutateAsync(destinationId);
 
-    deleteMutation.mutate(destinationId, {
-      onSuccess: () => {
-        if (latestSecret?.destination.id === destinationId) {
-          setLatestSecret(null);
-        }
-      },
-      onError: (mutationError) => {
-        setFormError(formatError(mutationError));
-      },
+    if (latestSecret?.destination.id === destinationId) {
+      setLatestSecret(null);
+    }
+  }
+
+  return (
+    <div className="space-y-8">
+      <label className="flex flex-col gap-2 text-sm">
+        Agent
+        <AgentSelect
+          onChange={setProfileId}
+          profiles={profiles}
+          value={profileId}
+        />
+      </label>
+      <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+        <p className="px-4 py-3 font-medium text-foreground text-sm">
+          Notification destinations
+        </p>
+        <label className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center">
+          <span className="shrink-0 text-foreground text-sm sm:w-36">
+            Channel
+          </span>
+          <Select
+            onValueChange={(value) => {
+              const nextChannel = CHANNELS.find((channel) => channel === value);
+
+              if (!nextChannel) {
+                return;
+              }
+
+              setChannel(nextChannel);
+              setTarget("");
+              setFormError(null);
+            }}
+            value={channel}
+          >
+            <SelectTrigger className="w-full min-w-0 flex-1">
+              <SelectValue>{CHANNEL_LABELS[channel]}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="telegram">Telegram</SelectItem>
+              <SelectItem value="discord">Discord</SelectItem>
+              <SelectItem value="whatsapp">WhatsApp</SelectItem>
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center">
+          <span className="shrink-0 text-foreground text-sm sm:w-36">Name</span>
+          <Input
+            className="min-w-0 flex-1"
+            onChange={(event) => setName(event.target.value)}
+            value={name}
+          />
+        </label>
+        <div className="px-4 py-3">
+          <NotificationTargetFields
+            channel={channel}
+            onTargetChange={setTarget}
+            target={target}
+            whatsapp={whatsapp}
+          />
+        </div>
+        <div className="flex justify-end px-4 py-3">
+          <Button
+            disabled={
+              createMutation.isPending ||
+              !isDestinationRequestValid(requestInput) ||
+              (channel === "whatsapp" && !whatsappReady)
+            }
+            onClick={handleCreate}
+            size="sm"
+          >
+            {createMutation.isPending ? <Spinner className="size-4" /> : null}
+            Create destination
+          </Button>
+        </div>
+      </div>
+
+      {formError ? (
+        <p className="text-destructive text-sm">{formError}</p>
+      ) : null}
+      {error ? (
+        <p className="text-destructive text-sm">{formatError(error)}</p>
+      ) : null}
+
+      <div className="space-y-3">
+        {isLoading ? (
+          <div className="flex min-h-24 items-center justify-center text-muted-foreground text-sm">
+            <Spinner className="size-5" />
+          </div>
+        ) : null}
+        {!isLoading && destinations.length === 0 ? (
+          <div className="rounded-xl border border-border bg-card px-4 py-8 text-center text-muted-foreground text-sm">
+            No notification destinations yet.
+          </div>
+        ) : null}
+        {!isLoading &&
+          destinations.map((destination) => (
+            <NotificationDestinationItem
+              deletePending={deleteMutation.isPending}
+              destination={destination}
+              key={destination.id}
+              latestSecret={latestSecret}
+              onDelete={() => setDeleteTarget(destination)}
+              onRotate={() => handleRotate(destination.id)}
+              orgId={orgId}
+              profiles={profiles}
+              rotatePending={rotateMutation.isPending}
+            />
+          ))}
+      </div>
+      {deleteTarget ? (
+        <ConfirmDialog
+          description={`Delete "${deleteTarget.name}"? Its webhook will stop accepting notifications.`}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={() => handleDelete(deleteTarget.id)}
+          title="Delete notification destination?"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function NotificationTargetFields({
+  channel,
+  target,
+  onTargetChange,
+  topicId,
+  onTopicIdChange,
+  whatsapp,
+}: {
+  channel: NotificationDestinationChannel;
+  target: string;
+  onTargetChange: (value: string) => void;
+  topicId?: string;
+  onTopicIdChange?: (value: string) => void;
+  whatsapp: ReturnType<typeof useNotificationWhatsAppSettings>;
+}) {
+  if (channel === "whatsapp") {
+    return (
+      <div className="space-y-1 text-sm">
+        <p>
+          Recipient:{" "}
+          {whatsapp.isLoading
+            ? "Loading…"
+            : whatsapp.data?.pairedJid || "Not paired"}
+        </p>
+        <p className="text-muted-foreground text-xs">
+          Uses this agent's current paired contact. Changing the pairing changes
+          the recipient.
+        </p>
+        {whatsapp.error ? (
+          <p className="text-destructive">{formatError(whatsapp.error)}</p>
+        ) : null}
+      </div>
+    );
+  }
+
+  const isTopicLink = channel === "telegram" && topicId === undefined;
+
+  const labels = {
+    discord: "Discord channel ID",
+    telegram: isTopicLink ? "Telegram topic link" : "Telegram chat ID",
+  };
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <label className="flex flex-col gap-1.5 text-sm">
+        {labels[channel]}
+        <Input
+          onChange={(event) => onTargetChange(event.target.value)}
+          placeholder={
+            isTopicLink ? "https://t.me/c/3734526664/167" : undefined
+          }
+          value={target}
+        />
+      </label>
+      {channel === "telegram" && topicId !== undefined ? (
+        <label className="flex flex-col gap-1.5 text-sm">
+          Telegram topic ID
+          <Input
+            onChange={(event) => onTopicIdChange?.(event.target.value)}
+            placeholder="Leave blank to remove topic"
+            value={topicId}
+          />
+        </label>
+      ) : null}
+    </div>
+  );
+}
+
+function NotificationDestinationItem({
+  orgId,
+  destination,
+  profiles,
+  latestSecret,
+  rotatePending,
+  deletePending,
+  onRotate,
+  onDelete,
+}: {
+  orgId: string;
+  destination: NotificationDestinationSummary;
+  profiles: Array<{ id: string; name: string }>;
+  latestSecret: NotificationDestinationWithSecret | null;
+  rotatePending: boolean;
+  deletePending: boolean;
+  onRotate: () => void;
+  onDelete: () => void;
+}) {
+  const updateMutation = useUpdateNotificationDestination(orgId);
+
+  const [draft, setDraft] = useState<{
+    name: string;
+    profileId: string;
+    target: string;
+    topicId: string;
+  } | null>(null);
+
+  const [editingError, setEditingError] = useState<string | null>(null);
+
+  const whatsapp = useNotificationWhatsAppSettings(
+    draft?.profileId ?? "",
+    destination.channel === "whatsapp" && !!draft
+  );
+
+  const whatsappReady = isWhatsAppRecipientReady(whatsapp);
+
+  function startEditing() {
+    setEditingError(null);
+
+    const config =
+      destination.channel === "telegram"
+        ? destination.telegram
+        : destination.channel === "discord"
+          ? destination.discord
+          : destination.whatsapp;
+
+    setDraft({
+      name: destination.name,
+      profileId: config.profileId ?? "",
+      target:
+        destination.channel === "telegram"
+          ? String(destination.telegram.chatId)
+          : destination.channel === "discord"
+            ? destination.discord.channelId
+            : "",
+      topicId:
+        destination.channel === "telegram"
+          ? (destination.telegram.topicId?.toString() ?? "")
+          : "",
     });
   }
 
-  function startEditing(destination: (typeof destinations)[number]) {
-    setEditingId(destination.id);
-    setEditingTopicId(destination.telegram.topicId?.toString() ?? "");
+  const configs = {
+    discord: { channelId: draft?.target, profileId: draft?.profileId },
+    telegram: {
+      chatId: Number(draft?.target),
+      profileId: draft?.profileId,
+      topicId: draft?.topicId.trim() ? Number(draft.topicId) : null,
+    },
+    whatsapp: { profileId: draft?.profileId },
+  };
+
+  const requestInput = {
+    channel: destination.channel,
+    name: draft?.name,
+    [destination.channel]: configs[destination.channel],
+  };
+
+  function save() {
+    if (!draft) {
+      return;
+    }
+
     setEditingError(null);
-  }
+    let request: CreateNotificationDestinationRequest;
 
-  function stopEditing() {
-    setEditingId(null);
-    setEditingTopicId("");
-    setEditingError(null);
-  }
+    if (destination.channel === "whatsapp" && !whatsappReady) {
+      setEditingError("Pair this agent's WhatsApp connection first.");
 
-  function handleUpdateTopic(destination: (typeof destinations)[number]) {
-    setEditingError(null);
+      return;
+    }
 
-    const parsedTopicId = editingTopicId.trim() ? Number(editingTopicId.trim()) : null;
+    try {
+      request = normalizeCreateNotificationDestinationRequest(requestInput);
+    } catch (error) {
+      setEditingError(formatError(error));
 
-    if (
-      parsedTopicId !== null &&
-      (!Number.isInteger(parsedTopicId) || parsedTopicId <= 0)
-    ) {
-      setEditingError("Topic ID must be a positive integer when provided.");
       return;
     }
 
     updateMutation.mutate(
+      { destinationId: destination.id, request },
       {
-        destinationId: destination.id,
-        request: {
-          name: destination.name,
-          telegram: {
-            chatId: destination.telegram.chatId,
-            ...(parsedTopicId !== null ? { topicId: parsedTopicId } : {}),
-          },
-        },
-      },
-      {
-        onSuccess: () => {
-          stopEditing();
-        },
-        onError: (mutationError) => {
-          setEditingError(formatError(mutationError));
-        },
-      },
+        onError: (error) => setEditingError(formatError(error)),
+        onSuccess: () => setDraft(null),
+      }
     );
   }
 
   return (
-    <Card className="w-full shadow-none">
-      <CardContent className="space-y-4 py-4">
-        <div className="space-y-1">
-          <p className="text-sm font-medium text-foreground">Notification Destinations</p>
-          <p className="text-xs text-muted-foreground">
-            Create a Telegram destination, then use the webhook URL and API key from Nakama
-            to send simple notifications.
+    <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0 space-y-1">
+          <p className="font-medium text-foreground text-sm">
+            {destination.name}
           </p>
+          <p className="text-muted-foreground text-xs">
+            {formatNotificationDestinationLabel(destination)}
+          </p>
+          <code className="block break-all text-muted-foreground text-xs">
+            {destination.webhookPath}
+          </code>
         </div>
-
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-          <label className="flex flex-col gap-3">
-            <span className="text-xs text-muted-foreground">Name</span>
-            <Input value={name} onChange={(event) => setName(event.target.value)} />
-          </label>
-          <label className="flex flex-col gap-3">
-            <span className="text-xs text-muted-foreground">Telegram topic link</span>
-            <Input
-              value={topicLink}
-              onChange={(event) => setTopicLink(event.target.value)}
-              placeholder="https://t.me/c/3734526664/167"
-            />
-          </label>
-        </div>
-
-        <div className="rounded-lg border border-dashed border-border bg-muted/20 p-3 text-xs text-muted-foreground">
-          Open the Telegram topic, copy its link, and paste it here. Nakama will extract the
-          Chat ID and Topic ID for you automatically.
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <Button onClick={handleCreate} disabled={createMutation.isPending}>
-            {createMutation.isPending ? <Spinner className="size-4" /> : null}
-            Create destination
+        <div className="flex flex-wrap items-center gap-2 md:justify-end">
+          <Button
+            className="min-h-10"
+            disabled={updateMutation.isPending}
+            onClick={() => (draft ? setDraft(null) : startEditing())}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            {draft ? "Cancel" : "Edit"}
           </Button>
-          <span className="text-xs text-muted-foreground">Channel: Telegram</span>
+          <Button
+            className="min-h-10"
+            disabled={rotatePending}
+            onClick={onRotate}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <RefreshIcon aria-hidden className="size-3.5" />
+            Rotate key
+          </Button>
+          <Button
+            className="min-h-10"
+            disabled={deletePending}
+            onClick={onDelete}
+            size="sm"
+            type="button"
+            variant="destructive"
+          >
+            <Delete02Icon aria-hidden className="size-3.5" />
+            Delete
+          </Button>
         </div>
+      </div>
 
-        {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
-        {error ? <p className="text-sm text-destructive">{formatError(error)}</p> : null}
-
-        <div className="space-y-3">
-          {isLoading ? (
-            <div className="flex min-h-24 items-center justify-center text-sm text-muted-foreground">
-              <Spinner className="size-5" />
+      {draft ? (
+        <div className="rounded-lg border border-border bg-muted/20 p-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="flex flex-1 flex-col gap-1.5 text-xs">
+              Name
+              <Input
+                onChange={(event) =>
+                  setDraft({ ...draft, name: event.target.value })
+                }
+                value={draft.name}
+              />
+            </label>
+            <label className="flex flex-1 flex-col gap-1.5 text-xs">
+              Agent
+              <AgentSelect
+                onChange={(profileId) => setDraft({ ...draft, profileId })}
+                profiles={profiles}
+                value={draft.profileId}
+              />
+            </label>
+            <div className="sm:col-span-2">
+              <NotificationTargetFields
+                channel={destination.channel}
+                onTargetChange={(target) => setDraft({ ...draft, target })}
+                onTopicIdChange={(topicId) => setDraft({ ...draft, topicId })}
+                target={draft.target}
+                topicId={draft.topicId}
+                whatsapp={whatsapp}
+              />
             </div>
-          ) : destinations.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-              No notification destinations yet.
-            </div>
-          ) : (
-            destinations.map((destination) => (
-              <div
-                key={destination.id}
-                className="space-y-3 rounded-lg border border-border p-3"
+            <div className="flex items-center gap-2">
+              <Button
+                disabled={
+                  updateMutation.isPending ||
+                  !isDestinationRequestValid(requestInput) ||
+                  (destination.channel === "whatsapp" && !whatsappReady)
+                }
+                onClick={save}
+                size="sm"
+                type="button"
               >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="min-w-0 space-y-1">
-                    <p className="text-sm font-medium text-foreground">{destination.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {formatTelegramDestinationLabel(destination.telegram)}
-                    </p>
-                    <code className="block break-all text-xs text-muted-foreground">
-                      {destination.webhookPath}
-                    </code>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        editingId === destination.id
-                          ? stopEditing()
-                          : startEditing(destination)
-                      }
-                      disabled={updateMutation.isPending}
-                    >
-                      {editingId === destination.id ? "Cancel" : "Edit topic"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleRotate(destination.id)}
-                      disabled={rotateMutation.isPending}
-                    >
-                      <RefreshCwIcon className="size-4" />
-                      Rotate key
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleDelete(destination.id)}
-                      disabled={deleteMutation.isPending}
-                    >
-                      <Trash2Icon className="size-4" />
-                      Delete
-                    </Button>
-                  </div>
-                </div>
-
-                {editingId === destination.id ? (
-                  <div className="rounded-lg border border-border bg-muted/20 p-3">
-                    <div className="flex flex-col gap-3 md:flex-row md:items-end">
-                      <label className="flex flex-1 flex-col gap-3">
-                        <span className="text-xs text-muted-foreground">
-                          Telegram topic ID
-                        </span>
-                        <Input
-                          value={editingTopicId}
-                          onChange={(event) => setEditingTopicId(event.target.value)}
-                          placeholder="Leave blank to remove topic"
-                        />
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={() => handleUpdateTopic(destination)}
-                          disabled={updateMutation.isPending}
-                        >
-                          {updateMutation.isPending ? <Spinner className="size-4" /> : null}
-                          Save
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={stopEditing}
-                          disabled={updateMutation.isPending}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                    {editingError ? (
-                      <p className="mt-2 text-sm text-destructive">{editingError}</p>
-                    ) : null}
-                  </div>
+                {updateMutation.isPending ? (
+                  <Spinner className="size-3.5" />
                 ) : null}
-
-                {latestSecret?.destination.id === destination.id ? (
-                  <LatestSecret latestSecret={latestSecret} />
-                ) : null}
-              </div>
-            ))
-          )}
+                Save
+              </Button>
+              <Button
+                disabled={updateMutation.isPending}
+                onClick={() => setDraft(null)}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+          {editingError ? (
+            <p className="mt-2 text-destructive text-sm">{editingError}</p>
+          ) : null}
         </div>
-      </CardContent>
-    </Card>
+      ) : null}
+
+      {latestSecret?.destination.id === destination.id ? (
+        <LatestSecret key={latestSecret.apiKey} latestSecret={latestSecret} />
+      ) : null}
+    </div>
   );
 }

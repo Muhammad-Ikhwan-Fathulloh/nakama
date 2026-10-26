@@ -3,6 +3,8 @@ import { getUserMessageText } from "@nakama/core";
 
 const SNIPPET_MAX_LENGTH = 500;
 
+const FALLBACK_TITLE_MAX_LENGTH = 60;
+
 const SESSION_TITLE_SYSTEM = [
   "You write short titles for chat conversations.",
   "Given the opening user message and assistant reply, return a plain 3–5 word phrase that captures the topic.",
@@ -14,7 +16,10 @@ const SESSION_TITLE_SYSTEM = [
   "- Do not mention Nakama or that this is a chat title",
 ].join("\n");
 
-function truncateSnippet(value: string, maxLength = SNIPPET_MAX_LENGTH): string {
+function truncateSnippet(
+  value: string,
+  maxLength = SNIPPET_MAX_LENGTH
+): string {
   const trimmed = value.trim();
 
   if (trimmed.length <= maxLength) {
@@ -24,7 +29,9 @@ function truncateSnippet(value: string, maxLength = SNIPPET_MAX_LENGTH): string 
   return `${trimmed.slice(0, maxLength).trimEnd()}…`;
 }
 
-function extractUserSnippet(message: Extract<ChatMessage, { role: "user" }>): string {
+function extractUserSnippet(
+  message: Extract<ChatMessage, { role: "user" }>
+): string {
   const content = message.content;
   const text = getUserMessageText(content).trim();
 
@@ -36,19 +43,24 @@ function extractUserSnippet(message: Extract<ChatMessage, { role: "user" }>): st
 }
 
 function extractAssistantSnippet(
-  message: Extract<ChatMessage, { role: "assistant" }>,
+  message: Extract<ChatMessage, { role: "assistant" }>
 ): string {
   return truncateSnippet(message.content);
 }
 
-export function buildSessionTitlePrompt(messages: readonly ChatMessage[]): string | null {
-  const firstUserIndex = messages.findIndex((message) => message.role === "user");
+export function buildSessionTitlePrompt(
+  messages: readonly ChatMessage[]
+): string | null {
+  const firstUserIndex = messages.findIndex(
+    (message) => message.role === "user"
+  );
 
-  if (firstUserIndex === -1) {
+  const firstUser = messages[firstUserIndex];
+
+  if (!firstUser || firstUser.role !== "user") {
     return null;
   }
 
-  const firstUser = messages[firstUserIndex] as Extract<ChatMessage, { role: "user" }>;
   const userSnippet = extractUserSnippet(firstUser);
 
   if (!userSnippet) {
@@ -59,7 +71,7 @@ export function buildSessionTitlePrompt(messages: readonly ChatMessage[]): strin
     .slice(firstUserIndex + 1)
     .find(
       (message): message is Extract<ChatMessage, { role: "assistant" }> =>
-        message.role === "assistant" && message.content.trim().length > 0,
+        message.role === "assistant" && message.content.trim().length > 0
     );
 
   const lines = [`User: ${userSnippet}`];
@@ -69,6 +81,30 @@ export function buildSessionTitlePrompt(messages: readonly ChatMessage[]): strin
   }
 
   return lines.join("\n");
+}
+
+function fallbackSessionTitleFromMessages(
+  messages: readonly ChatMessage[]
+): string | null {
+  const firstUser = messages.find(
+    (message): message is Extract<ChatMessage, { role: "user" }> =>
+      message.role === "user"
+  );
+
+  if (!firstUser) {
+    return null;
+  }
+
+  const text =
+    getUserMessageText(firstUser.content).trim().split("\n")[0] ?? "";
+
+  if (!text.trim()) {
+    return Array.isArray(firstUser.content) ? "Image" : null;
+  }
+
+  return normalizeSessionTitle(
+    truncateSnippet(text, FALLBACK_TITLE_MAX_LENGTH)
+  );
 }
 
 export function normalizeSessionTitle(raw: string): string | null {
@@ -92,24 +128,24 @@ export function normalizeSessionTitle(raw: string): string | null {
 
 export async function generateSessionTitleFromMessages(
   messages: readonly ChatMessage[],
-  options: { provider?: ProviderClient },
+  options: { provider?: ProviderClient }
 ): Promise<string | null> {
   const prompt = buildSessionTitlePrompt(messages);
+  const fallback = fallbackSessionTitleFromMessages(messages);
 
-  if (!prompt || !options.provider) {
-    return null;
+  if (!(prompt && options.provider)) {
+    return fallback;
   }
 
   try {
     const result = await options.provider.generateText({
-      system: SESSION_TITLE_SYSTEM,
-      prompt,
       format: "text",
+      prompt,
+      system: SESSION_TITLE_SYSTEM,
     });
 
-    return normalizeSessionTitle(result.content);
-  } catch (error) {
-    console.error("Failed to generate session title from provider:", error);
-    return null;
+    return normalizeSessionTitle(result.content) ?? fallback;
+  } catch {
+    return fallback;
   }
 }

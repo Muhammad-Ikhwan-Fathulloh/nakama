@@ -1,28 +1,44 @@
+import { cn } from "@nakama/ui/utils";
+import { BrainIcon } from "hugeicons-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import styles from "./ThinkingReasoning.module.css";
 import { ThinkingState } from "@/components/chat/ThinkingState";
+import { useRafCoalescedValue } from "@/hooks/use-raf-coalesced-value";
+import { formatElapsedSeconds } from "@/lib/elapsed-time";
 import { splitThinkingLines } from "@/lib/thinking-text";
-import { cn } from "@/lib/utils";
+import styles from "./ThinkingReasoning.module.css";
 
 const MAX_H = 100;
+
 const COLLAPSE_BEAT = 360;
 
 export interface ThinkingReasoningProps {
-  text: string;
+  activityLabel?: string;
+  children?: ReactNode;
+  className?: string;
   isThinkingStreaming: boolean;
   isWorkActive: boolean;
   startedAt?: string;
-  className?: string;
-  children?: ReactNode;
+  text: string;
+  thinkingDurationMs?: number;
+  toolCount?: number;
 }
 
-function useThinkingElapsed(isWorkActive: boolean, startedAt?: string): number {
+function useThinkingElapsed(
+  isWorkActive: boolean,
+  startedAt?: string
+): number | null {
   const anchorRef = useRef<number | null>(null);
-  const [elapsed, setElapsed] = useState(1);
+  const [elapsed, setElapsed] = useState<number | null>(null);
 
   useEffect(() => {
     if (!isWorkActive) {
+      if (anchorRef.current !== null) {
+        setElapsed(
+          Math.max(1, Math.floor((Date.now() - anchorRef.current) / 1000))
+        );
+      }
+
       return;
     }
 
@@ -32,11 +48,14 @@ function useThinkingElapsed(isWorkActive: boolean, startedAt?: string): number {
     }
 
     const update = () => {
-      setElapsed(Math.max(1, Math.floor((Date.now() - anchorRef.current!) / 1000)));
+      setElapsed(
+        Math.max(1, Math.floor((Date.now() - anchorRef.current!) / 1000))
+      );
     };
 
     update();
     const intervalId = window.setInterval(update, 1000);
+
     return () => window.clearInterval(intervalId);
   }, [isWorkActive, startedAt]);
 
@@ -51,28 +70,51 @@ function ThinkingReasoningViewport({
   isWorkActive: boolean;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const [fade, setFade] = useState({ top: false, bottom: false });
+  const [fade, setFade] = useState({ bottom: false, top: false });
+
+  // Append-only stream: sealed lines keep a content-prefix key; the live tail
+  // keeps a fixed key so growing text does not remount / re-fade.
+  const items = useMemo(() => {
+    let sealedPrefix = "";
+
+    return sentences.map((text, index) => {
+      const isLiveTail = isWorkActive && index === sentences.length - 1;
+
+      if (isLiveTail) {
+        return { fresh: true as const, key: "live-tail", text };
+      }
+
+      sealedPrefix = `${sealedPrefix}\0${text}`;
+
+      return { fresh: false as const, key: `sealed:${sealedPrefix}`, text };
+    });
+  }, [sentences, isWorkActive]);
 
   const updateFade = () => {
     const element = viewportRef.current;
+
     if (!element) {
       return;
     }
 
     const overflows = element.scrollHeight > element.clientHeight + 1;
+
     if (!overflows) {
-      setFade({ top: false, bottom: false });
+      setFade({ bottom: false, top: false });
+
       return;
     }
 
     setFade({
+      bottom:
+        element.scrollTop + element.clientHeight < element.scrollHeight - 1,
       top: element.scrollTop > 1,
-      bottom: element.scrollTop + element.clientHeight < element.scrollHeight - 1,
     });
   };
 
   useEffect(() => {
     const element = viewportRef.current;
+
     if (!element) {
       return;
     }
@@ -92,7 +134,7 @@ function ThinkingReasoningViewport({
     updateFade();
   };
 
-  if (sentences.length === 0) {
+  if (items.length === 0) {
     return null;
   }
 
@@ -103,19 +145,23 @@ function ThinkingReasoningViewport({
 
   return (
     <div
-      ref={viewportRef}
       className={cn(styles.viewport, styles.viewportScroll)}
+      onScroll={handleScroll}
+      ref={viewportRef}
       style={{
-        maxHeight: `${MAX_H}px`,
         maskImage: mask,
+        maxHeight: `${MAX_H}px`,
         WebkitMaskImage: mask,
       }}
-      onScroll={handleScroll}
     >
       <div className={styles.stream}>
-        {sentences.map((line, index) => (
-          <p key={`${index}:${line}`} className={styles.sentence}>
-            {line}
+        {items.map((item) => (
+          <p
+            className={styles.sentence}
+            data-fresh={item.fresh || undefined}
+            key={item.key}
+          >
+            {item.text}
           </p>
         ))}
       </div>
@@ -123,25 +169,25 @@ function ThinkingReasoningViewport({
   );
 }
 
-export function ThinkingReasoning({
-  text,
-  isThinkingStreaming,
-  isWorkActive,
-  startedAt,
-  className,
-  children,
-}: ThinkingReasoningProps) {
-  const trimmed = text.trim();
-  const sentences = useMemo(() => splitThinkingLines(text), [text]);
-  const hasBody = sentences.length > 0 || Boolean(children);
-  const elapsedSeconds = useThinkingElapsed(isWorkActive, startedAt);
+function useThinkingCollapse(
+  isWorkActive: boolean,
+  hasBody: boolean,
+  hasTools: boolean
+) {
   const [done, setDone] = useState(!isWorkActive && hasBody);
-  const [open, setOpen] = useState(isWorkActive);
+  const [thinkingOpen, setThinkingOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(isWorkActive);
+  const [wasWorkActive, setWasWorkActive] = useState(isWorkActive);
+
+  if (wasWorkActive !== isWorkActive) {
+    setWasWorkActive(isWorkActive);
+    setToolsOpen(isWorkActive);
+  }
 
   useEffect(() => {
     if (isWorkActive) {
       setDone(false);
-      setOpen(true);
+
       return;
     }
 
@@ -149,100 +195,240 @@ export function ThinkingReasoning({
       return;
     }
 
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const reducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches;
+
     const delay = reducedMotion ? 0 : COLLAPSE_BEAT;
+
     const timerId = window.setTimeout(() => {
       setDone(true);
-      setOpen(false);
     }, delay);
 
     return () => window.clearTimeout(timerId);
   }, [hasBody, isWorkActive]);
 
-  if (isWorkActive && isThinkingStreaming && !trimmed && !children) {
-    return <ThinkingState className={className} />;
-  }
-
-  if (!hasBody && !isWorkActive) {
-    return null;
-  }
-
-  const expanded = done ? open : true;
-  const showTimeline = sentences.length > 0 || Boolean(children);
-
   const toggle = () => {
-    if (!done) {
+    if (hasTools) {
+      setToolsOpen((current) => !current);
+
       return;
     }
-    setOpen((current) => !current);
+
+    setThinkingOpen((current) => !current);
   };
+
+  return { done, expanded: hasTools ? toolsOpen : thinkingOpen, toggle };
+}
+
+function thinkingLiveLabel(
+  elapsedSeconds: number,
+  hasChildren: boolean,
+  isThinkingStreaming: boolean
+): string {
+  if (hasChildren && !isThinkingStreaming) {
+    return `Working… · ${formatElapsedSeconds(elapsedSeconds)}`;
+  }
+
+  return "Thinking…";
+}
+
+function ThinkingReasoningHeader({
+  activityLabel,
+  done,
+  expanded,
+  elapsedSeconds,
+  hasChildren,
+  isThinkingStreaming,
+  stepCount,
+  onToggle,
+}: {
+  activityLabel?: string;
+  done: boolean;
+  expanded: boolean;
+  elapsedSeconds: number | null;
+  hasChildren: boolean;
+  isThinkingStreaming: boolean;
+  stepCount: number;
+  onToggle: () => void;
+}) {
+  const stepLabel = `${stepCount} ${stepCount === 1 ? "step" : "steps"}`;
+  const doneLabel = stepCount > 0 ? stepLabel : "Activity";
+
+  const durationLabel =
+    elapsedSeconds === null
+      ? ""
+      : ` for ${formatElapsedSeconds(elapsedSeconds)}`;
+
+  const liveLabel =
+    activityLabel ??
+    thinkingLiveLabel(elapsedSeconds ?? 1, hasChildren, isThinkingStreaming);
+
+  const liveStepLabel = stepCount > 0 ? ` · ${stepLabel}` : "";
+
+  return (
+    <button
+      aria-expanded={expanded}
+      aria-label="Toggle activity"
+      className={cn(
+        styles.header,
+        styles.headerClickable,
+        expanded && styles.headerExpanded
+      )}
+      onClick={onToggle}
+      type="button"
+    >
+      <span className={cn(styles.label, !done && styles.shimmer)}>
+        {done ? (
+          <>
+            <span className={styles.verb}>{doneLabel}</span>
+            {durationLabel}
+          </>
+        ) : (
+          `${liveLabel}${liveStepLabel}`
+        )}
+      </span>
+      <svg
+        aria-hidden="true"
+        className={styles.chevron}
+        height="12"
+        viewBox="0 0 24 24"
+        width="12"
+      >
+        <path
+          d="m4.5 15.75 7.5-7.5 7.5 7.5"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.8"
+        />
+      </svg>
+    </button>
+  );
+}
+
+function ThinkingReasoningBody({
+  children,
+  expanded,
+  hasTools,
+  isWorkActive,
+  sentences,
+}: {
+  children?: ReactNode;
+  expanded: boolean;
+  hasTools: boolean;
+  isWorkActive: boolean;
+  sentences: string[];
+}) {
+  const showTimeline = sentences.length > 0 || hasTools;
 
   return (
     <div
+      aria-hidden={!expanded}
       className={cn(
-        styles.root,
-        className,
+        styles.collapsible,
+        !expanded && styles.collapsibleCollapsed
       )}
     >
-      <button
-        type="button"
-        className={cn(
-          styles.header,
-          done && styles.headerClickable,
-          expanded && styles.headerExpanded,
-        )}
-        aria-expanded={expanded}
-        aria-label="Toggle thought"
-        onClick={() => done && toggle()}
-      >
-        {done ? (
-          <span className={styles.label}>
-            <span className={styles.verb}>Thought</span> for {elapsedSeconds}s
-          </span>
-        ) : (
-          <span className={cn(styles.label, styles.shimmer)}>Thinking…</span>
-        )}
-        {done ? (
-          <svg
-            className={styles.chevron}
-            viewBox="0 0 24 24"
-            width="12"
-            height="12"
-            aria-hidden="true"
+      <div className={styles.inner}>
+        {showTimeline ? (
+          <div
+            className={cn(
+              styles.timeline,
+              hasTools && styles.timelineWithTools,
+              sentences.length > 0 && styles.timelineWithReasoning
+            )}
           >
-            <path
-              d="m4.5 15.75 7.5-7.5 7.5 7.5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
+            {sentences.length > 0 ? (
+              <BrainIcon aria-hidden className={styles.thinkingMarker} />
+            ) : null}
+            {sentences.length > 0 ? (
+              <ThinkingReasoningViewport
+                isWorkActive={isWorkActive}
+                sentences={sentences}
+              />
+            ) : null}
+            {hasTools ? (
+              <div
+                className={cn(
+                  styles.tools,
+                  sentences.length > 0 && styles.toolsAfterReasoning
+                )}
+              >
+                {children}
+              </div>
+            ) : null}
+          </div>
         ) : null}
-      </button>
-
-      <div className={cn(styles.collapsible, !expanded && styles.collapsibleCollapsed)}>
-        <div className={styles.inner}>
-          {showTimeline ? (
-            <div className={styles.timeline}>
-              {sentences.length > 0 ? (
-                <ThinkingReasoningViewport
-                  sentences={sentences}
-                  isWorkActive={isWorkActive}
-                />
-              ) : null}
-              {children ? (
-                <div
-                  className={cn(styles.tools, sentences.length > 0 && styles.toolsAfterReasoning)}
-                >
-                  {children}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
       </div>
+    </div>
+  );
+}
+
+export function ThinkingReasoning({
+  activityLabel,
+  text,
+  isThinkingStreaming,
+  isWorkActive,
+  startedAt,
+  thinkingDurationMs,
+  className,
+  children,
+  toolCount = 0,
+}: ThinkingReasoningProps) {
+  const displayText = useRafCoalescedValue(text, isThinkingStreaming);
+  const trimmed = displayText.trim();
+
+  const sentences = useMemo(
+    () => splitThinkingLines(displayText),
+    [displayText]
+  );
+
+  const hasBody = sentences.length > 0 || toolCount > 0;
+  const stepCount = toolCount + (sentences.length > 0 ? 1 : 0);
+  const elapsedSeconds = useThinkingElapsed(isWorkActive, startedAt);
+
+  const { done, expanded, toggle } = useThinkingCollapse(
+    isWorkActive,
+    hasBody,
+    toolCount > 0
+  );
+
+  if (isWorkActive && isThinkingStreaming && !trimmed && toolCount === 0) {
+    return <ThinkingState className={className} />;
+  }
+
+  if (!(hasBody || isWorkActive)) {
+    return null;
+  }
+
+  return (
+    <div className={cn(styles.root, className)}>
+      <ThinkingReasoningHeader
+        activityLabel={activityLabel}
+        done={done}
+        elapsedSeconds={
+          thinkingDurationMs !== undefined &&
+          Number.isFinite(thinkingDurationMs) &&
+          thinkingDurationMs >= 0
+            ? Math.max(1, Math.floor(thinkingDurationMs / 1000))
+            : elapsedSeconds
+        }
+        expanded={expanded}
+        hasChildren={toolCount > 0}
+        isThinkingStreaming={isThinkingStreaming}
+        onToggle={toggle}
+        stepCount={stepCount}
+      />
+      <ThinkingReasoningBody
+        expanded={expanded}
+        hasTools={toolCount > 0}
+        isWorkActive={isWorkActive}
+        sentences={sentences}
+      >
+        {children}
+      </ThinkingReasoningBody>
     </div>
   );
 }

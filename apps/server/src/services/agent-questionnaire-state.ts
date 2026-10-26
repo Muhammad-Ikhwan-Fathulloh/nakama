@@ -2,6 +2,7 @@ import type { AgentQuestionnaire } from "@nakama/core";
 import type { DatabaseAdapter } from "@nakama/db";
 
 const MAX_QUESTIONS = 5;
+
 const MAX_CHOICES = 5;
 
 export class AgentQuestionnaireState {
@@ -16,23 +17,28 @@ export class AgentQuestionnaireState {
 
     const questionnaire = await this.db.getSessionQuestionnaire(sessionId);
     this.cache.set(sessionId, questionnaire);
+
     return questionnaire;
   }
 
-  async write(sessionId: string, questionnaire: AgentQuestionnaire): Promise<AgentQuestionnaire> {
+  async write(
+    sessionId: string,
+    questionnaire: AgentQuestionnaire
+  ): Promise<AgentQuestionnaire> {
     const normalized = {
       id: questionnaire.id.trim(),
-      title: questionnaire.title.trim(),
       questions: questionnaire.questions.map((question) => ({
-        id: question.id.trim(),
-        prompt: question.prompt.trim(),
+        allowCustomAnswer: question.allowCustomAnswer,
         choices: question.choices.map((choice) => ({
           id: choice.id.trim(),
           label: choice.label.trim(),
+          recommended: choice.recommended || undefined,
         })),
-        allowCustomAnswer: question.allowCustomAnswer,
+        id: question.id.trim(),
         placeholder: question.placeholder?.trim() || undefined,
+        prompt: question.prompt.trim(),
       })),
+      title: questionnaire.title.trim(),
     } satisfies AgentQuestionnaire;
 
     if (!normalized.id) {
@@ -48,7 +54,9 @@ export class AgentQuestionnaireState {
     }
 
     if (normalized.questions.length > MAX_QUESTIONS) {
-      throw new Error(`A questionnaire can have at most ${MAX_QUESTIONS} questions.`);
+      throw new Error(
+        `A questionnaire can have at most ${MAX_QUESTIONS} questions.`
+      );
     }
 
     for (const question of normalized.questions) {
@@ -62,25 +70,26 @@ export class AgentQuestionnaireState {
 
       if (question.choices.length > MAX_CHOICES) {
         throw new Error(
-          `Question "${question.id}" can have at most ${MAX_CHOICES} choices.`,
+          `Question "${question.id}" can have at most ${MAX_CHOICES} choices.`
         );
       }
 
       for (const choice of question.choices) {
-        if (!choice.id || !choice.label) {
+        if (!(choice.id && choice.label)) {
           throw new Error(`Question "${question.id}" has an invalid choice.`);
         }
       }
 
       if (!question.allowCustomAnswer && question.choices.length === 0) {
         throw new Error(
-          `Question "${question.id}" must allow custom answers or provide at least one choice.`,
+          `Question "${question.id}" must allow custom answers or provide at least one choice.`
         );
       }
     }
 
     this.cache.set(sessionId, normalized);
     await this.db.updateSessionQuestionnaire(sessionId, normalized);
+
     return normalized;
   }
 

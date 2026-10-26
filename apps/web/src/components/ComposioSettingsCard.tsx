@@ -1,17 +1,20 @@
-import { ExternalLinkIcon, EyeIcon, EyeOffIcon } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@nakama/ui/button";
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupInput,
-} from "@/components/ui/input-group";
-import { Spinner } from "@/components/ui/spinner";
-import { useComposioSettings, useSaveComposioSettings } from "@/hooks/use-composio";
-import { formatError } from "@/lib/client";
-import { cn } from "@/lib/utils";
+} from "@nakama/ui/input-group";
+import { Spinner } from "@nakama/ui/spinner";
+import { cn } from "@nakama/ui/utils";
+import { Link01Icon, ViewIcon, ViewOffIcon } from "hugeicons-react";
+import { useEffect, useState } from "react";
+import { IntegrationCardShell } from "@/components/integration-settings.shared";
+import {
+  useComposioSettings,
+  useSaveComposioSettings,
+} from "@/hooks/use-composio";
+import { client, formatError } from "@/lib/client";
 
 function ComposioStatusBadge({
   configured,
@@ -22,8 +25,11 @@ function ComposioStatusBadge({
 }) {
   if (!configured) {
     return (
-      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
-        <span className="size-1.5 rounded-full bg-primary" aria-hidden />
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-0.5 font-medium text-muted-foreground text-xs">
+        <span
+          aria-hidden
+          className="size-1.5 rounded-full bg-muted-foreground/60"
+        />
         Not configured
       </span>
     );
@@ -31,57 +37,91 @@ function ComposioStatusBadge({
 
   if (composioReachable) {
     return (
-      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-200">
-        <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden />
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 font-medium text-emerald-800 text-xs dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-200">
+        <span aria-hidden className="size-1.5 rounded-full bg-emerald-500" />
         Connected
       </span>
     );
   }
 
   return (
-    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200">
-      <span className="size-1.5 rounded-full bg-amber-500" aria-hidden />
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 font-medium text-amber-900 text-xs dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200">
+      <span aria-hidden className="size-1.5 rounded-full bg-amber-500" />
       Key saved
     </span>
   );
 }
 
-function ComposioSettingsSkeleton() {
+function ComposioSettingsSkeleton({
+  embedded = false,
+}: {
+  embedded?: boolean;
+}) {
+  const sectionPadding = embedded ? "pb-1.5" : "p-5";
+  const footerPadding = embedded ? "pt-1.5" : "px-5 py-3";
+
   return (
-    <Card className="w-full shadow-none">
-      <CardContent className="p-0" aria-busy="true" aria-label="Loading Composio settings">
-        <div className="flex items-start justify-between gap-4 p-5 pb-4">
-          <div className="min-w-0 flex-1 space-y-2">
-            <div className="skeleton-shimmer h-5 w-24 rounded" />
-            <div className="skeleton-shimmer h-4 w-full max-w-md rounded" />
-            <div className="skeleton-shimmer h-4 w-full max-w-sm rounded" />
+    <IntegrationCardShell
+      busyLabel="Loading Composio settings"
+      embedded={embedded}
+    >
+      {embedded ? null : (
+        <>
+          <div className="flex items-start justify-between gap-4 p-5 pb-4">
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="skeleton-shimmer h-5 w-24 rounded" />
+              <div className="skeleton-shimmer h-4 w-full max-w-md rounded" />
+              <div className="skeleton-shimmer h-4 w-full max-w-sm rounded" />
+            </div>
+            <div className="skeleton-shimmer h-6 w-28 shrink-0 rounded-full" />
           </div>
-          <div className="skeleton-shimmer h-6 w-28 shrink-0 rounded-full" />
+
+          <div className="border-border border-t" />
+        </>
+      )}
+
+      <div className={cn("space-y-2", sectionPadding, embedded && "pt-0")}>
+        <div className="space-y-2">
+          <div className="skeleton-shimmer h-4 w-28 rounded" />
+          <div className="skeleton-shimmer h-4 w-full rounded" />
+          <div className="skeleton-shimmer h-4 w-4/5 rounded" />
         </div>
-
-        <div className="border-t border-border" />
-
-        <div className="space-y-3 p-5">
-          <div className="space-y-2">
-            <div className="skeleton-shimmer h-4 w-28 rounded" />
-            <div className="skeleton-shimmer h-4 w-full rounded" />
-            <div className="skeleton-shimmer h-4 w-4/5 rounded" />
-          </div>
-          <div className="skeleton-shimmer h-9 w-full rounded-md" />
-          <div className="skeleton-shimmer h-4 w-64 rounded" />
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-muted/40 px-5 py-3">
-          <div className="skeleton-shimmer h-4 w-72 max-w-full rounded" />
+        <div className="flex items-center gap-2">
+          <div className="skeleton-shimmer h-9 min-w-0 flex-1 rounded-md" />
           <div className="skeleton-shimmer h-8 w-16 shrink-0 rounded-md" />
         </div>
-      </CardContent>
-    </Card>
+      </div>
+
+      <div className={cn(footerPadding)}>
+        <div className="skeleton-shimmer h-4 w-72 max-w-full rounded" />
+      </div>
+    </IntegrationCardShell>
   );
 }
 
-export function ComposioSettingsCard() {
-  const { data: settings, isLoading, error: loadError } = useComposioSettings();
+function composioSettingsError(
+  formError: string | null,
+  loadError: Error | null
+): string | null {
+  if (formError) {
+    return formError;
+  }
+
+  if (loadError) {
+    return formatError(loadError);
+  }
+
+  return null;
+}
+
+function useComposioSettingsForm() {
+  const {
+    data: settings,
+    isLoading,
+    error: loadError,
+    refetch,
+  } = useComposioSettings();
+
   const saveMutation = useSaveComposioSettings();
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
@@ -95,129 +135,308 @@ export function ComposioSettingsCard() {
     setApiKey("");
   }, [settings]);
 
-  if (isLoading) {
-    return <ComposioSettingsSkeleton />;
-  }
-
-  const configured = settings?.configured === true;
-  const composioReachable = settings?.composioReachable === true;
-  const canSave = configured || apiKey.trim().length > 0;
-  const errorMessage = formError ?? (loadError ? formatError(loadError) : null);
-
   async function handleSave() {
     setFormError(null);
 
     try {
-      await saveMutation.mutateAsync({
-        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
-      });
+      const trimmedApiKey = apiKey.trim();
+      const request = trimmedApiKey ? { apiKey: trimmedApiKey } : {};
+      await saveMutation.mutateAsync(request);
       setApiKey("");
     } catch (error) {
       setFormError(formatError(error));
     }
   }
 
+  async function manageKey(action: "clear" | "use-stored") {
+    setFormError(null);
+
+    try {
+      await client.manageSettingSecret("composio", action);
+      await refetch();
+    } catch (error) {
+      setFormError(formatError(error));
+    }
+  }
+
+  return {
+    apiKey,
+    formError,
+    handleSave,
+    isLoading,
+    loadError,
+    manageKey,
+    savePending: saveMutation.isPending,
+    setApiKey,
+    setFormError,
+    setShowApiKey,
+    settings,
+    showApiKey,
+  };
+}
+
+function ComposioSettingsIntro({
+  composioReachable,
+  configured,
+  embedded,
+}: {
+  composioReachable: boolean;
+  configured: boolean;
+  embedded: boolean;
+}) {
+  if (embedded) {
+    return null;
+  }
+
   return (
-    <Card className="w-full overflow-hidden shadow-none">
-      <CardContent className="p-0">
-        <div className="flex items-start justify-between gap-4 p-5 pb-4">
-          <div className="min-w-0 space-y-1">
-            <h2 className="text-base font-semibold leading-tight text-foreground">Composio</h2>
-            <p className="text-sm leading-snug text-muted-foreground">
-              Enable toolkits, connect SaaS accounts with OAuth, and sync tools for profile
-              assignment.
-            </p>
-          </div>
-          <ComposioStatusBadge configured={configured} composioReachable={composioReachable} />
-        </div>
-
-        <div className="border-t border-border" />
-
-        <div className="space-y-3 p-5">
-          <div className="space-y-1">
-            <p className="text-sm font-medium text-foreground">Project API key</p>
-            <p className="text-sm text-muted-foreground">
-              Paste your Composio <span className="text-foreground">project API key</span> to enable
-              SaaS integrations. This is not the MCP consumer key shown on the dashboard home page or
-              under AI Clients.
-            </p>
-          </div>
-
-          <InputGroup className="h-9">
-            <InputGroupInput
-              type={showApiKey ? "text" : "password"}
-              autoComplete="off"
-              placeholder={
-                configured && settings?.apiKeyMasked
-                  ? `Saved (${settings.apiKeyMasked})`
-                  : "Paste API key"
-              }
-              value={apiKey}
-              disabled={saveMutation.isPending}
-              onChange={(event) => {
-                setApiKey(event.target.value);
-                if (formError) {
-                  setFormError(null);
-                }
-              }}
-            />
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton
-                type="button"
-                size="icon-xs"
-                aria-label={showApiKey ? "Hide API key" : "Show API key"}
-                onClick={() => setShowApiKey((current) => !current)}
-              >
-                {showApiKey ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}
-              </InputGroupButton>
-            </InputGroupAddon>
-          </InputGroup>
-
-          <p className="text-sm text-muted-foreground">
-            Saved to{" "}
-            <code className="rounded-md border border-border bg-muted/60 px-1.5 py-0.5 font-mono text-xs text-foreground">
-              ~/.nakama/composio/config.ini
-            </code>
+    <>
+      <div className="flex items-start justify-between gap-4 p-5 pb-4">
+        <div className="min-w-0 space-y-1">
+          <h2 className="font-semibold text-base text-foreground leading-tight [text-wrap:balance]">
+            Composio
+          </h2>
+          <p className="text-muted-foreground text-sm leading-snug [text-wrap:pretty]">
+            Enable toolkits, connect SaaS accounts with OAuth, and sync tools
+            for profile assignment.
           </p>
         </div>
+        <ComposioStatusBadge
+          composioReachable={composioReachable}
+          configured={configured}
+        />
+      </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-muted/40 px-5 py-3">
-          <a
-            href="https://docs.composio.dev/reference/authentication"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ExternalLinkIcon className="size-3.5 shrink-0" aria-hidden />
-            <span>
-              Get a project API key:{" "}
-              <span className={cn("font-medium text-primary")}>
-                Settings → Project Settings → API Keys
-              </span>
-            </span>
-          </a>
+      <div className="border-border border-t" />
+    </>
+  );
+}
+
+function ComposioApiKeySection({
+  apiKey,
+  composioReachable,
+  configured,
+  embedded,
+  errorMessage,
+  source,
+  onApiKeyChange,
+  onSave,
+  onToggleShowApiKey,
+  savePending,
+  showApiKey,
+}: {
+  apiKey: string;
+  composioReachable: boolean;
+  configured: boolean;
+  embedded: boolean;
+  errorMessage: string | null;
+  source?: "environment" | "settings" | "missing";
+  onApiKeyChange: (value: string) => void;
+  onSave: () => void;
+  onToggleShowApiKey: () => void;
+  savePending: boolean;
+  showApiKey: boolean;
+}) {
+  const sectionPadding = embedded ? "pb-1.5" : "p-5";
+
+  return (
+    <div className={cn("space-y-2", sectionPadding, embedded && "pt-0")}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 space-y-1">
+          <p className="font-medium text-foreground text-sm">Project API key</p>
+          <p className="text-muted-foreground text-sm [text-wrap:pretty]">
+            Paste a Composio project API key, not the MCP consumer key.
+          </p>
+        </div>
+        {embedded ? (
+          <ComposioStatusBadge
+            composioReachable={composioReachable}
+            configured={configured}
+          />
+        ) : null}
+      </div>
+
+      <ComposioApiKeyInput
+        apiKey={apiKey}
+        configured={configured}
+        onApiKeyChange={onApiKeyChange}
+        onSave={onSave}
+        onToggleShowApiKey={onToggleShowApiKey}
+        savePending={savePending}
+        showApiKey={showApiKey}
+        source={source}
+      />
+
+      {configured && !composioReachable ? (
+        <p className="text-amber-800 text-sm dark:text-amber-200" role="status">
+          The saved key could not reach Composio. Check that it is a project API
+          key from Settings → Project Settings → API Keys.
+        </p>
+      ) : null}
+
+      {errorMessage ? (
+        <p className="text-destructive text-sm" role="alert">
+          {errorMessage}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function ComposioApiKeyInput({
+  apiKey,
+  configured,
+  onApiKeyChange,
+  onSave,
+  onToggleShowApiKey,
+  savePending,
+  showApiKey,
+  source,
+}: {
+  apiKey: string;
+  configured: boolean;
+  onApiKeyChange: (value: string) => void;
+  onSave: () => void;
+  onToggleShowApiKey: () => void;
+  savePending: boolean;
+  showApiKey: boolean;
+  source?: "environment" | "settings" | "missing";
+}) {
+  const canSave = source !== "environment" && apiKey.trim().length > 0;
+
+  return (
+    <div className="flex items-center gap-2">
+      <InputGroup className="h-9 min-w-0 flex-1">
+        <InputGroupInput
+          autoComplete="off"
+          disabled={savePending || source === "environment"}
+          onChange={(event) => onApiKeyChange(event.target.value)}
+          placeholder={
+            source === "environment"
+              ? "Managed by environment"
+              : configured
+                ? "Saved"
+                : "Paste API key"
+          }
+          type={showApiKey ? "text" : "password"}
+          value={apiKey}
+        />
+        {source === "environment" ? null : (
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton
+              aria-label={showApiKey ? "Hide API key" : "Show API key"}
+              className="relative before:absolute before:-inset-2 before:content-['']"
+              onClick={onToggleShowApiKey}
+              size="icon-xs"
+              type="button"
+            >
+              {showApiKey ? (
+                <ViewOffIcon className="size-4" />
+              ) : (
+                <ViewIcon className="size-4" />
+              )}
+            </InputGroupButton>
+          </InputGroupAddon>
+        )}
+      </InputGroup>
+      <Button
+        className="min-w-[4.5rem] shrink-0"
+        disabled={!canSave || savePending}
+        onClick={onSave}
+        size="lg"
+        type="button"
+      >
+        {savePending ? <Spinner className="size-4" /> : "Save"}
+      </Button>
+    </div>
+  );
+}
+
+function ComposioSettingsFormBody({
+  embedded,
+  form,
+}: {
+  embedded: boolean;
+  form: ReturnType<typeof useComposioSettingsForm>;
+}) {
+  const configured = form.settings?.configured === true;
+  const composioReachable = form.settings?.composioReachable === true;
+  const footerPadding = embedded ? "pt-1.5" : "px-5 py-3";
+
+  return (
+    <IntegrationCardShell embedded={embedded}>
+      <ComposioSettingsIntro
+        composioReachable={composioReachable}
+        configured={configured}
+        embedded={embedded}
+      />
+
+      <ComposioApiKeySection
+        apiKey={form.apiKey}
+        composioReachable={composioReachable}
+        configured={configured}
+        embedded={embedded}
+        errorMessage={composioSettingsError(form.formError, form.loadError)}
+        onApiKeyChange={(value) => {
+          form.setApiKey(value);
+          form.setFormError(null);
+        }}
+        onSave={() => void form.handleSave()}
+        onToggleShowApiKey={() => form.setShowApiKey((current) => !current)}
+        savePending={form.savePending}
+        showApiKey={form.showApiKey}
+        source={form.settings?.source}
+      />
+
+      {form.settings?.source === "settings" ||
+      (form.settings?.source === "missing" && form.settings.savedAvailable) ? (
+        <div className={cn(embedded ? "pb-2" : "px-5 pb-3")}>
           <Button
-            type="button"
+            onClick={() =>
+              void form.manageKey(
+                form.settings?.source === "settings" ? "clear" : "use-stored"
+              )
+            }
             size="sm"
-            className="min-w-[4.5rem]"
-            disabled={!canSave || saveMutation.isPending}
-            onClick={() => void handleSave()}
+            type="button"
+            variant="outline"
           >
-            {saveMutation.isPending ? <Spinner className="size-4" /> : "Save"}
+            {form.settings.source === "settings"
+              ? "Clear saved key"
+              : "Use saved key"}
           </Button>
         </div>
+      ) : null}
 
-        {configured && !composioReachable ? (
-          <p className="px-5 pb-1 text-sm text-amber-800 dark:text-amber-200">
-            The saved key could not reach Composio. Check that it is a project API key from Settings
-            → Project Settings → API Keys.
-          </p>
-        ) : null}
-
-        {errorMessage ? (
-          <p className="px-5 pb-4 text-sm text-destructive">{errorMessage}</p>
-        ) : null}
-      </CardContent>
-    </Card>
+      <div className={cn(footerPadding)}>
+        <a
+          className="inline-flex items-center gap-2 text-muted-foreground text-sm transition-colors hover:text-foreground"
+          href="https://dashboard.composio.dev"
+          rel="noreferrer"
+          target="_blank"
+        >
+          <Link01Icon aria-hidden className="size-3.5 shrink-0" />
+          <span>
+            Get a project API key:{" "}
+            <span className={cn("font-medium text-primary")}>
+              Settings → Project Settings → API Keys
+            </span>
+          </span>
+        </a>
+      </div>
+    </IntegrationCardShell>
   );
+}
+
+export function ComposioSettingsCard({
+  embedded = false,
+}: {
+  embedded?: boolean;
+}) {
+  const form = useComposioSettingsForm();
+
+  if (form.isLoading) {
+    return <ComposioSettingsSkeleton embedded={embedded} />;
+  }
+
+  return <ComposioSettingsFormBody embedded={embedded} form={form} />;
 }

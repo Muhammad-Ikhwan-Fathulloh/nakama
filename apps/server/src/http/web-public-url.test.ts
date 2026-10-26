@@ -1,88 +1,205 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { createInMemoryDatabaseAdapter } from "@nakama/db";
-import { createHonoApp } from "./app";
-import { AuthService } from "../services/auth-service";
-import { OrgService } from "../services/org-service";
-import { setupFreshInstallSession } from "./test-session-helpers";
-import { setupTestConfigDir } from "../test-config-dir";
+import { loadUserWebPublicUrl, saveUserWebPublicUrl } from "@nakama/core";
+import { resolveComposioCallbackBaseUrl } from "../services/composio-callback-url";
+import { setupTestConfigDir, withTestEnv } from "../test-config-dir";
+import { createMinimalHonoApp } from "./test-app-helpers";
+import { buildSetupAuthBody } from "./test-org-helpers";
+import {
+  type AppFetch,
+  loginPlatformAdminSession,
+  loginUserSession,
+  seedOrgAdmin,
+  setupFreshInstallSession,
+  type TestBrowserSession,
+} from "./test-session-helpers";
 
 setupTestConfigDir("nakama-web-public-url-test-");
 
-function createApp() {
-  const databaseAdapter = createInMemoryDatabaseAdapter();
-  const authService = new AuthService();
-  return {
-    databaseAdapter,
-    app: createHonoApp({
-      agent: {
-        listProfiles: async () => ({ profiles: [{ id: "default" }] }),
-      } as any,
-      automationService: {} as any,
-      taskService: {} as any,
-      systemStatus: { getStatus: async () => ({ ok: true }) } as any,
-      workerManager: {} as any,
-      mcpService: {} as any,
-      authService,
-      orgService: new OrgService(databaseAdapter, authService),
-      databaseAdapter,
-      webDistDir: null,
-    }),
-  };
+const API_URL = "http://localhost:4310/v1/system/web-public-url";
+
+function putRequest(
+  session: TestBrowserSession,
+  body: { webPublicUrl?: string },
+  orgId?: string,
+  extraHeaders: Record<string, string> = {}
+): Request {
+  return new Request(API_URL, {
+    body: JSON.stringify(body),
+    headers: session.headers(
+      {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": session.csrfToken,
+        ...extraHeaders,
+      },
+      orgId
+    ),
+    method: "PUT",
+  });
+}
+
+async function readSavedBaseUrl(
+  app: AppFetch,
+  session: TestBrowserSession,
+  orgId?: string
+): Promise<string | null> {
+  const response = await app.fetch(
+    new Request(API_URL, { headers: session.headers({}, orgId) })
+  );
+
+  expect(response.status).toBe(200);
+
+  // SAFETY: The test checks this response against the endpoint contract asserted below.
+  return ((await response.json()) as { webPublicUrl: string | null })
+    .webPublicUrl;
 }
 
 describe("web public url settings", () => {
-  test("org admin can read and persist the public web URL", async () => {
-    const configDir = await mkdtemp(join(tmpdir(), "nakama-web-public-url-"));
-    const previousConfigDir = process.env.NAKAMA_CONFIG_DIR;
-    process.env.NAKAMA_CONFIG_DIR = configDir;
+  test("platform admin can read and persist the deployment's public web URL", async () => {
+    const { app, databaseAdapter } = createMinimalHonoApp();
+    const session = await setupFreshInstallSession(app, databaseAdapter);
 
-    try {
-      const { app, databaseAdapter } = createApp();
-      const session = await setupFreshInstallSession(app, databaseAdapter);
+    expect(await readSavedBaseUrl(app, session)).toBeNull();
 
-      const getResponse = await app.fetch(
-        new Request("http://localhost:4310/v1/system/web-public-url", {
-          headers: session.headers({}, session.orgId),
-        }),
-      );
-      expect(getResponse.status).toBe(200);
-      const initial = (await getResponse.json()) as { webPublicUrl: string | null };
-      expect(initial.webPublicUrl).toBeNull();
+    const putResponse = await app.fetch(
+      putRequest(
+        session,
+        { webPublicUrl: "http://localhost:4310" },
+        session.orgId
+      )
+    );
 
-      const putResponse = await app.fetch(
-        new Request("http://localhost:4310/v1/system/web-public-url", {
-          method: "PUT",
-          headers: session.headers(
-            {
-              "Content-Type": "application/json",
-              "X-CSRF-Token": session.csrfToken,
-            },
-            session.orgId,
-          ),
-          body: JSON.stringify({ webPublicUrl: "https://app.example.com/setup" }),
-        }),
-      );
-      expect(putResponse.status).toBe(200);
-      const saved = (await putResponse.json()) as { webPublicUrl: string };
-      expect(saved.webPublicUrl).toBe("https://app.example.com");
+    expect(putResponse.status).toBe(200);
+    // SAFETY: The test checks this response against the endpoint contract asserted below.
+    const saved = (await putResponse.json()) as { webPublicUrl: string };
+    expect(saved.webPublicUrl).toBe("http://localhost:4310");
+    expect(await readSavedBaseUrl(app, session)).toBe("http://localhost:4310");
 
-      const getAfterSave = await app.fetch(
-        new Request("http://localhost:4310/v1/system/web-public-url", {
-          headers: session.headers({}, session.orgId),
-        }),
-      );
-      const afterSave = (await getAfterSave.json()) as { webPublicUrl: string | null };
-      expect(afterSave.webPublicUrl).toBe("https://app.example.com");
-    } finally {
-      if (previousConfigDir === undefined) {
-        delete process.env.NAKAMA_CONFIG_DIR;
-      } else {
-        process.env.NAKAMA_CONFIG_DIR = previousConfigDir;
+    const headerAttempt = await app.fetch(
+      putRequest(session, {}, session.orgId, { Origin: "https://evil.example" })
+    );
+
+    expect(headerAttempt.status).toBe(400);
+    expect(await readSavedBaseUrl(app, session)).toBe("http://localhost:4310");
+  });
+
+  test("a host other than the deployment's own origin is refused", async () => {
+    const { app, databaseAdapter } = createMinimalHonoApp();
+    const session = await setupFreshInstallSession(app, databaseAdapter);
+
+    const foreign = await app.fetch(
+      putRequest(
+        session,
+        { webPublicUrl: "https://attacker.example" },
+        session.orgId
+      )
+    );
+
+    expect(foreign.status).toBe(400);
+    expect(await readSavedBaseUrl(app, session)).toBeNull();
+
+    // The origin the request was forwarded to is the deployment's own.
+    const forwarded = await app.fetch(
+      putRequest(
+        session,
+        { webPublicUrl: "https://nakama.example.com" },
+        session.orgId,
+        // No X-Forwarded-Proto: the check compares hosts, and the header would
+        // make the server look for the `__Host-` cookie this http session
+        // does not hold.
+        { "X-Forwarded-Host": "nakama.example.com" }
+      )
+    );
+
+    expect(forwarded.status).toBe(200);
+    expect(await readSavedBaseUrl(app, session)).toBe(
+      "https://nakama.example.com"
+    );
+  });
+
+  test("an org admin cannot rewrite the install-wide callback base", async () => {
+    const { app, authService, databaseAdapter } = createMinimalHonoApp();
+    await seedOrgAdmin(databaseAdapter, {
+      authService,
+      email: "acme-admin@example.com",
+      orgId: "org_acme",
+      userId: "user_acme_admin",
+    });
+
+    const adminSession = await loginUserSession(
+      app,
+      "acme-admin@example.com",
+      "password123",
+      "org_acme"
+    );
+
+    const toAttacker = await app.fetch(
+      putRequest(
+        adminSession,
+        { webPublicUrl: "https://attacker.example" },
+        "org_acme"
+      )
+    );
+
+    expect(toAttacker.status).toBe(403);
+
+    // The origin allowlist is not the boundary: a value the deployment would
+    // happily store is still refused for an org admin.
+    const toOwnOrigin = await app.fetch(
+      putRequest(
+        adminSession,
+        { webPublicUrl: "http://localhost:4310" },
+        "org_acme"
+      )
+    );
+
+    expect(toOwnOrigin.status).toBe(403);
+
+    // The base an OAuth callback is built from still points at the deployment
+    // rather than the attacker's host, and nothing was persisted.
+    expect(
+      resolveComposioCallbackBaseUrl({
+        request: new Request("http://localhost:4310/v1/composio/callback"),
+      })
+    ).toBe("http://localhost:4310");
+
+    const platformSession = await loginPlatformAdminSession(
+      app,
+      authService,
+      databaseAdapter
+    );
+
+    expect(await readSavedBaseUrl(app, platformSession, "org_acme")).toBeNull();
+    expect(
+      (
+        await app.fetch(
+          new Request(API_URL, {
+            headers: adminSession.headers({}, "org_acme"),
+          })
+        )
+      ).status
+    ).toBe(403);
+  });
+
+  test("first-run setup keeps a base provisioned in the config file when a proxy hides the public host", async () => {
+    await withTestEnv(
+      { NAKAMA_PUBLIC_URL: undefined, NAKAMA_WEB_PUBLIC_URL: undefined },
+      async () => {
+        await saveUserWebPublicUrl("https://nakama.example.com");
+        const { app } = createMinimalHonoApp();
+
+        const setup = (webPublicUrl: string) =>
+          app.fetch(
+            new Request("http://nakama-internal:4310/v1/auth/setup", {
+              body: JSON.stringify({ ...buildSetupAuthBody(), webPublicUrl }),
+              headers: { "Content-Type": "application/json" },
+              method: "POST",
+            })
+          );
+
+        expect((await setup("https://attacker.example")).status).toBe(400);
+        expect((await setup("https://nakama.example.com")).status).toBe(201);
+        expect(await loadUserWebPublicUrl()).toBe("https://nakama.example.com");
       }
-      await rm(configDir, { recursive: true, force: true });
-    }
+    );
   });
 });

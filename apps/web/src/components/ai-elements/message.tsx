@@ -1,16 +1,49 @@
 "use client";
 
-import { ExternalLinkSafetyModal } from "@/components/ai-elements/external-link-safety-modal";
-import { MarkdownA } from "@/components/ai-elements/markdown-a";
-import { cn } from "@/lib/utils";
-import { useTheme } from "@/context/use-theme";
+import { cn } from "@nakama/ui/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
-import { mermaid } from "@streamdown/mermaid";
-import type { UIMessage } from "ai";
-import { memo, type ComponentProps, type HTMLAttributes } from "react";
-import { Streamdown, type Components, type LinkSafetyModalProps } from "streamdown";
+import { type ComponentProps, type HTMLAttributes, memo } from "react";
+import {
+  type Components,
+  defaultUrlTransform,
+  type LinkSafetyModalProps,
+  Streamdown,
+  type UrlTransform,
+} from "streamdown";
+import { ExternalLinkSafetyModal } from "@/components/ai-elements/external-link-safety-modal";
+import { createLazyMermaidPlugin } from "@/components/ai-elements/lazy-mermaid-plugin";
+import { MarkdownA } from "@/components/ai-elements/markdown-a";
+import { useTheme } from "@/context/use-theme";
+import type { UIMessage } from "@/lib/ai-ui-types";
+
+const transformChatUrl: UrlTransform = (url, key, node) => {
+  const safeUrl = defaultUrlTransform(url, key, node);
+
+  if (!safeUrl || key !== "src" || node.tagName !== "img") {
+    return safeUrl;
+  }
+
+  try {
+    const resolved = new URL(safeUrl, window.location.origin);
+
+    if (!["https:", "http:", "data:", "blob:"].includes(resolved.protocol)) {
+      return "";
+    }
+
+    if (
+      resolved.origin !== window.location.origin &&
+      (resolved.protocol === "https:" || resolved.protocol === "http:")
+    ) {
+      return `/v1/chat/images/proxy?url=${encodeURIComponent(resolved.href)}`;
+    }
+  } catch {
+    return "";
+  }
+
+  return safeUrl;
+};
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -36,7 +69,9 @@ export const MessageContent = ({
 }: MessageContentProps) => (
   <div
     className={cn(
-      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 overflow-hidden text-sm leading-[1.55] tracking-[0.01em]",
+      // Avoid overflow-hidden here: it can let flex shrink message rows below
+      // content height and clip bubbles.
+      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 break-words text-sm leading-[1.55] tracking-[0.01em]",
       "group-[.is-user]:ml-auto group-[.is-user]:rounded-lg group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground",
       "group-[.is-assistant]:text-foreground",
       className
@@ -49,7 +84,11 @@ export const MessageContent = ({
 
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
-const streamdownPlugins = { cjk, code, math, mermaid };
+const lazyMermaidPlugin = createLazyMermaidPlugin(
+  () => import("@streamdown/mermaid")
+);
+
+const streamdownPlugins = { cjk, code, math, mermaid: lazyMermaidPlugin };
 
 function renderExternalLinkSafetyModal(props: LinkSafetyModalProps) {
   return <ExternalLinkSafetyModal {...props} />;
@@ -71,38 +110,49 @@ const MessageResponseBody = memo(
   ({
     className,
     lineNumbers = false,
-    controls = { code: { copy: true, download: false } },
+    controls = { code: { copy: true, download: false }, table: false },
     shikiTheme,
     linkSafety: linkSafetyOverride,
     components: userComponents,
+    plugins: pluginsOverride,
     ...props
   }: MessageResponseProps) => (
     <Streamdown
       className={cn(
         "chat-markdown size-full text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-        className,
+        className
       )}
       components={mergeMarkdownComponents(userComponents)}
       controls={controls}
       lineNumbers={lineNumbers}
       linkSafety={linkSafetyOverride ?? linkSafety}
-      plugins={streamdownPlugins}
+      plugins={pluginsOverride ?? streamdownPlugins}
       shikiTheme={shikiTheme}
+      urlTransform={transformChatUrl}
       {...props}
     />
   ),
-  (prevProps, nextProps) =>
+  messageResponseBodyPropsEqual
+);
+
+function messageResponseBodyPropsEqual(
+  prevProps: MessageResponseProps,
+  nextProps: MessageResponseProps
+): boolean {
+  return (
     prevProps.children === nextProps.children &&
-    nextProps.isAnimating === nextProps.isAnimating &&
+    prevProps.isAnimating === nextProps.isAnimating &&
     prevProps.shikiTheme === nextProps.shikiTheme &&
     prevProps.linkSafety === nextProps.linkSafety &&
-    prevProps.components === nextProps.components,
-);
+    prevProps.components === nextProps.components
+  );
+}
 
 MessageResponseBody.displayName = "MessageResponseBody";
 
 export function MessageResponse(props: MessageResponseProps) {
   const { resolvedTheme } = useTheme();
+
   const shikiTheme =
     props.shikiTheme ??
     (resolvedTheme === "dark"

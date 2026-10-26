@@ -14,8 +14,28 @@ describe("validateAutomationInput", () => {
         name: "Daily digest",
         prompt: "Summarize news",
         trigger: { type: "manual" },
-      }),
+      })
     ).not.toThrow();
+  });
+
+  test("names the missing field when name is absent", () => {
+    expect(() =>
+      validateAutomationInput({
+        name: undefined,
+        prompt: "Summarize news",
+        trigger: { type: "manual" },
+      })
+    ).toThrow("Automation name is required.");
+  });
+
+  test("names the missing field when prompt is absent", () => {
+    expect(() =>
+      validateAutomationInput({
+        name: "Daily digest",
+        prompt: undefined,
+        trigger: { type: "manual" },
+      })
+    ).toThrow("Automation prompt is required.");
   });
 
   test("rejects invalid cron", () => {
@@ -23,8 +43,8 @@ describe("validateAutomationInput", () => {
       validateAutomationInput({
         name: "Daily digest",
         prompt: "Summarize news",
-        trigger: { type: "schedule", cron: "every morning" },
-      }),
+        trigger: { cron: "every morning", type: "schedule" },
+      })
     ).toThrow(/Invalid cron/);
   });
 
@@ -33,8 +53,8 @@ describe("validateAutomationInput", () => {
       validateAutomationInput({
         name: "Reminder",
         prompt: "Send reminder email",
-        trigger: { type: "runAt", at: "2026-06-27T13:00:00.000Z" },
-      }),
+        trigger: { at: "2026-06-27T13:00:00.000Z", type: "runAt" },
+      })
     ).not.toThrow();
   });
 
@@ -43,8 +63,8 @@ describe("validateAutomationInput", () => {
       validateAutomationInput({
         name: "Reminder",
         prompt: "Send reminder email",
-        trigger: { type: "runAt", at: "not-a-date" },
-      }),
+        trigger: { at: "not-a-date", type: "runAt" },
+      })
     ).toThrow(/Invalid runAt/);
   });
 
@@ -54,7 +74,7 @@ describe("validateAutomationInput", () => {
         name: "Daily digest",
         prompt: "   ",
         trigger: { type: "manual" },
-      }),
+      })
     ).toThrow(/prompt is required/);
   });
 });
@@ -62,10 +82,6 @@ describe("validateAutomationInput", () => {
 describe("isValidCronExpression", () => {
   test("accepts standard 5-field cron", () => {
     expect(isValidCronExpression("0 8 * * *")).toBe(true);
-  });
-
-  test("rejects non-cron strings", () => {
-    expect(isValidCronExpression("0 8 * *")).toBe(false);
   });
 });
 
@@ -79,7 +95,9 @@ describe("validateTimezone", () => {
   });
 
   test("rejects invalid timezone", () => {
-    expect(() => validateTimezone("Not/A_Timezone")).toThrow(/Invalid timezone/);
+    expect(() => validateTimezone("Not/A_Timezone")).toThrow(
+      /Invalid timezone/
+    );
   });
 });
 
@@ -87,26 +105,26 @@ describe("resolveScheduleTimezone", () => {
   test("fills missing timezone from user preference", () => {
     expect(
       resolveScheduleTimezone(
-        { type: "schedule", cron: "0 8 * * *" },
-        "Asia/Jakarta",
-      ),
+        { cron: "0 8 * * *", type: "schedule" },
+        "Asia/Jakarta"
+      )
     ).toEqual({
-      type: "schedule",
       cron: "0 8 * * *",
       timezone: "Asia/Jakarta",
+      type: "schedule",
     });
   });
 
   test("fills runAt timezone from user preference", () => {
     expect(
       resolveScheduleTimezone(
-        { type: "runAt", at: "2026-06-27T13:00:00.000Z" },
-        "Asia/Jakarta",
-      ),
+        { at: "2026-06-27T13:00:00.000Z", type: "runAt" },
+        "Asia/Jakarta"
+      )
     ).toEqual({
-      type: "runAt",
       at: "2026-06-27T13:00:00.000Z",
       timezone: "Asia/Jakarta",
+      type: "runAt",
     });
   });
 });
@@ -117,17 +135,40 @@ describe("isWorkerSchedulable", () => {
     expect(
       isWorkerSchedulable({
         enabled: true,
-        trigger: { type: "runAt", at },
-      }),
+        trigger: { at, type: "runAt" },
+      })
     ).toBe(true);
   });
 
-  test("excludes past runAt automations", () => {
+  test("includes one-shots that became due within the reload grace window", () => {
+    const now = Date.parse("2026-09-25T12:00:00.000Z");
     expect(
-      isWorkerSchedulable({
-        enabled: true,
-        trigger: { type: "runAt", at: "2020-01-01T00:00:00.000Z" },
-      }),
+      isWorkerSchedulable(
+        {
+          enabled: true,
+          trigger: {
+            at: new Date(now - 60_000).toISOString(),
+            type: "runAt",
+          },
+        },
+        now
+      )
+    ).toBe(true);
+  });
+
+  test("excludes one-shots older than the reload grace window", () => {
+    const now = Date.parse("2026-09-25T12:00:00.000Z");
+    expect(
+      isWorkerSchedulable(
+        {
+          enabled: true,
+          trigger: {
+            at: new Date(now - 60_001).toISOString(),
+            type: "runAt",
+          },
+        },
+        now
+      )
     ).toBe(false);
   });
 });

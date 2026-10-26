@@ -1,58 +1,41 @@
 import type { ImageAttachment, SendMessageInput } from "@nakama/core";
 import { splitInputDisplayLines } from "./prompt-display";
+import { visibleLength } from "./text-measure";
 
 export interface PendingMessage {
-  line: string;
-  images?: ImageAttachment[];
-  sendInput: SendMessageInput;
   echoed?: boolean;
+  images?: ImageAttachment[];
+  line: string;
+  sendInput: SendMessageInput;
 }
 
 const PENDING_PREFIX = "⏳ pending: ";
+
 const MAX_PENDING_DISPLAY_LINES = 6;
 
-export class MessageQueue {
-  private queue: PendingMessage[] = [];
-
-  enqueue(message: PendingMessage): void {
-    this.queue.push(message);
-  }
-
-  dequeue(): PendingMessage | undefined {
-    return this.queue.shift();
-  }
-
-  peekAll(): PendingMessage[] {
-    return [...this.queue];
-  }
-
-  isEmpty(): boolean {
-    return this.queue.length === 0;
-  }
-
-  clear(): void {
-    this.queue = [];
-  }
-}
-
-export function formatPendingSummary(message: PendingMessage): string {
+function formatPendingSummary(message: PendingMessage): string {
   const text = message.line.trim() || (message.images?.length ? "[image]" : "");
+
   return text.replace(/\s+/g, " ");
 }
 
 export function formatPendingDisplayLines(
   messages: PendingMessage[],
   width: number,
-  maxLines = MAX_PENDING_DISPLAY_LINES,
+  maxLines = MAX_PENDING_DISPLAY_LINES
 ): string[] {
   if (messages.length === 0) {
     return [];
   }
 
   const lines: string[] = [];
-  const prefixLength = PENDING_PREFIX.length;
+  const prefixLength = visibleLength(PENDING_PREFIX);
 
-  for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+  for (
+    let messageIndex = 0;
+    messageIndex < messages.length;
+    messageIndex += 1
+  ) {
     const message = messages[messageIndex];
     const summary = formatPendingSummary(message);
     const wrapped = splitInputDisplayLines(summary, prefixLength, width);
@@ -62,7 +45,7 @@ export function formatPendingDisplayLines(
       lines.push(
         index === 0
           ? `${PENDING_PREFIX}${segment}`
-          : `${" ".repeat(prefixLength)}${segment}`,
+          : `${" ".repeat(prefixLength)}${segment}`
       );
 
       if (lines.length >= maxLines) {
@@ -78,4 +61,24 @@ export function formatPendingDisplayLines(
   }
 
   return lines;
+}
+
+/**
+ * Serialize async work so each task runs after the prior one settles.
+ * Prior rejection does not block the next task.
+ */
+export function createSerializedQueue() {
+  let tail: Promise<void> = Promise.resolve();
+
+  return {
+    enqueue(task: () => Promise<void>): Promise<void> {
+      const run = tail.then(task, task);
+      tail = run.then(
+        () => undefined,
+        () => undefined
+      );
+
+      return run;
+    },
+  };
 }

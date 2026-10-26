@@ -1,11 +1,23 @@
-import { LOCAL_CLIENT_EMAIL, LOCAL_CLIENT_USER_ID } from "@nakama/core/local-auth";
-import bcrypt from "bcryptjs";
+import {
+  LOCAL_CLIENT_EMAIL,
+  LOCAL_CLIENT_USER_ID,
+} from "@nakama/core/local-auth";
 import type { DatabaseAdapter } from "./types";
 
 const SALT_ROUNDS = 10;
+
 const PLACEHOLDER_HASH = "unused";
 
-export async function ensureLocalClientAccess(db: DatabaseAdapter): Promise<void> {
+async function hashPassword(password: string): Promise<string> {
+  return Bun.password.hash(password, {
+    algorithm: "bcrypt",
+    cost: SALT_ROUNDS,
+  });
+}
+
+export async function ensureLocalClientAccess(
+  db: DatabaseAdapter
+): Promise<void> {
   const now = new Date().toISOString();
   let user = await db.getUserByEmail(LOCAL_CLIENT_EMAIL);
 
@@ -15,18 +27,18 @@ export async function ensureLocalClientAccess(db: DatabaseAdapter): Promise<void
 
   if (!user) {
     await db.createUser({
-      id: LOCAL_CLIENT_USER_ID,
-      email: LOCAL_CLIENT_EMAIL,
-      passwordHash: await bcrypt.hash(generateRandomPassword(), SALT_ROUNDS),
       createdAt: now,
+      email: LOCAL_CLIENT_EMAIL,
+      id: LOCAL_CLIENT_USER_ID,
+      passwordHash: await hashPassword(generateRandomPassword()),
       updatedAt: now,
     });
     user = await db.getUserByEmail(LOCAL_CLIENT_EMAIL);
   } else if (user.passwordHash === PLACEHOLDER_HASH) {
     await db.updateUserPassword(
       user.id,
-      await bcrypt.hash(generateRandomPassword(), SALT_ROUNDS),
-      now,
+      await hashPassword(generateRandomPassword()),
+      now
     );
   }
 
@@ -36,15 +48,16 @@ export async function ensureLocalClientAccess(db: DatabaseAdapter): Promise<void
 
   for (const org of await db.listOrganizations()) {
     const member = await db.getOrgMember(org.id, user.id);
+
     if (member) {
       continue;
     }
 
     await db.upsertOrgMember({
-      orgId: org.id,
-      userId: user.id,
-      role: "admin",
       createdAt: now,
+      orgId: org.id,
+      role: "admin",
+      userId: user.id,
     });
   }
 }

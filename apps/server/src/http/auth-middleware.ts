@@ -1,49 +1,88 @@
+import { NakamaApiError } from "@nakama/core";
 import type { MiddlewareHandler } from "hono";
-import type { AppEnv } from "./types";
 import type { ServerOptions } from "./context";
+import { isPublicRouteRequest } from "./public-routes";
 import {
   assertBrowserCsrf,
   authenticateRequest,
+  errorResponse,
+  isPendingBrowserMfa,
+  isPendingMfaAllowedRequest,
 } from "./shared";
-import { isPublicRouteRequest } from "./public-routes";
+import type { AppEnv } from "./types";
 
-export function createAuthMiddleware(options: ServerOptions): MiddlewareHandler<AppEnv> {
+export function createAuthMiddleware(
+  options: ServerOptions
+): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const { authService, databaseAdapter } = options;
 
     if (!authService || isPublicRouteRequest(c.req.method, c.req.path)) {
       await next();
+
       return;
     }
 
     if (!databaseAdapter) {
-      c.res = Response.json({ error: "Authentication not configured" }, { status: 500 });
+      c.res = Response.json(
+        { error: "Authentication not configured" },
+        { status: 500 }
+      );
+
       return;
     }
 
-    const auth = await authenticateRequest(c.req.raw, authService, databaseAdapter);
+    const auth = await authenticateRequest(
+      c.req.raw,
+      authService,
+      databaseAdapter
+    );
+
     if (!auth) {
-      c.res = Response.json({ error: "Authentication required" }, { status: 401 });
+      c.res = Response.json(
+        { error: "Authentication required" },
+        { status: 401 }
+      );
+
       return;
     }
 
     try {
       assertBrowserCsrf(c.req.raw, auth, authService);
     } catch (error) {
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "message" in error &&
-        "status" in error
-      ) {
+      if (error instanceof NakamaApiError) {
         c.res = Response.json(
-          { error: String(error.message) },
-          { status: Number(error.status) },
+          { error: error.message },
+          { status: error.status }
         );
+
         return;
       }
 
       throw error;
+    }
+
+    if (
+      (await isPendingBrowserMfa(auth, databaseAdapter)) &&
+      !isPendingMfaAllowedRequest(c.req.method, c.req.path)
+    ) {
+      c.res = errorResponse(
+        "Complete MFA enrollment before accessing this resource.",
+        403
+      );
+
+      return;
+    }
+
+    if (
+      c.req.header("X-Nakama-App-User-Id") !== undefined &&
+      (c.req.path.startsWith("/v1/sessions") ||
+        c.req.path.startsWith("/v1/attachments/") ||
+        /^\/v1\/profiles\/[^/]+\/artifacts(?:\/|$)/.test(c.req.path))
+    ) {
+      c.res = errorResponse("App-user scope is no longer supported.", 400);
+
+      return;
     }
 
     c.set("auth", auth);

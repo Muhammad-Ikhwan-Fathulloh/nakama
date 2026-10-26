@@ -1,16 +1,27 @@
-import { mkdir, writeFile, mkdtemp, rm } from "node:fs/promises";
-import * as os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { spyOn } from "bun:test";
-import type { ChatMessage } from "@nakama/core/contract";
-import type { AgentTodo, UserOrgSummary } from "@nakama/core/contract";
+import type {
+  NakamaClient,
+  SendMessageArg,
+  StreamHandlers,
+} from "@nakama/client";
 import {
   assertBridgeClientMethods,
   parseListProfilesResponse,
   parseListUserOrgsResponse,
 } from "@nakama/core/bridge-api";
-import { ChannelOrgStore } from "@nakama/core/channel-org";
-import type { StreamHandlers, NakamaClient } from "@nakama/client";
+import type { ChannelOrgStore } from "@nakama/core/channel-org";
+import {
+  createDefaultTestOrgs,
+  createMultiTestOrgs,
+  createTestOrgStore as createSharedTestOrgStore,
+  withTempHome as withSharedTempHome,
+} from "@nakama/core/channel-test-helpers";
+import type {
+  AgentTodo,
+  ChatMessage,
+  UserOrgSummary,
+} from "@nakama/core/contract";
 import type { Context } from "grammy";
 import type { TelegramBotInfo } from "./group-message";
 
@@ -18,10 +29,10 @@ export const TEST_BOT_INFO: TelegramBotInfo = { id: 999, username: "mybot" };
 
 export interface MockMessageContext {
   ctx: Context;
-  replies: string[];
-  replyOptions: unknown[];
+  editOptions: Array<Parameters<Context["api"]["editMessageText"]>[3]>;
   edits: Array<{ chatId: number; messageId: number; text: string }>;
-  editOptions: unknown[];
+  replies: string[];
+  replyOptions: Array<Parameters<Context["reply"]>[1]>;
 }
 
 export function createMessageContext(options: {
@@ -37,10 +48,14 @@ export function createMessageContext(options: {
   messageThreadId?: number;
 }): MockMessageContext {
   const replies: string[] = [];
-  const replyOptions: unknown[] = [];
+  const replyOptions: Array<Parameters<Context["reply"]>[1]> = [];
   const edits: Array<{ chatId: number; messageId: number; text: string }> = [];
-  const editOptions: unknown[] = [];
+
+  const editOptions: Array<Parameters<Context["api"]["editMessageText"]>[3]> =
+    [];
+
   let nextMessageId = 1;
+
   const replyFrom =
     options.replyToBot || options.replyToBotId !== undefined
       ? {
@@ -48,35 +63,21 @@ export function createMessageContext(options: {
           is_bot: true as const,
         }
       : undefined;
-  const ctx = {
-    chat: options.chatType
-      ? { id: options.chatId ?? -100, type: options.chatType }
-      : { id: options.chatId ?? options.userId ?? 1, type: "private" as const },
-    from: options.userId !== undefined ? { id: options.userId } : undefined,
-    message: {
-      ...(options.text !== undefined ? { text: options.text } : {}),
-      ...(options.entities ? { entities: options.entities } : {}),
-      ...(options.messageThreadId !== undefined
-        ? { message_thread_id: options.messageThreadId }
-        : {}),
-      ...(replyFrom ? { reply_to_message: { from: replyFrom } } : {}),
-    },
-    reply: async (text: string, replyOptionsArg?: unknown) => {
-      if (isHtmlParseMode(replyOptionsArg) && options.failRichReply) {
-        throw new Error("Rich reply failed");
-      }
 
-      replies.push(text);
-      replyOptions.push(replyOptionsArg);
-      return { message_id: nextMessageId++ };
-    },
-    replyWithChatAction: async () => {},
+  const message = {
+    entities: options.entities,
+    message_thread_id: options.messageThreadId,
+    reply_to_message: replyFrom ? { from: replyFrom } : undefined,
+    text: options.text,
+  };
+
+  const ctx = {
     api: {
       editMessageText: async (
         chatId: number,
         messageId: number,
         text: string,
-        editOptionsArg?: unknown,
+        editOptionsArg?: Parameters<Context["api"]["editMessageText"]>[3]
       ) => {
         if (isHtmlParseMode(editOptionsArg) && options.failRichEdit) {
           throw new Error("Rich edit failed");
@@ -86,21 +87,44 @@ export function createMessageContext(options: {
         editOptions.push(editOptionsArg);
       },
     },
-  } as unknown as Context;
+    chat: options.chatType
+      ? { id: options.chatId ?? -100, type: options.chatType }
+      : { id: options.chatId ?? options.userId ?? 1, type: "private" as const },
+    from: options.userId === undefined ? undefined : { id: options.userId },
+    message,
+    reply: async (
+      text: string,
+      replyOptionsArg?: Parameters<Context["reply"]>[1]
+    ) => {
+      if (isHtmlParseMode(replyOptionsArg) && options.failRichReply) {
+        throw new Error("Rich reply failed");
+      }
 
-  return { ctx, replies, replyOptions, edits, editOptions };
+      replies.push(text);
+      replyOptions.push(replyOptionsArg);
+
+      return { message_id: nextMessageId++ };
+    },
+    replyWithChatAction: async () => {},
+  };
+
+  // SAFETY: This test context implements only fields exercised by the channel tests.
+  const typedContext = ctx as Context;
+
+  return { ctx: typedContext, editOptions, edits, replies, replyOptions };
 }
 
-function isHtmlParseMode(options: unknown): options is { parse_mode: "HTML" } {
+function isHtmlParseMode(
+  options:
+    | Parameters<Context["reply"]>[1]
+    | Parameters<Context["api"]["editMessageText"]>[3]
+): boolean {
   return Boolean(
-    options &&
-      typeof options === "object" &&
-      "parse_mode" in options &&
-      options.parse_mode === "HTML",
+    options && "parse_mode" in options && options.parse_mode === "HTML"
   );
 }
 
-export interface MockStreamControl {
+interface MockStreamControl {
   complete(reply?: string): void;
   fail(error?: Error): void;
   readonly signal: AbortSignal | undefined;
@@ -114,42 +138,6 @@ type StreamStep =
   | { type: "tool_end" }
   | { type: "error"; message: string }
   | { type: "resolve"; reply?: string };
-
-export function createMultiTestOrgs(): UserOrgSummary[] {
-  const now = new Date().toISOString();
-  return [
-    {
-      id: "org_a",
-      name: "Acme",
-      slug: "acme",
-      role: "admin",
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: "org_b",
-      name: "Beta",
-      slug: "beta",
-      role: "member",
-      createdAt: now,
-      updatedAt: now,
-    },
-  ];
-}
-
-export function createDefaultTestOrgs(): UserOrgSummary[] {
-  const now = new Date().toISOString();
-  return [
-    {
-      id: "org_test",
-      name: "Test Org",
-      slug: "test-org",
-      role: "admin",
-      createdAt: now,
-      updatedAt: now,
-    },
-  ];
-}
 
 export function createMockClient(
   options: {
@@ -176,20 +164,24 @@ export function createMockClient(
       }>
     >;
     messages?: ChatMessage[];
-  } = {},
+  } = {}
 ) {
   const calls = {
-    createSession: 0,
-    sendStream: 0,
     compact: 0,
+    createChatSession: 0,
+    createSession: 0,
+    getMessages: 0,
     listProfiles: 0,
     listUserOrgs: 0,
-    setOrgId: 0,
-    transcribeAudio: 0,
     publishProfileArtifactShare: 0,
     readProfileArtifactContent: 0,
+    sendStream: 0,
+    setOrgId: 0,
+    transcribeAudio: 0,
   };
+
   const orgIds: string[] = [];
+  const listProfilesOrgIds: Array<string | null> = [];
   let lastCreateSessionProfileId: string | undefined;
   let lastStreamInput: unknown;
 
@@ -197,9 +189,9 @@ export function createMockClient(
   const streamControls: MockStreamControl[] = [];
 
   const sendStream = async (
-    input: unknown,
-    handlers: unknown,
-    streamOptions?: { signal?: AbortSignal },
+    input: SendMessageArg,
+    handlers: StreamHandlers,
+    streamOptions?: { signal?: AbortSignal }
   ) => {
     calls.sendStream += 1;
     lastStreamInput = input;
@@ -208,19 +200,17 @@ export function createMockClient(
       return "Agent reply";
     }
 
-    const streamHandlers = handlers as StreamHandlers;
+    const streamHandlers = handlers;
 
     return new Promise<string>((resolve, reject) => {
       let settled = false;
 
       streamControl = {
-        get signal() {
-          return streamOptions?.signal;
-        },
         complete(reply = "Agent reply") {
           if (settled) {
             return;
           }
+
           settled = true;
           resolve(reply);
         },
@@ -228,8 +218,12 @@ export function createMockClient(
           if (settled) {
             return;
           }
+
           settled = true;
           reject(error);
+        },
+        get signal() {
+          return streamOptions?.signal;
         },
       };
       streamControls.push(streamControl);
@@ -240,10 +234,11 @@ export function createMockClient(
           if (settled) {
             return;
           }
+
           settled = true;
           reject(new DOMException("Aborted", "AbortError"));
         },
-        { once: true },
+        { once: true }
       );
 
       queueMicrotask(() => {
@@ -264,16 +259,16 @@ export function createMockClient(
               break;
             case "tool_start":
               streamHandlers.onToolStart?.({
-                toolCallId: "tool_call_1",
-                tool: "todo_write",
                 input: {},
+                tool: "todo_write",
+                toolCallId: "tool_call_1",
               });
               break;
             case "tool_end":
               streamHandlers.onToolEnd?.({
-                toolCallId: "tool_call_1",
-                tool: "todo_write",
                 result: {},
+                tool: "todo_write",
+                toolCallId: "tool_call_1",
               });
               break;
             case "error":
@@ -285,7 +280,11 @@ export function createMockClient(
           }
         }
 
-        if (!settled && options.steps?.length && options.autoComplete !== false) {
+        if (
+          !settled &&
+          options.steps?.length &&
+          options.autoComplete !== false
+        ) {
           streamControl?.complete("Agent reply");
         }
       });
@@ -293,21 +292,26 @@ export function createMockClient(
   };
 
   const session = {
-    id: "session_test",
-    sendStream,
+    clear: async () => {},
     compact: async () => {
       calls.compact += 1;
+
       return {
         action: "summarized" as const,
-        messagesBefore: 10,
         messagesAfter: 4,
+        messagesBefore: 10,
       };
     },
-    getMessages: async () => options.messages ?? [],
-    clear: async () => {},
-    send: async () => "ok",
-    purge: async () => {},
     createAutomation: async () => ({}),
+    getMessages: async () => {
+      calls.getMessages += 1;
+
+      return options.messages ?? [];
+    },
+    id: "session_test",
+    purge: async () => {},
+    send: async () => "ok",
+    sendStream,
   };
 
   const profiles = options.profiles ?? [{ id: "default", model: null }];
@@ -315,78 +319,98 @@ export function createMockClient(
   let activeOrgId: string | null = orgs[0]?.id ?? null;
 
   const client = {
+    createChatSession: () => {
+      calls.createChatSession += 1;
+
+      return session;
+    },
     createSession: async (_channel: string, input?: { profileId?: string }) => {
       calls.createSession += 1;
       lastCreateSessionProfileId = input?.profileId;
+
       return session;
     },
-    createChatSession: () => session,
-    health: async () => ({ ok: true, providerConfigured: options.providerConfigured ?? false }),
-    listProfiles: async () => {
+    getModels: async () => ({
+      currentProviderId: null,
+      displayName: null,
+      models: [],
+      provider: null,
+      providers: [],
+    }),
+    health: async () => ({
+      ok: true,
+      providerConfigured: options.providerConfigured ?? false,
+    }),
+    listProfiles: async (orgId?: string) => {
       calls.listProfiles += 1;
+      listProfilesOrgIds.push(orgId ?? null);
+      const scopeOrgId = orgId ?? activeOrgId;
+
       const scopedProfiles =
-        (activeOrgId ? options.profilesByOrgId?.[activeOrgId] : undefined) ?? profiles;
+        (scopeOrgId ? options.profilesByOrgId?.[scopeOrgId] : undefined) ??
+        profiles;
 
       return parseListProfilesResponse({
         profiles: scopedProfiles.map((profile) => ({
           id: profile.id,
-          name: profile.name ?? profile.id,
-          model: profile.model ?? null,
           isDefault: profile.isDefault ?? false,
           isSuper: profile.isSuper ?? false,
+          model: profile.model ?? null,
+          name: profile.name ?? profile.id,
         })),
       });
     },
     listUserOrgs: async () => {
       calls.listUserOrgs += 1;
+
       return parseListUserOrgsResponse({ orgs });
+    },
+    publishProfileArtifactShare: async () => {
+      calls.publishProfileArtifactShare += 1;
+
+      return {
+        id: "share_test",
+        refreshed: false,
+        sharePath: "/s/tok_test",
+        shareUrl: "https://app.example/s/tok_test",
+        token: "tok_test",
+        webPublicUrlConfigured: true,
+      };
+    },
+    readProfileArtifactContent: async () => {
+      calls.readProfileArtifactContent += 1;
+
+      return {
+        contentType: "text/markdown",
+        data: new TextEncoder().encode("# Report").buffer,
+      };
     },
     setOrgId: (orgId: string | null) => {
       calls.setOrgId += 1;
       activeOrgId = orgId?.trim() || null;
       orgIds.push(orgId ?? "");
     },
-    getModels: async () => ({
-      provider: null,
-      currentProviderId: null,
-      providers: [],
-      models: [],
-      displayName: null,
-    }),
     transcribeAudio: async () => {
       calls.transcribeAudio += 1;
+
       return { text: "Transcribed voice message" };
     },
-    publishProfileArtifactShare: async () => {
-      calls.publishProfileArtifactShare += 1;
-      return {
-        id: "share_test",
-        token: "tok_test",
-        shareUrl: "https://app.example/s/tok_test",
-        sharePath: "/s/tok_test",
-        webPublicUrlConfigured: true,
-        refreshed: false,
-      };
-    },
-    readProfileArtifactContent: async () => {
-      calls.readProfileArtifactContent += 1;
-      return {
-        contentType: "text/markdown",
-        data: new TextEncoder().encode("# Report").buffer,
-      };
-    },
-  } as unknown as NakamaClient;
+  };
 
-  assertBridgeClientMethods(client);
+  // SAFETY: Tests call only the client methods supplied by this mock.
+  const typedClient = client as NakamaClient;
+
+  assertBridgeClientMethods(typedClient);
 
   return {
-    client,
     calls,
-    orgIds,
+    client: typedClient,
     getLastCreateSessionProfileId: () => lastCreateSessionProfileId,
     getLastStreamInput: () => lastStreamInput,
     getStreamControl: () => streamControl,
     getStreamControls: () => streamControls,
+    listProfilesOrgIds,
+    orgIds,
   };
 }
 
@@ -396,9 +420,11 @@ export async function writeTelegramConfigIni(
     botToken: string;
     profileId?: string;
     handshakeCode?: string | null;
+    /** Defaults to a live window so a fixture code can actually be used. */
+    handshakeExpiresAt?: string | null;
     pairedUserIds?: number[];
     allowedUserIds?: number[];
-  },
+  }
 ): Promise<void> {
   const dir = path.join(homeDir, ".nakama", "telegram");
   await mkdir(dir, { recursive: true });
@@ -413,6 +439,10 @@ export async function writeTelegramConfigIni(
     lines.push(`handshake_code=${config.handshakeCode}`);
   }
 
+  if (config.handshakeExpiresAt) {
+    lines.push(`handshake_expires_at=${config.handshakeExpiresAt}`);
+  }
+
   if (config.pairedUserIds?.length) {
     lines.push(`paired_user_ids=${config.pairedUserIds.join(",")}`);
   }
@@ -425,22 +455,14 @@ export async function writeTelegramConfigIni(
   await writeFile(path.join(dir, "config.ini"), lines.join("\n"), "utf8");
 }
 
+export { createMultiTestOrgs };
+
 export function createTestOrgStore(homeDir: string): ChannelOrgStore {
-  return new ChannelOrgStore(
-    path.join(homeDir, ".nakama", "telegram", "org-selection.json"),
-  );
+  return createSharedTestOrgStore(homeDir, "telegram");
 }
 
 export async function withTempHome<T>(
-  run: (homeDir: string) => Promise<T>,
+  run: (homeDir: string) => Promise<T>
 ): Promise<T> {
-  const homeDir = await mkdtemp(path.join(os.tmpdir(), "nakama-telegram-home-"));
-  const homedirSpy = spyOn(os, "homedir").mockReturnValue(homeDir);
-
-  try {
-    return await run(homeDir);
-  } finally {
-    homedirSpy.mockRestore();
-    await rm(homeDir, { recursive: true, force: true });
-  }
+  return withSharedTempHome("nakama-telegram-home-", run);
 }

@@ -1,115 +1,193 @@
-import { emptyObjectSchema, normalizeAutomationDelivery, type ToolContext, type ToolDefinition } from "@nakama/core";
+import {
+  emptyObjectSchema,
+  normalizeAutomationDelivery,
+  requireToolOrgMember,
+  type ToolContext,
+  type ToolDefinition,
+} from "@nakama/core";
+import { z } from "zod";
 import type { AutomationRunner } from "../services/automation-runner";
 import type { AutomationService } from "../services/automation-service";
 
+const AutomationTriggerSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("manual") }),
+  z.object({
+    cron: z.string().transform((cron) => cron.trim()),
+    timezone: z
+      .string()
+      .optional()
+      .transform((timezone) => timezone?.trim()),
+    type: z.literal("schedule"),
+  }),
+  z.object({
+    at: z.string().transform((at) => at.trim()),
+    timezone: z
+      .string()
+      .optional()
+      .transform((timezone) => timezone?.trim()),
+    type: z.literal("runAt"),
+  }),
+]);
+
+const AutomationInputSchema = z.object({
+  automationId: z.string().optional().catch(undefined),
+  delivery: z.unknown().optional(),
+  description: z.string().optional().catch(undefined),
+  limit: z.number().optional().catch(undefined),
+  name: z.string().optional().catch(undefined),
+  profileId: z.string().optional().catch(undefined),
+  prompt: z.string().optional().catch(undefined),
+  trigger: AutomationTriggerSchema.optional().catch(undefined),
+});
+
 export function createAutomationTools(
   automationService: AutomationService,
-  automationRunner: AutomationRunner,
+  automationRunner: AutomationRunner
 ): ToolDefinition[] {
   return [
     {
-      name: "create_automation",
       description:
-        "Create and save an automation that runs a prompt on a schedule, at a specific time once, or manually. When the user wants results sent to Telegram, WhatsApp, or email after each run, set delivery — the server sends automatically; put only the task in prompt.",
+        "Create and save an automation that runs a prompt on a schedule, at a specific time once, or manually. When the user wants results sent to Telegram, WhatsApp, email, or Discord after each run, set delivery — the server sends automatically; put only the task in prompt.",
+      name: "create_automation",
       parameters: {
-        type: "object",
+        additionalProperties: false,
         properties: {
-          name: { type: "string", description: "Short title for the automation." },
+          delivery: {
+            additionalProperties: true,
+            description:
+              'Optional. When the user wants run results sent somewhere: { "channel": "telegram" | "whatsapp" | "email" | "discord", "to": "user@example.com" (required for email), "channelId": "discord snowflake" (optional guild text channel; omit to DM paired Discord users), "notifyOn": "success" | "failure" | "both" }. Omit when the user only wants results saved.',
+            type: "object",
+          },
           description: {
-            type: "string",
             description: "One sentence summary of what the automation does.",
+            type: "string",
+          },
+          name: {
+            description: "Short title for the automation.",
+            type: "string",
+          },
+          profileId: {
+            description:
+              "Optional org profile id to run as. Omit to use the current chat profile. Super Nakama requires org admin or platform admin.",
+            type: "string",
           },
           prompt: {
-            type: "string",
             description:
               "The task prompt to execute when the automation runs. Describe the work only — do not include delivery instructions when delivery is set.",
+            type: "string",
           },
           trigger: {
-            type: "object",
+            additionalProperties: true,
             description:
               'Manual: { "type": "manual" }. Recurring: { "type": "schedule", "cron": "0 8 * * *", "timezone": "America/Los_Angeles" }. One-time: { "type": "runAt", "at": "2026-06-27T13:00:00.000Z", "timezone": "Asia/Jakarta" }.',
-            additionalProperties: true,
-          },
-          delivery: {
             type: "object",
-            description:
-              'Optional. When the user wants run results sent somewhere: { "channel": "telegram" | "whatsapp" | "email", "to": "user@example.com" (required for email), "notifyOn": "success" | "failure" | "both" }. Omit when the user only wants results saved.',
-            additionalProperties: true,
           },
         },
         required: ["name", "description", "prompt", "trigger"],
-        additionalProperties: false,
+        type: "object",
       },
       async run(input, context) {
-        const orgId = requireOrgId(context);
-        const name = readString(input, "name");
-        const description = readString(input, "description");
-        const prompt = readString(input, "prompt");
-        const trigger = readTrigger(input, "trigger");
-        const delivery = readDelivery(input);
+        const parsedInput = AutomationInputSchema.parse(input);
 
-        if (!name || !description || !prompt || !trigger) {
-          throw new Error("name, description, prompt, and trigger are required.");
+        requireToolOrgMember(context);
+        const orgId = requireOrgId(context);
+        const name = readString(parsedInput, "name");
+        const description = readString(parsedInput, "description");
+        const prompt = readString(parsedInput, "prompt");
+        const trigger = readTrigger(parsedInput.trigger);
+        const delivery = readDelivery(parsedInput);
+        const requestedProfileId = readString(parsedInput, "profileId")?.trim();
+
+        if (!(name && description && prompt && trigger)) {
+          throw new Error(
+            "name, description, prompt, and trigger are required."
+          );
         }
 
-        const profileId = context.profileId;
+        const profileId = requestedProfileId || context.profileId?.trim();
 
         if (!profileId) {
-          throw new Error("Automation must be created from an active chat session.");
+          throw new Error(
+            "Automation must be created from an active chat session."
+          );
+        }
+
+        const createInput: Parameters<AutomationService["create"]>[1] = {
+          description,
+          name,
+          prompt,
+          trigger,
+        };
+
+        if (delivery) {
+          createInput.delivery = delivery;
         }
 
         const automation = await automationService.create(
           orgId,
-          { name, description, prompt, trigger, ...(delivery ? { delivery } : {}) },
+          createInput,
           profileId,
+          {
+            isPlatformAdmin: context.isPlatformAdmin,
+            orgRole: context.orgRole,
+          }
         );
 
         return {
+          delivery: automation.delivery ?? null,
+          description: automation.description,
+          enabled: automation.enabled,
           id: automation.id,
           name: automation.name,
-          description: automation.description,
+          nextRunAt: automation.nextRunAt ?? null,
+          profileId: automation.profileId,
           prompt: automation.prompt,
           trigger: automation.trigger,
-          delivery: automation.delivery ?? null,
-          enabled: automation.enabled,
-          nextRunAt: automation.nextRunAt ?? null,
         };
       },
     },
     {
-      name: "list_automations",
       description: "List saved automations with their schedule and status.",
+      name: "list_automations",
       parameters: emptyObjectSchema(),
       async run(_input, context) {
         const orgId = requireOrgId(context);
         const { automations } = await automationService.listForOrg(orgId);
+
         return automations.map((automation) => ({
-          id: automation.id,
-          name: automation.name,
+          delivery: automation.delivery ?? null,
           description: automation.description,
+          enabled: automation.enabled,
+          id: automation.id,
+          lastRunAt: automation.lastRunAt ?? null,
+          name: automation.name,
+          nextRunAt: automation.nextRunAt ?? null,
+          profileId: automation.profileId,
           prompt: automation.prompt,
           trigger: automation.trigger,
-          delivery: automation.delivery ?? null,
-          enabled: automation.enabled,
-          nextRunAt: automation.nextRunAt ?? null,
-          lastRunAt: automation.lastRunAt ?? null,
         }));
       },
     },
     {
-      name: "delete_automation",
       description: "Delete a saved automation by id.",
+      name: "delete_automation",
       parameters: {
-        type: "object",
+        additionalProperties: false,
         properties: {
-          automationId: { type: "string", description: "Automation id to delete." },
+          automationId: {
+            description: "Automation id to delete.",
+            type: "string",
+          },
         },
         required: ["automationId"],
-        additionalProperties: false,
+        type: "object",
       },
       async run(input, context) {
+        const parsedInput = AutomationInputSchema.parse(input);
+
+        requireToolOrgMember(context);
         const orgId = requireOrgId(context);
-        const automationId = readString(input, "automationId");
+        const automationId = readString(parsedInput, "automationId");
 
         if (!automationId) {
           throw new Error("automationId is required.");
@@ -121,27 +199,31 @@ export function createAutomationTools(
           throw new Error("Automation not found.");
         }
 
-        return { deleted: true, automationId };
+        return { automationId, deleted: true };
       },
     },
     {
-      name: "run_automation",
       description:
         "Run a saved automation immediately when the user asks to trigger or test it from chat. Returns the run output or error.",
+      name: "run_automation",
       parameters: {
-        type: "object",
+        additionalProperties: false,
         properties: {
           automationId: {
+            description:
+              "Automation id to run (use list_automations to find it).",
             type: "string",
-            description: "Automation id to run (use list_automations to find it).",
           },
         },
         required: ["automationId"],
-        additionalProperties: false,
+        type: "object",
       },
       async run(input, context) {
+        const parsedInput = AutomationInputSchema.parse(input);
+
+        requireToolOrgMember(context);
         const orgId = requireOrgId(context);
-        const automationId = readString(input, "automationId");
+        const automationId = readString(parsedInput, "automationId");
 
         if (!automationId) {
           throw new Error("automationId is required.");
@@ -162,19 +244,19 @@ export function createAutomationTools(
         if (result.error) {
           return {
             automationId,
-            name: automation.name,
-            status: "failed" as const,
-            output: null,
             error: result.error,
+            name: automation.name,
+            output: null,
+            status: "failed" as const,
           };
         }
 
         return {
           automationId,
-          name: automation.name,
-          status: "completed" as const,
-          output: result.output ?? null,
           error: null,
+          name: automation.name,
+          output: result.output ?? null,
+          status: "completed" as const,
         };
       },
     },
@@ -182,24 +264,27 @@ export function createAutomationTools(
 }
 
 export function createAutomationRunHistoryTools(
-  automationService: AutomationService,
+  automationService: AutomationService
 ): ToolDefinition[] {
   return [
     {
-      name: "list_previous_automation_runs",
       description:
         "List recent previous runs for the currently running automation. Use this only when past outputs or failures would help complete the current automation run.",
+      name: "list_previous_automation_runs",
       parameters: {
-        type: "object",
+        additionalProperties: false,
         properties: {
           limit: {
+            description:
+              "Maximum number of previous runs to return. Defaults to 5, max 20.",
             type: "number",
-            description: "Maximum number of previous runs to return. Defaults to 5, max 20.",
           },
         },
-        additionalProperties: false,
+        type: "object",
       },
       async run(input, context) {
+        const parsedInput = AutomationInputSchema.parse(input);
+
         const orgId = requireOrgId(context);
         const automationId = context.automationId?.trim();
 
@@ -207,20 +292,25 @@ export function createAutomationRunHistoryTools(
           throw new Error("automationId is required.");
         }
 
-        const limit = readLimit(input);
+        const limit = readLimit(parsedInput.limit);
         const fetchLimit = context.automationRunId ? limit + 1 : limit;
-        const runs = await automationService.listRuns(automationId, orgId, fetchLimit);
+
+        const runs = await automationService.listRuns(
+          automationId,
+          orgId,
+          fetchLimit
+        );
 
         return runs
           .filter((run) => run.id !== context.automationRunId)
           .slice(0, limit)
           .map((run) => ({
-            id: run.id,
-            status: run.status,
-            startedAt: run.startedAt,
             completedAt: run.completedAt,
-            output: run.output,
             error: run.error,
+            id: run.id,
+            output: run.output,
+            startedAt: run.startedAt,
+            status: run.status,
           }));
       },
     },
@@ -237,79 +327,36 @@ function requireOrgId(context: ToolContext): string {
   return orgId;
 }
 
-function readString(input: unknown, key: string): string | null {
-  if (!input || typeof input !== "object") {
-    return null;
-  }
+function readString(
+  input: z.infer<typeof AutomationInputSchema>,
+  key: "automationId" | "description" | "name" | "profileId" | "prompt"
+): string | null {
+  const value = input[key];
 
-  const value = (input as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
+  return value?.trim() || null;
 }
 
-function readLimit(input: unknown): number {
-  const value =
-    input && typeof input === "object"
-      ? (input as Record<string, unknown>).limit
-      : undefined;
-  const limit = typeof value === "number" && Number.isFinite(value) ? value : 5;
+function readLimit(value: number | undefined): number {
+  const limit = value !== undefined && Number.isFinite(value) ? value : 5;
 
   return Math.min(20, Math.max(1, Math.trunc(limit)));
 }
 
 function readTrigger(
-  input: unknown,
-  key: string,
+  input: z.infer<typeof AutomationTriggerSchema> | undefined
 ):
   | { type: "manual" }
   | { type: "schedule"; cron: string; timezone?: string }
   | { type: "runAt"; at: string; timezone?: string }
   | null {
-  if (!input || typeof input !== "object") {
-    return null;
-  }
-
-  const value = (input as Record<string, unknown>)[key];
-
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const trigger = value as Record<string, unknown>;
-
-  if (trigger.type === "manual") {
-    return { type: "manual" };
-  }
-
-  if (trigger.type === "schedule" && typeof trigger.cron === "string") {
-    return {
-      type: "schedule",
-      cron: trigger.cron.trim(),
-      timezone:
-        typeof trigger.timezone === "string" ? trigger.timezone.trim() : undefined,
-    };
-  }
-
-  if (trigger.type === "runAt" && typeof trigger.at === "string") {
-    return {
-      type: "runAt",
-      at: trigger.at.trim(),
-      timezone:
-        typeof trigger.timezone === "string" ? trigger.timezone.trim() : undefined,
-    };
-  }
-
-  return null;
+  return input ?? null;
 }
 
-function readDelivery(input: unknown) {
-  if (!input || typeof input !== "object") {
-    return undefined;
-  }
-
-  const value = (input as Record<string, unknown>).delivery;
+function readDelivery(input: z.infer<typeof AutomationInputSchema>) {
+  const value = input.delivery;
 
   if (value === undefined || value === null) {
-    return undefined;
+    return;
   }
 
   return normalizeAutomationDelivery(value);

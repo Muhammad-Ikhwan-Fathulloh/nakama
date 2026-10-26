@@ -1,25 +1,80 @@
-import { mkdir, writeFile, mkdtemp, rm } from "node:fs/promises";
-import * as os from "node:os";
+import { describe, expect, test } from "bun:test";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { withTempHomedir } from "./testing/channel-config-fixtures";
 import {
-  generatePairingCode,
   isWhatsAppUserAuthorized,
   loadWhatsAppConfigFile,
   maskPhoneNumber,
-  normalizePairingCode,
-  regenerateWhatsAppPairingCode,
+  parseAllowedWhatsAppPhones,
   resetWhatsAppSessionForReconnect,
   resolveWhatsAppConfigFromSources,
   saveWhatsAppConfig,
   syncWhatsAppOwnerPairing,
 } from "./whatsapp-config";
+import {
+  createWhatsAppWorkerHeartbeat,
+  getWhatsAppWorkerStatus,
+} from "./whatsapp-worker";
+
+describe("organization isolation", () => {
+  test("isolates settings and reconnects between organizations", async () => {
+    await withTempHomedir("nakama-wa-orgs-", async () => {
+      await saveWhatsAppConfig({ profileId: "well-test" }, "org_a");
+      await saveWhatsAppConfig({ profileId: "finance" }, "org_b");
+      await syncWhatsAppOwnerPairing(
+        { ownerJid: "628111111111@s.whatsapp.net" },
+        "org_a"
+      );
+      await syncWhatsAppOwnerPairing(
+        { ownerJid: "628222222222@s.whatsapp.net" },
+        "org_b"
+      );
+      expect((await loadWhatsAppConfigFile("org_a"))?.profileId).toBe(
+        "well-test"
+      );
+      expect((await loadWhatsAppConfigFile("org_b"))?.profileId).toBe(
+        "finance"
+      );
+      expect(await loadWhatsAppConfigFile()).toBeNull();
+      expect(await loadWhatsAppConfigFile("org_c")).toBeNull();
+      await resetWhatsAppSessionForReconnect("org_a");
+      expect((await loadWhatsAppConfigFile("org_a"))?.pairedJid).toBeNull();
+      expect((await loadWhatsAppConfigFile("org_b"))?.pairedJid).toBe(
+        "628222222222@s.whatsapp.net"
+      );
+    });
+  });
+});
+
+describe("getWhatsAppWorkerStatus", () => {
+  test("reports a rejected link only while the worker runs", async () => {
+    await withTempHomedir("nakama-wa-link-error-", async () => {
+      await saveWhatsAppConfig({ profileId: "finance" }, "org_a");
+      const heartbeat = createWhatsAppWorkerHeartbeat("org_a");
+
+      await heartbeat.write({
+        connected: false,
+        linkError: "in use",
+        pid: process.pid,
+        updatedAt: new Date().toISOString(),
+      });
+      expect((await getWhatsAppWorkerStatus("org_a")).linkError).toBe("in use");
+
+      await heartbeat.write({
+        connected: false,
+        linkError: "in use",
+        pid: process.pid,
+        updatedAt: new Date(0).toISOString(),
+      });
+      expect(
+        (await getWhatsAppWorkerStatus("org_a")).linkError
+      ).toBeUndefined();
+    });
+  });
+});
 
 describe("maskPhoneNumber", () => {
-  test("masks long phone numbers with plus prefix", () => {
-    expect(maskPhoneNumber("+1234567890")).toBe("+\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u202290");
-  });
-
   test("returns null for empty", () => {
     expect(maskPhoneNumber("")).toBeNull();
   });
@@ -29,99 +84,97 @@ describe("maskPhoneNumber", () => {
   });
 });
 
-describe("normalizePairingCode", () => {
-  test("strips spaces and uppercases", () => {
-    expect(normalizePairingCode(" a b cd12 ")).toBe("ABCD12");
-  });
-});
-
 describe("isWhatsAppUserAuthorized", () => {
-  test("returns true when JID matches pairedLid", () => {
-    expect(
-      isWhatsAppUserAuthorized("236283431522503@lid", {
+  const cases: Array<{
+    jid: string | readonly string[];
+    access: Parameters<typeof isWhatsAppUserAuthorized>[1];
+    ok: boolean;
+  }> = [
+    {
+      access: {
         pairedJid: "6281379292556@s.whatsapp.net",
         pairedLid: "236283431522503@lid",
-      }),
-    ).toBe(true);
-  });
-
-  test("returns true when JID matches pairedJid", () => {
-    expect(
-      isWhatsAppUserAuthorized("1234567890@s.whatsapp.net", {
-        pairedJid: "1234567890@s.whatsapp.net",
-        pairedLid: null,
-      }),
-    ).toBe(true);
-  });
-
-  test("returns true when inbound JID includes a device suffix", () => {
-    expect(
-      isWhatsAppUserAuthorized("6281379292556:12@s.whatsapp.net", {
+      },
+      jid: "236283431522503@lid",
+      ok: true,
+    },
+    {
+      access: { pairedJid: "1234567890@s.whatsapp.net", pairedLid: null },
+      jid: "1234567890@s.whatsapp.net",
+      ok: true,
+    },
+    {
+      access: { pairedJid: "6281379292556@s.whatsapp.net", pairedLid: null },
+      jid: "6281379292556:12@s.whatsapp.net",
+      ok: true,
+    },
+    {
+      access: {
         pairedJid: "6281379292556@s.whatsapp.net",
-        pairedLid: null,
-      }),
-    ).toBe(true);
-  });
-
-  test("returns true when pairedJid includes a device suffix", () => {
-    expect(
-      isWhatsAppUserAuthorized("6281379292556@s.whatsapp.net", {
+        pairedLid: "128415361462410:25@lid",
+      },
+      jid: "128415361462410@lid",
+      ok: true,
+    },
+    {
+      access: {
         pairedJid: "6281379292556:12@s.whatsapp.net",
         pairedLid: null,
-      }),
-    ).toBe(true);
-  });
-
-  test("returns false when JID does not match pairedJid", () => {
-    expect(
-      isWhatsAppUserAuthorized("9999999999@s.whatsapp.net", {
+      },
+      jid: "6281379292556@s.whatsapp.net",
+      ok: true,
+    },
+    {
+      access: { pairedJid: "1234567890@s.whatsapp.net", pairedLid: null },
+      jid: "9999999999@s.whatsapp.net",
+      ok: false,
+    },
+    {
+      access: { pairedJid: null, pairedLid: null },
+      jid: "1234567890@s.whatsapp.net",
+      ok: false,
+    },
+    {
+      access: { pairedJid: "1234567890@s.whatsapp.net", pairedLid: null },
+      jid: ["104784384290844@lid", "1234567890@s.whatsapp.net"],
+      ok: true,
+    },
+    {
+      access: {
+        allowedPhones: ["628111111111"],
         pairedJid: "1234567890@s.whatsapp.net",
         pairedLid: null,
-      }),
-    ).toBe(false);
-  });
+      },
+      jid: "628111111111@s.whatsapp.net",
+      ok: true,
+    },
+  ];
 
-  test("returns false when pairedJid is null", () => {
-    expect(
-      isWhatsAppUserAuthorized("1234567890@s.whatsapp.net", {
-        pairedJid: null,
-        pairedLid: null,
-      }),
-    ).toBe(false);
+  test("authorizes paired JIDs, LIDs, device suffixes, and allowlisted phones", () => {
+    for (const { jid, access, ok } of cases) {
+      expect(isWhatsAppUserAuthorized(jid, access)).toBe(ok);
+    }
   });
 });
 
-describe("generatePairingCode", () => {
-  test("returns 8 uppercase hex chars", () => {
-    expect(generatePairingCode()).toMatch(/^[0-9A-F]{8}$/);
+describe("parseAllowedWhatsAppPhones", () => {
+  test("normalizes country-code numbers", () => {
+    expect(
+      parseAllowedWhatsAppPhones("+62 811-1111-1111, 628222222222")
+    ).toEqual(["6281111111111", "628222222222"]);
+  });
+
+  test("rejects short numbers", () => {
+    expect(() => parseAllowedWhatsAppPhones("123")).toThrow();
   });
 });
 
 describe("saveWhatsAppConfig", () => {
-  let tempHome = "";
-  let homedirSpy: ReturnType<typeof spyOn<typeof os, "homedir">> | null = null;
-
-  afterEach(async () => {
-    homedirSpy?.mockRestore();
-    homedirSpy = null;
-
-    if (tempHome) {
-      await rm(tempHome, { recursive: true, force: true });
-      tempHome = "";
-    }
-  });
-
-  async function useTempWhatsAppHome(run: () => Promise<void>): Promise<void> {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-wa-home-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-    await run();
-  }
-
-  test("creates config without auto-generating a pairing code", async () => {
-    await useTempWhatsAppHome(async () => {
+  test("creates config with a fresh expiring pairing code", async () => {
+    await withTempHomedir("nakama-core-wa-home-", async () => {
       const result = await saveWhatsAppConfig({ profileId: "profile_custom" });
 
-      expect(result.pairingCode).toBeNull();
+      expect(result.pairingCode).toMatch(/^[0-9A-F]{32}$/);
       expect(result.configured).toBe(true);
       expect(result.phoneNumberMasked).toBeNull();
       expect(result.pairedJid).toBeNull();
@@ -129,40 +182,41 @@ describe("saveWhatsAppConfig", () => {
       const saved = await loadWhatsAppConfigFile();
       expect(saved?.phoneNumber).toBe("");
       expect(saved?.profileId).toBe("profile_custom");
-      expect(saved?.pairingCode).toBeNull();
+      expect(Date.parse(saved?.pairingCodeExpiresAt ?? "")).toBeGreaterThan(
+        Date.now()
+      );
     });
   });
 
-  test("saves profile without requiring a phone number", async () => {
-    await useTempWhatsAppHome(async () => {
-      const result = await saveWhatsAppConfig({
-        profileId: "profile_custom",
-      });
+  test("keeps a live pairing code across an unrelated save", async () => {
+    await withTempHomedir("nakama-core-wa-home-", async () => {
+      const first = await saveWhatsAppConfig({ profileId: "profile_custom" });
+      const result = await saveWhatsAppConfig({ profileId: "profile_custom" });
 
-      expect(result.profileId).toBe("profile_custom");
-
-      const saved = await loadWhatsAppConfigFile();
-      expect(saved?.profileId).toBe("profile_custom");
+      expect(result.pairingCode).toBe(first.pairingCode);
     });
   });
 
   test("preserves pairedJid when updating other fields", async () => {
-    await useTempWhatsAppHome(async () => {
+    await withTempHomedir("nakama-core-wa-home-", async (tempHome) => {
       await saveWhatsAppConfig({ phoneNumber: "+1234567890" });
       const first = await loadWhatsAppConfigFile();
 
-      const configWithJid: Record<string, string> = {
+      const configWithJid = {
+        paired_jid: "1234567890@s.whatsapp.net",
+        pairing_code: first!.pairingCode!,
         phone_number: first!.phoneNumber,
         profile_id: first!.profileId,
-        pairing_code: first!.pairingCode!,
-        paired_jid: "1234567890@s.whatsapp.net",
       };
+
       const dir = path.join(tempHome, ".nakama", "whatsapp");
+
       const lines = [
         "# Nakama WhatsApp bridge",
         ...Object.entries(configWithJid).map(([k, v]) => `${k}=${v}`),
         "",
       ];
+
       await mkdir(dir, { recursive: true });
       await writeFile(path.join(dir, "config.ini"), lines.join("\n"), "utf8");
 
@@ -175,37 +229,107 @@ describe("saveWhatsAppConfig", () => {
     });
   });
 
-  test("allows first save with profile only", async () => {
-    await useTempWhatsAppHome(async () => {
-      const result = await saveWhatsAppConfig({ profileId: "default" });
-      expect(result.configured).toBe(true);
+  test("keeps names and add times for allowed phones", async () => {
+    await withTempHomedir("nakama-core-wa-home-", async () => {
+      const first = await saveWhatsAppConfig({
+        allowedPhones: "628111111111",
+        profileId: "default",
+      });
+
+      const firstAddedAt = first.allowedPhoneDetails["628111111111"]?.addedAt;
+
+      const added = await saveWhatsAppConfig({
+        allowedPhoneNames: { "+62 822-222-2222": "Sari, Ops = lead" },
+        allowedPhones: "628111111111,628222222222",
+      });
+
+      const addedAt = added.allowedPhoneDetails["628222222222"]?.addedAt;
+      expect(added.allowedPhoneDetails["628222222222"]?.name).toBe(
+        "Sari, Ops = lead"
+      );
+      expect(addedAt).toEqual(expect.any(String));
+
+      const renamed = await saveWhatsAppConfig({
+        allowedPhoneNames: { "628111111111": "Budi" },
+      });
+
+      expect(renamed.allowedPhoneDetails).toEqual({
+        "628111111111": { addedAt: firstAddedAt ?? null, name: "Budi" },
+        "628222222222": { addedAt: addedAt ?? null, name: "Sari, Ops = lead" },
+      });
+
+      await saveWhatsAppConfig({ allowedPhones: "628222222222" });
+      const saved = await loadWhatsAppConfigFile();
+      expect(saved?.allowedPhones).toEqual(["628222222222"]);
+      expect(Object.keys(saved?.allowedPhoneDetails ?? {})).toEqual([
+        "628222222222",
+      ]);
+    });
+  });
+
+  test("saves requireGroupMention and defaults to true when omitted", async () => {
+    await withTempHomedir("nakama-core-wa-home-", async () => {
+      const created = await saveWhatsAppConfig({ profileId: "default" });
+      expect(created.requireGroupMention).toBe(true);
+      expect((await loadWhatsAppConfigFile())?.requireGroupMention).toBe(true);
+
+      const updated = await saveWhatsAppConfig({
+        requireGroupMention: false,
+      });
+
+      expect(updated.requireGroupMention).toBe(false);
+      expect((await loadWhatsAppConfigFile())?.requireGroupMention).toBe(false);
+
+      const preserved = await saveWhatsAppConfig({ profileId: "default" });
+      expect(preserved.requireGroupMention).toBe(false);
+    });
+  });
+
+  test("keeps group access open for a config saved before the setting existed", async () => {
+    await withTempHomedir("nakama-core-wa-home-", async (homeDir) => {
+      const dir = path.join(homeDir, ".nakama", "whatsapp");
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        path.join(dir, "config.ini"),
+        "phone_number=1234567890\nrequire_group_mention=false\n"
+      );
+      expect((await loadWhatsAppConfigFile())?.allowUnpairedGroupMembers).toBe(
+        true
+      );
+
+      const mentionOn = await saveWhatsAppConfig({ requireGroupMention: true });
+      expect(mentionOn.allowUnpairedGroupMembers).toBe(true);
+    });
+  });
+
+  test("saves allowUnpairedGroupMembers apart from requireGroupMention", async () => {
+    await withTempHomedir("nakama-core-wa-home-", async () => {
+      const created = await saveWhatsAppConfig({ profileId: "default" });
+      expect(created.allowUnpairedGroupMembers).toBe(false);
+
+      await saveWhatsAppConfig({ allowUnpairedGroupMembers: true });
+      expect((await loadWhatsAppConfigFile())?.allowUnpairedGroupMembers).toBe(
+        true
+      );
+
+      await saveWhatsAppConfig({
+        allowUnpairedGroupMembers: false,
+        requireGroupMention: false,
+      });
+      const saved = await loadWhatsAppConfigFile();
+      expect(saved?.allowUnpairedGroupMembers).toBe(false);
+      expect(saved?.requireGroupMention).toBe(false);
     });
   });
 });
 
 describe("resetWhatsAppSessionForReconnect", () => {
-  let tempHome = "";
-  let homedirSpy: ReturnType<typeof spyOn<typeof os, "homedir">> | null = null;
-
-  afterEach(async () => {
-    homedirSpy?.mockRestore();
-    homedirSpy = null;
-
-    if (tempHome) {
-      await rm(tempHome, { recursive: true, force: true });
-      tempHome = "";
-    }
-  });
-
-  async function useTempWhatsAppHome(run: () => Promise<void>): Promise<void> {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-wa-reset-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-    await run();
-  }
-
   test("clears auth dir, pairing fields, and QR while preserving phone and profile", async () => {
-    await useTempWhatsAppHome(async () => {
-      await saveWhatsAppConfig({ phoneNumber: "+1234567890", profileId: "profile_custom" });
+    await withTempHomedir("nakama-core-wa-reset-", async (tempHome) => {
+      await saveWhatsAppConfig({
+        phoneNumber: "+1234567890",
+        profileId: "profile_custom",
+      });
       const dir = path.join(tempHome, ".nakama", "whatsapp");
       const authDir = path.join(dir, "auth");
       await mkdir(authDir, { recursive: true });
@@ -213,23 +337,31 @@ describe("resetWhatsAppSessionForReconnect", () => {
       await writeFile(path.join(dir, "worker-qr.txt"), "qr-string", "utf8");
 
       const first = await loadWhatsAppConfigFile();
-      const configWithJid: Record<string, string> = {
-        phone_number: first!.phoneNumber,
-        profile_id: first!.profileId,
+
+      const configWithJid = {
         paired_jid: "1234567890@s.whatsapp.net",
         paired_lid: "999@lid",
+        phone_number: first!.phoneNumber,
+        profile_id: first!.profileId,
       };
+
       await writeFile(
         path.join(dir, "config.ini"),
-        ["# Nakama WhatsApp bridge", ...Object.entries(configWithJid).map(([k, v]) => `${k}=${v}`), ""].join("\n"),
-        "utf8",
+        [
+          "# Nakama WhatsApp bridge",
+          ...Object.entries(configWithJid).map(([k, v]) => `${k}=${v}`),
+          "",
+        ].join("\n"),
+        "utf8"
       );
 
       const result = await resetWhatsAppSessionForReconnect();
 
       expect(result.configured).toBe(true);
       expect(result.profileId).toBe("profile_custom");
-      expect(result.phoneNumberMasked).toBe("+\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u202290");
+      expect(result.phoneNumberMasked).toBe(
+        "+\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u202290"
+      );
       expect(result.pairedJid).toBeNull();
       expect(result.pairingCode).toBeNull();
 
@@ -239,21 +371,25 @@ describe("resetWhatsAppSessionForReconnect", () => {
       expect(saved?.pairingCode).toBeNull();
       expect(saved?.phoneNumber).toBe("+1234567890");
 
-      await expect(Bun.file(path.join(authDir, "creds.json")).exists()).resolves.toBe(false);
-      await expect(Bun.file(path.join(dir, "worker-qr.txt")).exists()).resolves.toBe(false);
+      await expect(
+        Bun.file(path.join(authDir, "creds.json")).exists()
+      ).resolves.toBe(false);
+      await expect(
+        Bun.file(path.join(dir, "worker-qr.txt")).exists()
+      ).resolves.toBe(false);
     });
   });
 
   test("throws when WhatsApp is not configured", async () => {
-    await useTempWhatsAppHome(async () => {
-      expect(resetWhatsAppSessionForReconnect()).rejects.toThrow(
-        "Enable WhatsApp in Integrations before reconnecting.",
+    await withTempHomedir("nakama-core-wa-reset-", async () => {
+      await expect(resetWhatsAppSessionForReconnect()).rejects.toThrow(
+        "Enable WhatsApp in this agent’s Connections before reconnecting."
       );
     });
   });
 
   test("succeeds when auth dir and QR file are already absent", async () => {
-    await useTempWhatsAppHome(async () => {
+    await withTempHomedir("nakama-core-wa-reset-", async () => {
       await saveWhatsAppConfig({ phoneNumber: "+1234567890" });
 
       const result = await resetWhatsAppSessionForReconnect();
@@ -271,7 +407,7 @@ describe("resolveWhatsAppConfigFromSources", () => {
       resolveWhatsAppConfigFromSources({
         env: {},
         file: null,
-      }),
+      })
     ).toBeNull();
   });
 
@@ -281,20 +417,28 @@ describe("resolveWhatsAppConfigFromSources", () => {
         WHATSAPP_PHONE_NUMBER: "+1234567890",
       },
       file: {
-        phoneNumber: "+9876543210",
-        profileId: "profile_from_file",
-        pairingCode: null,
+        allowedPhones: [],
+        allowUnpairedGroupMembers: false,
         pairedJid: null,
         pairedLid: null,
+        pairingCode: null,
+        pairingCodeExpiresAt: null,
+        phoneNumber: "+9876543210",
+        profileId: "profile_from_file",
+        requireGroupMention: true,
       },
     });
 
     expect(resolved).toEqual({
-      phoneNumber: "+1234567890",
-      profileId: "profile_from_file",
-      pairingCode: null,
+      allowedPhones: [],
+      allowUnpairedGroupMembers: false,
       pairedJid: null,
       pairedLid: null,
+      pairingCode: null,
+      pairingCodeExpiresAt: null,
+      phoneNumber: "+1234567890",
+      profileId: "profile_from_file",
+      requireGroupMention: true,
     });
   });
 
@@ -302,124 +446,21 @@ describe("resolveWhatsAppConfigFromSources", () => {
     const resolved = resolveWhatsAppConfigFromSources({
       env: {},
       file: {
-        phoneNumber: "",
-        profileId: "profile_from_file",
-        pairingCode: "ABCD1234",
+        allowedPhones: ["628111111111"],
+        allowUnpairedGroupMembers: true,
         pairedJid: "9876543210@s.whatsapp.net",
         pairedLid: null,
+        pairingCode: "ABCD1234",
+        pairingCodeExpiresAt: null,
+        phoneNumber: "",
+        profileId: "profile_from_file",
+        requireGroupMention: false,
       },
     });
 
     expect(resolved?.phoneNumber).toBe("");
     expect(resolved?.pairedJid).toBe("9876543210@s.whatsapp.net");
-  });
-});
-
-describe("syncWhatsAppOwnerPairing", () => {
-  let tempHome = "";
-  let homedirSpy: ReturnType<typeof spyOn<typeof os, "homedir">> | null = null;
-
-  afterEach(async () => {
-    homedirSpy?.mockRestore();
-    homedirSpy = null;
-
-    if (tempHome) {
-      await rm(tempHome, { recursive: true, force: true });
-      tempHome = "";
-    }
-  });
-
-  test("auto-pairs owner when WhatsApp JID includes a device suffix", async () => {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-wa-sync-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-
-    await saveWhatsAppConfig({ profileId: "default" });
-
-    await syncWhatsAppOwnerPairing({
-      ownerJid: "6281379292556:12@s.whatsapp.net",
-      ownerLid: "236283431522503@lid",
-    });
-
-    const saved = await loadWhatsAppConfigFile();
-    expect(saved?.phoneNumber).toBe("6281379292556");
-    expect(saved?.pairedJid).toBe("6281379292556:12@s.whatsapp.net");
-    expect(saved?.pairedLid).toBe("236283431522503@lid");
-    expect(saved?.pairingCode).toBeNull();
-  });
-
-  test("overwrites a stale phone number after QR link", async () => {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-wa-sync-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-
-    await saveWhatsAppConfig({ phoneNumber: "+6281227900622" });
-
-    await syncWhatsAppOwnerPairing({
-      ownerJid: "6281379292556:17@s.whatsapp.net",
-      ownerLid: "128415361462410:17@lid",
-    });
-
-    const saved = await loadWhatsAppConfigFile();
-    expect(saved?.phoneNumber).toBe("6281379292556");
-    expect(saved?.pairedJid).toBe("6281379292556:17@s.whatsapp.net");
-  });
-
-  test("clears stale pairing code when owner pairing sync completes", async () => {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-wa-sync-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-
-    await saveWhatsAppConfig({ phoneNumber: "+6281379292556" });
-
-    const dir = path.join(tempHome, ".nakama", "whatsapp");
-    await writeFile(
-      path.join(dir, "config.ini"),
-      [
-        "# Nakama WhatsApp bridge",
-        "phone_number=+6281379292556",
-        "profile_id=default",
-        "pairing_code=ABCD1234",
-        "paired_jid=6281379292556@s.whatsapp.net",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    await syncWhatsAppOwnerPairing({
-      ownerJid: "6281379292556:12@s.whatsapp.net",
-      ownerLid: "236283431522503@lid",
-    });
-
-    const saved = await loadWhatsAppConfigFile();
-    expect(saved?.pairedJid).toBe("6281379292556@s.whatsapp.net");
-    expect(saved?.pairedLid).toBe("236283431522503@lid");
-    expect(saved?.pairingCode).toBeNull();
-  });
-
-  test("preserves an existing paired LID during owner sync", async () => {
-    tempHome = await mkdtemp(path.join(os.tmpdir(), "nakama-core-wa-sync-"));
-    homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
-
-    const dir = path.join(tempHome, ".nakama", "whatsapp");
-    await mkdir(dir, { recursive: true });
-    await writeFile(
-      path.join(dir, "config.ini"),
-      [
-        "# Nakama WhatsApp bridge",
-        "phone_number=6281379292556",
-        "profile_id=default",
-        "paired_jid=6281379292556@s.whatsapp.net",
-        "paired_lid=104784384290844@lid",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    await syncWhatsAppOwnerPairing({
-      ownerJid: "6281379292556:18@s.whatsapp.net",
-      ownerLid: "128415361462410:18@lid",
-    });
-
-    const saved = await loadWhatsAppConfigFile();
-    expect(saved?.pairedJid).toBe("6281379292556@s.whatsapp.net");
-    expect(saved?.pairedLid).toBe("104784384290844@lid");
+    expect(resolved?.requireGroupMention).toBe(false);
+    expect(resolved?.allowUnpairedGroupMembers).toBe(true);
   });
 });

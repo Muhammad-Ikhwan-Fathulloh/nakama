@@ -1,6 +1,4 @@
-import { useEffect, useState } from "react";
-import { LogOutIcon, UserIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@nakama/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -8,96 +6,253 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@nakama/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
+} from "@nakama/ui/dropdown-menu";
+import { Input } from "@nakama/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@nakama/ui/tooltip";
+import { cn } from "@nakama/ui/utils";
+import {
+  Building03Icon,
+  ComputerIcon,
+  Logout03Icon,
+  MoonIcon,
+  SparklesIcon,
+  Sun01Icon,
+  UserIcon,
+} from "hugeicons-react";
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { UserContextEditorDialog } from "@/components/UserContextCard";
+import { useAppContext } from "@/context/use-app-context";
 import { useAuth } from "@/context/use-auth";
+import { useTheme } from "@/context/use-theme";
 import { client, formatError } from "@/lib/client";
+import { canAccessOrganizationPage, PAGE_PATHS } from "@/lib/navigation";
+import type { Theme } from "@/lib/theme";
 
-export function SidebarUserMenu({ collapsed }: { collapsed: boolean }) {
-  const { user, logout, refreshSession } = useAuth();
+const THEME_OPTIONS: {
+  id: Theme;
+  label: string;
+  icon: typeof Sun01Icon;
+}[] = [
+  { icon: Sun01Icon, id: "light", label: "Light" },
+  { icon: MoonIcon, id: "dark", label: "Dark" },
+  { icon: ComputerIcon, id: "system", label: "System" },
+];
+
+function accountInitials(name: string) {
+  const words = name.split(/\s+/).filter(Boolean);
+
+  const letters =
+    words.length > 1
+      ? `${words[0][0]}${words[1][0]}`
+      : (words[0] ?? "?").slice(0, 2);
+
+  return letters.toUpperCase();
+}
+
+export function SidebarUserMenu() {
+  const { user, activeOrg, logout, refreshSession } = useAuth();
+  const { health } = useAppContext();
+  const { theme, setTheme } = useTheme();
   const [profileOpen, setProfileOpen] = useState(false);
+  const [personalisationOpen, setPersonalisationOpen] = useState(false);
+  const version = health?.version?.trim();
 
   if (!user) {
     return null;
   }
 
   const displayName = user.name?.trim() || user.email;
-  const initial = (user.name?.trim()?.[0] ?? user.email[0] ?? "?").toUpperCase();
 
-  const trigger = collapsed ? (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
+  const initial = (
+    user.name?.trim()?.[0] ??
+    user.email[0] ??
+    "?"
+  ).toUpperCase();
+
+  const initials = accountInitials(displayName);
+
+  const trigger = (
+    <button
       aria-label="Account menu"
-      className="shrink-0 text-muted-foreground/70 hover:text-foreground"
+      className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent/55 hover:text-foreground"
+      type="button"
     >
-      <span className="flex size-5 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-foreground">
+      <span className="flex size-7 items-center justify-center rounded-md bg-muted font-semibold text-2xs text-foreground">
         {initial}
       </span>
-    </Button>
-  ) : (
-    <Button
-      type="button"
-      variant="ghost"
-      aria-label="Account menu"
-      className="h-auto w-full min-w-0 justify-start gap-2 px-2 py-1.5 text-left text-muted-foreground hover:text-foreground"
-    >
-      <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-semibold text-foreground">
-        {initial}
-      </span>
-      <span className="min-w-0 flex-1 truncate text-sm">{displayName}</span>
-    </Button>
+    </button>
   );
 
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger render={trigger} />
-        <DropdownMenuContent
-          side={collapsed ? "right" : "top"}
-          align={collapsed ? "end" : "start"}
-          sideOffset={8}
-          className="w-56"
-        >
-          <div className="px-1.5 py-1.5">
-            <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
-            <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-          </div>
-          <div className="my-1 h-px bg-border" />
-          <DropdownMenuItem
-            onClick={() => {
-              setProfileOpen(true);
-            }}
-          >
-            <UserIcon className="size-4" />
-            Profile
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            variant="destructive"
-            onClick={() => {
-              void logout();
-            }}
-          >
-            <LogOutIcon className="size-4" />
-            Log out
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span className="inline-flex">
+              <DropdownMenu>
+                <DropdownMenuTrigger render={trigger} />
+                <DropdownMenuContent
+                  align="end"
+                  className="w-64 gap-0 overflow-hidden p-0"
+                  side="right"
+                  sideOffset={8}
+                >
+                  <div className="flex items-center gap-2.5 px-3.5 py-3">
+                    <span
+                      aria-hidden="true"
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary font-semibold text-primary-foreground text-xs"
+                    >
+                      {initials}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold text-foreground text-sm">
+                        {displayName}
+                      </p>
+                      <p className="truncate text-muted-foreground text-xs">
+                        {user.email}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="h-px bg-border" />
+
+                  <div className="p-1">
+                    <DropdownMenuItem
+                      className="px-2.5 py-1.5"
+                      onClick={() => {
+                        setProfileOpen(true);
+                      }}
+                    >
+                      <UserIcon className="size-4 text-muted-foreground" />
+                      Profile
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      className="px-2.5 py-1.5"
+                      onClick={() => {
+                        setPersonalisationOpen(true);
+                      }}
+                    >
+                      <SparklesIcon className="size-4 text-muted-foreground" />
+                      Personalisation
+                    </DropdownMenuItem>
+                    {canAccessOrganizationPage(
+                      user.isPlatformAdmin === true,
+                      activeOrg?.role
+                    ) && (
+                      <DropdownMenuItem
+                        className="px-2.5 py-1.5"
+                        render={<Link to={PAGE_PATHS.organization} />}
+                      >
+                        <Building03Icon
+                          aria-hidden="true"
+                          className="size-4 text-muted-foreground"
+                        />
+                        Organization
+                      </DropdownMenuItem>
+                    )}
+                  </div>
+
+                  <div className="h-px bg-border" />
+
+                  <div className="flex items-center justify-between gap-3 px-3.5 py-2">
+                    <span className="text-muted-foreground text-sm">Theme</span>
+                    <div
+                      aria-label="Color theme"
+                      className="flex gap-0.5 rounded-md bg-muted p-0.5"
+                      role="group"
+                    >
+                      {THEME_OPTIONS.map((option) => {
+                        const Icon = option.icon;
+                        const selected = theme === option.id;
+
+                        return (
+                          <button
+                            aria-label={option.label}
+                            aria-pressed={selected}
+                            className={cn(
+                              "rounded-sm px-2 py-1 text-muted-foreground transition-colors hover:text-foreground",
+                              selected &&
+                                "bg-background text-foreground shadow-sm"
+                            )}
+                            key={option.id}
+                            onClick={() => {
+                              setTheme(option.id);
+                            }}
+                            type="button"
+                          >
+                            <Icon
+                              aria-hidden="true"
+                              className="size-3.5"
+                              strokeWidth={1.75}
+                            />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="h-px bg-border" />
+
+                  <div className="p-1">
+                    <DropdownMenuItem
+                      className="px-2.5 py-1.5"
+                      onClick={() => {
+                        void logout();
+                      }}
+                      variant="destructive"
+                    >
+                      <Logout03Icon className="size-4" />
+                      Log out
+                    </DropdownMenuItem>
+                  </div>
+
+                  {version ? (
+                    <>
+                      <div className="h-px bg-border" />
+                      <p className="px-3.5 py-2 font-mono text-2xs text-muted-foreground tabular-nums">
+                        Nakama {version}
+                      </p>
+                    </>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </span>
+          }
+        />
+        <TooltipContent side="right" sideOffset={8}>
+          {displayName}
+        </TooltipContent>
+      </Tooltip>
 
       <UserProfileDialog
-        open={profileOpen}
-        onOpenChange={setProfileOpen}
         email={user.email}
         name={user.name ?? ""}
+        onOpenChange={setProfileOpen}
+        onSaved={({ passwordChanged }) => {
+          if (passwordChanged) {
+            // Server revoked all sessions and cleared cookies; drop local auth
+            // so AuthGuard sends the user to login with the new password.
+            void logout();
+
+            return;
+          }
+
+          void refreshSession();
+        }}
+        open={profileOpen}
         phone={user.phone ?? ""}
-        onSaved={() => void refreshSession()}
+      />
+
+      <UserContextEditorDialog
+        onOpenChange={setPersonalisationOpen}
+        open={personalisationOpen}
       />
     </>
   );
@@ -116,7 +271,7 @@ function UserProfileDialog({
   email: string;
   name: string;
   phone: string;
-  onSaved: () => void;
+  onSaved: (result: { passwordChanged: boolean }) => void;
 }) {
   const [formName, setFormName] = useState(name);
   const [formEmail, setFormEmail] = useState(email);
@@ -127,60 +282,83 @@ function UserProfileDialog({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
-  useEffect(() => {
-    if (!open) {
-      return;
+  function handleOpenChange(nextOpen: boolean) {
+    if (nextOpen) {
+      setFormName(name);
+      setFormEmail(email);
+      setFormPhone(phone);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setError(null);
     }
 
-    setFormName(name);
-    setFormEmail(email);
-    setFormPhone(phone);
-    setCurrentPassword("");
-    setNewPassword("");
-    setConfirmPassword("");
-    setError(null);
-  }, [open, email, name, phone]);
+    onOpenChange(nextOpen);
+  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
 
     const trimmedEmail = formEmail.trim();
+
     if (!trimmedEmail) {
       setError("Email is required.");
+
       return;
     }
 
-    const wantsPasswordChange = Boolean(
-      currentPassword || newPassword || confirmPassword,
-    );
+    const emailChanged = trimmedEmail.toLowerCase() !== email.toLowerCase();
+
+    if (emailChanged && !currentPassword) {
+      setError("Enter your current password to change email.");
+
+      return;
+    }
+
+    const wantsPasswordChange = Boolean(newPassword || confirmPassword);
+
     if (wantsPasswordChange) {
-      if (!currentPassword || !newPassword) {
+      if (!(currentPassword && newPassword)) {
         setError("Enter your current password and a new password.");
+
         return;
       }
+
       if (newPassword !== confirmPassword) {
         setError("New password and confirmation do not match.");
+
         return;
       }
     }
 
     setPending(true);
+
     try {
-      await client.updateAuthProfile({
-        name: formName,
+      const request: Parameters<typeof client.updateAuthProfile>[0] = {
         email: trimmedEmail,
+        name: formName,
         phone: formPhone,
-      });
+      };
+
+      if (emailChanged) {
+        request.currentPassword = currentPassword;
+      }
+
+      await client.updateAuthProfile(request);
 
       if (wantsPasswordChange) {
         await client.changePassword({
           currentPassword,
           newPassword,
         });
+        onOpenChange(false);
+        onSaved({ passwordChanged: true });
+
+        return;
       }
 
-      onSaved();
+      onSaved({ passwordChanged: false });
       onOpenChange(false);
     } catch (err) {
       setError(formatError(err));
@@ -190,102 +368,133 @@ function UserProfileDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog onOpenChange={handleOpenChange} open={open}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Profile</DialogTitle>
-          <DialogDescription>Update your name, email, phone, or password.</DialogDescription>
+          <DialogDescription>
+            Update your name, email, phone, or password.
+          </DialogDescription>
         </DialogHeader>
-        <form onSubmit={(event) => void handleSubmit(event)} className="space-y-4">
+        <form
+          className="space-y-4"
+          onSubmit={(event) => void handleSubmit(event)}
+        >
           <div>
-            <label htmlFor="profile-name" className="mb-1 block text-sm font-medium">
+            <label
+              className="mb-1 block font-medium text-sm"
+              htmlFor="profile-name"
+            >
               Name
             </label>
             <Input
               id="profile-name"
-              value={formName}
               onChange={(event) => setFormName(event.target.value)}
               placeholder="Your name"
+              value={formName}
             />
           </div>
           <div>
-            <label htmlFor="profile-email" className="mb-1 block text-sm font-medium">
+            <label
+              className="mb-1 block font-medium text-sm"
+              htmlFor="profile-email"
+            >
               Email
             </label>
             <Input
               id="profile-email"
-              type="email"
-              value={formEmail}
               onChange={(event) => setFormEmail(event.target.value)}
               required
+              type="email"
+              value={formEmail}
             />
           </div>
           <div>
-            <label htmlFor="profile-phone" className="mb-1 block text-sm font-medium">
+            <label
+              className="mb-1 block font-medium text-sm"
+              htmlFor="profile-phone"
+            >
               Phone{" "}
-              <span className="font-normal text-muted-foreground">(optional)</span>
+              <span className="font-normal text-muted-foreground">
+                (optional)
+              </span>
             </label>
             <Input
               id="profile-phone"
-              value={formPhone}
               onChange={(event) => setFormPhone(event.target.value)}
               placeholder="+1234567890"
+              value={formPhone}
             />
           </div>
 
-          <div className="space-y-3 border-t border-border pt-4">
+          <div className="space-y-3 border-border border-t pt-4">
             <div>
-              <p className="text-sm font-medium">Password</p>
-              <p className="text-xs text-muted-foreground">Leave blank to keep your current one.</p>
+              <p className="font-medium text-sm">Password</p>
+              <p className="text-muted-foreground text-xs">
+                Enter your current password to change email or password.
+              </p>
             </div>
             <div>
-              <label htmlFor="profile-current-password" className="mb-1 block text-sm font-medium">
+              <label
+                className="mb-1 block font-medium text-sm"
+                htmlFor="profile-current-password"
+              >
                 Current
               </label>
               <Input
-                id="profile-current-password"
-                type="password"
                 autoComplete="current-password"
-                value={currentPassword}
+                id="profile-current-password"
                 onChange={(event) => setCurrentPassword(event.target.value)}
                 placeholder="••••••••"
+                type="password"
+                value={currentPassword}
               />
             </div>
             <div>
-              <label htmlFor="profile-new-password" className="mb-1 block text-sm font-medium">
+              <label
+                className="mb-1 block font-medium text-sm"
+                htmlFor="profile-new-password"
+              >
                 New
               </label>
               <Input
-                id="profile-new-password"
-                type="password"
                 autoComplete="new-password"
-                value={newPassword}
+                id="profile-new-password"
                 onChange={(event) => setNewPassword(event.target.value)}
                 placeholder="••••••••"
+                type="password"
+                value={newPassword}
               />
             </div>
             <div>
-              <label htmlFor="profile-confirm-password" className="mb-1 block text-sm font-medium">
+              <label
+                className="mb-1 block font-medium text-sm"
+                htmlFor="profile-confirm-password"
+              >
                 Confirm
               </label>
               <Input
-                id="profile-confirm-password"
-                type="password"
                 autoComplete="new-password"
-                value={confirmPassword}
+                id="profile-confirm-password"
                 onChange={(event) => setConfirmPassword(event.target.value)}
                 placeholder="••••••••"
+                type="password"
+                value={confirmPassword}
               />
             </div>
           </div>
 
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {error ? <p className="text-destructive text-sm">{error}</p> : null}
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button
+              onClick={() => onOpenChange(false)}
+              type="button"
+              variant="outline"
+            >
               Cancel
             </Button>
-            <Button type="submit" disabled={pending}>
+            <Button disabled={pending} type="submit">
               {pending ? "Saving…" : "Save changes"}
             </Button>
           </DialogFooter>

@@ -1,6 +1,7 @@
 import type { AgentTodo } from "@nakama/core/contract";
 import type { WASocket } from "@whiskeysockets/baileys";
 import { renderWhatsAppTodoStatus } from "./format";
+import { rememberWhatsAppOutbound } from "./inbound-message";
 
 type WhatsAppTodoRunState = "working" | "completed" | "stopped" | "failed";
 
@@ -11,7 +12,7 @@ export class WhatsAppTodoStatusMessage {
 
   constructor(
     private readonly socket: WASocket | null,
-    private readonly jid: string,
+    private readonly jid: string
   ) {}
 
   async update(todos: AgentTodo[]): Promise<void> {
@@ -35,7 +36,9 @@ export class WhatsAppTodoStatusMessage {
     await this.enqueueTerminalState("failed");
   }
 
-  private async enqueueTerminalState(state: WhatsAppTodoRunState): Promise<void> {
+  private async enqueueTerminalState(
+    state: WhatsAppTodoRunState
+  ): Promise<void> {
     if (this.lastTodos.length === 0) {
       return;
     }
@@ -43,12 +46,18 @@ export class WhatsAppTodoStatusMessage {
     await this.enqueueRender(state, this.lastTodos);
   }
 
-  private async enqueueRender(state: WhatsAppTodoRunState, todos: AgentTodo[]): Promise<void> {
+  private async enqueueRender(
+    state: WhatsAppTodoRunState,
+    todos: AgentTodo[]
+  ): Promise<void> {
     this.pending = this.pending.then(() => this.render(state, todos));
     await this.pending;
   }
 
-  private async render(state: WhatsAppTodoRunState, todos: AgentTodo[]): Promise<void> {
+  private async render(
+    state: WhatsAppTodoRunState,
+    todos: AgentTodo[]
+  ): Promise<void> {
     const next = renderWhatsAppTodoStatus(todos, state);
 
     if (next === this.lastRendered) {
@@ -56,8 +65,11 @@ export class WhatsAppTodoStatusMessage {
     }
 
     try {
-      if (!this.socket) return;
+      if (!this.socket) {
+        return;
+      }
 
+      rememberWhatsAppOutbound({ jid: this.jid, text: next });
       await this.socket.sendMessage(this.jid, { text: next });
       this.lastRendered = next;
     } catch {

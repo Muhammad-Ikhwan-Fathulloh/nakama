@@ -1,303 +1,100 @@
-import { useEffect, useRef, useState } from "react";
-import type { UpdateWhatsAppSettingsRequest } from "@nakama/core/contract";
-import { useQueryClient } from "@tanstack/react-query";
-import { WhatsAppSettingsCardContent } from "@/components/whatsapp-settings-card-content";
 import { SETTINGS_CARD_LOADING_SKELETON } from "@/components/integration-settings.shared";
-import { Card, CardContent } from "@/components/ui/card";
-import { useProfilesQuery } from "@/hooks/use-app-queries";
-import { useSystemStatusQuery } from "@/hooks/use-system-status";
-import {
-  useRegenerateWhatsAppPairingCode,
-  useReconnectWhatsApp,
-  useSaveWhatsAppSettings,
-  useWhatsAppSettings,
-} from "@/hooks/use-whatsapp-settings";
-import { formatError } from "@/lib/client";
-import { queryKeys } from "@/lib/query-keys";
+import { WhatsAppAllowedPhonesDialog } from "@/components/WhatsAppAllowedPhonesDialog";
+import { WhatsAppSettingsCardContent } from "@/components/whatsapp-settings-card-content";
+import { useAuth } from "@/context/use-auth";
+import { useWhatsAppSettingsCard } from "@/hooks/use-whatsapp-settings-card";
 
 interface WhatsAppSettingsCardProps {
   embedded?: boolean;
-  submitLabel?: string;
   onSaveSuccess?: () => void;
+  submitLabel?: string;
 }
 
-export function WhatsAppSettingsCard({
+export function WhatsAppSettingsCard(props: WhatsAppSettingsCardProps) {
+  const { activeOrg } = useAuth();
+
+  return <WhatsAppSettingsCardForOrg key={activeOrg?.id} {...props} />;
+}
+
+function WhatsAppSettingsCardForOrg({
   embedded = false,
   submitLabel,
   onSaveSuccess,
 }: WhatsAppSettingsCardProps) {
-  const queryClient = useQueryClient();
-  const { data: settings, isLoading, error: loadError } = useWhatsAppSettings();
-  const { data: status } = useSystemStatusQuery();
-  const { data: profiles = [] } = useProfilesQuery();
-  const saveMutation = useSaveWhatsAppSettings();
-  const regenerateMutation = useRegenerateWhatsAppPairingCode();
-  const reconnectMutation = useReconnectWhatsApp();
+  const card = useWhatsAppSettingsCard({ onSaveSuccess, submitLabel });
 
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [profileId, setProfileId] = useState("default");
-  const [hint, setHint] = useState<string | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [qrWasVisible, setQrWasVisible] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  const settingsProfileId = settings?.profileId;
-
-  useEffect(() => {
-    if (settingsProfileId !== undefined) {
-      setProfileId(settingsProfileId);
-    }
-  }, [settingsProfileId]);
-
-  const configured = settings?.configured === true;
-  const worker = status?.whatsappWorker;
-  const running = worker?.running === true;
-  const connected = worker?.connected === true;
-  const qrCode = worker?.qrCode ?? null;
-  const paired = Boolean(worker?.paired || settings?.pairedJid);
-  const pairingCode = settings?.pairingCode ?? null;
-  const linkedNumber = settings?.phoneNumberMasked ?? null;
-
-  useEffect(() => {
-    if (qrCode) {
-      setQrWasVisible(true);
-    }
-    if (paired) {
-      setQrWasVisible(false);
-    }
-  }, [qrCode, paired]);
-
-  useEffect(() => {
-    if (worker?.paired && !settings?.pairedJid) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.whatsapp.settings });
-      return;
-    }
-
-    if (worker?.connected && !paired) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.whatsapp.settings });
-    }
-  }, [worker?.paired, worker?.connected, settings?.pairedJid, paired, queryClient]);
-
-  useEffect(() => {
-    setCopied(false);
-  }, [pairingCode]);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) {
-        clearTimeout(copyTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const useQrLinking = !pairingCode;
-  const showQr = configured && running && Boolean(qrCode) && useQrLinking;
-  const awaitingQr =
-    configured && !paired && running && !connected && !qrCode && !qrWasVisible && useQrLinking;
-  const bridgeStarting = configured && !paired && running && !connected && Boolean(pairingCode);
-  const linkingAfterScan =
-    configured && !paired && running && !qrCode && (qrWasVisible || connected) && useQrLinking;
-  const showReconnect = configured && !showQr && !awaitingQr;
-  const canSave = !configured || profileId !== settings?.profileId;
-  const actionLabel = submitLabel ?? (configured ? "Save" : "Enable WhatsApp");
-
-  const statusLine =
-    hint ?? (formError ? formError : null) ?? (loadError ? formatError(loadError) : null);
-
-  const headerSubtitle = !configured
-    ? "Choose a profile and enable WhatsApp to get started"
-    : paired && running && !showQr
-      ? "WhatsApp is linked and the bridge is running"
-      : paired && !running
-        ? "Linked. Start the WhatsApp bridge to receive messages"
-        : showQr
-          ? "Scan the QR code with WhatsApp to link your device"
-          : linkingAfterScan
-            ? "Linking your WhatsApp account…"
-            : bridgeStarting
-              ? "Bridge starting — enter the pairing code in WhatsApp"
-              : awaitingQr
-                ? "Preparing QR code…"
-                : pairingCode
-                  ? "Enter the pairing code in WhatsApp"
-                  : "Scan the QR code, or generate a pairing code";
-
-  const statusBadge = !configured
-    ? "Not set up"
-    : paired && running && !showQr
-      ? "Connected"
-      : paired && !running
-        ? "Paired"
-        : linkingAfterScan
-          ? "Linking"
-          : bridgeStarting
-            ? "Starting…"
-            : showQr
-              ? "Awaiting scan"
-              : awaitingQr
-                ? "Starting…"
-                : pairingCode
-                  ? "Awaiting link"
-                  : "Not linked";
-
-  async function copyPairingCode() {
-    if (!pairingCode) {
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(pairingCode);
-      setCopied(true);
-      if (copyTimeoutRef.current) {
-        clearTimeout(copyTimeoutRef.current);
-      }
-      copyTimeoutRef.current = setTimeout(() => {
-        setCopied(false);
-        copyTimeoutRef.current = null;
-      }, 2000);
-    } catch {
-      setHint("Copy the code manually.");
-    }
-  }
-
-  function handleSave() {
-    setFormError(null);
-    setHint(null);
-
-    const request: UpdateWhatsAppSettingsRequest = {
-      profileId: profileId.trim() || "default",
-    };
-
-    saveMutation.mutate(request, {
-      onSuccess: (saved) => {
-        if (saved.pairedJid) {
-          setHint("Saved.");
-        } else if (saved.pairingCode) {
-          setHint("Saved. Use the pairing code in WhatsApp.");
-        } else if (!configured) {
-          setHint("Enabled. Start the bridge and scan the QR code.");
-        } else {
-          setHint("Saved.");
-        }
-        onSaveSuccess?.();
-      },
-      onError: (error) => {
-        setFormError(formatError(error));
-      },
-    });
-  }
-
-  function handleRegeneratePairingCode() {
-    setFormError(null);
-    setHint(null);
-
-    regenerateMutation.mutate(undefined, {
-      onSuccess: () => {
-        setHint("New code ready.");
-      },
-      onError: (error) => {
-        setFormError(formatError(error));
-      },
-    });
-  }
-
-  function handleReconnect() {
-    setFormError(null);
-    setHint(null);
-    setQrWasVisible(false);
-
-    reconnectMutation.mutate(undefined, {
-      onSuccess: () => {
-        setHint("Session reset. Scan the QR code when it appears.");
-      },
-      onError: (error) => {
-        setFormError(formatError(error));
-      },
-    });
-  }
-
-  function handleProfileChange(nextProfileId: string) {
-    setProfileId(nextProfileId);
-    setHint(null);
-    setFormError(null);
-
-    if (!configured || nextProfileId === settings?.profileId) {
-      return;
-    }
-
-    saveMutation.mutate(
-      { profileId: nextProfileId.trim() || "default" },
-      {
-        onSuccess: () => {
-          setHint("Reply profile saved.");
-        },
-        onError: (error) => {
-          setFormError(formatError(error));
-        },
-      },
-    );
-  }
-
-  if (isLoading) {
+  if (card.isLoading) {
     if (embedded) {
       return SETTINGS_CARD_LOADING_SKELETON;
     }
 
-    return (
-      <Card className="w-full shadow-none">
-        <CardContent className="py-3">{SETTINGS_CARD_LOADING_SKELETON}</CardContent>
-      </Card>
-    );
+    return <div className="py-3">{SETTINGS_CARD_LOADING_SKELETON}</div>;
   }
+
+  const allowedPhonesDialog = (
+    <WhatsAppAllowedPhonesDialog
+      allowedPhoneDetails={card.allowedPhoneDetails}
+      allowedPhones={card.allowedPhones}
+      onAllowedPhonesChange={card.onAllowedPhonesChange}
+      onError={card.onError}
+      onOpenChange={card.onAllowedPhonesOpenChange}
+      onSaved={card.onSavedAllowedPhones}
+      open={card.allowedPhonesOpen}
+      profileId={card.profileId}
+    />
+  );
 
   const content = (
     <WhatsAppSettingsCardContent
-      embedded={embedded}
-      headerSubtitle={headerSubtitle}
-      statusBadge={statusBadge}
-      configured={configured}
-      paired={paired}
-      running={running}
-      showQr={showQr}
-      linkedNumber={linkedNumber}
-      profileId={profileId}
-      profiles={profiles}
-      savePending={saveMutation.isPending}
-      onProfileChange={handleProfileChange}
-      pairingCode={pairingCode}
-      copied={copied}
-      onCopyPairingCode={() => void copyPairingCode()}
-      onRegeneratePairingCode={handleRegeneratePairingCode}
-      regeneratePending={regenerateMutation.isPending}
-      qrCode={qrCode}
-      linkingAfterScan={linkingAfterScan}
-      bridgeStarting={bridgeStarting}
-      awaitingQr={awaitingQr}
-      showReconnect={showReconnect}
-      onReconnect={handleReconnect}
-      reconnectPending={reconnectMutation.isPending}
-      worker={worker}
-      statusLine={statusLine}
-      formError={formError}
-      loadError={loadError}
-      canSave={canSave}
-      actionLabel={actionLabel}
-      onSave={handleSave}
+      actionLabel={card.actionLabel}
+      allowedPhoneSummary={card.allowedPhoneSummary}
+      allowUnpairedGroupMembers={card.allowUnpairedGroupMembers}
+      awaitingQr={card.awaitingQr}
+      canSave={card.canSave}
+      configured={card.configured}
+      connected={card.connected}
+      copied={card.copied}
+      formError={card.formError}
+      linkError={card.linkError}
+      linkedNumber={card.linkedNumber}
+      linkingAfterScan={card.linkingAfterScan}
+      linkOwner={card.linkOwner}
+      loadError={card.loadError}
+      onAllowUnpairedGroupMembersChange={card.onAllowUnpairedGroupMembersChange}
+      onCopyPairingCode={card.onCopyPairingCode}
+      onManageAllowedPhones={card.onManageAllowedPhones}
+      onReconnect={card.onReconnect}
+      onRegeneratePairingCode={card.onRegeneratePairingCode}
+      onRequireGroupMentionChange={card.onRequireGroupMentionChange}
+      onSave={card.onSave}
+      paired={card.paired}
+      pairingCode={card.pairingCode}
+      qrCode={card.qrCode}
+      reconnectPending={card.reconnectPending}
+      regeneratePending={card.regeneratePending}
+      requireGroupMention={card.requireGroupMention}
+      running={card.running}
+      savePending={card.savePending}
+      showQr={card.showQr}
+      showReconnect={card.showReconnect}
+      statusLine={card.statusLine}
+      worker={card.worker}
     />
   );
 
   if (embedded) {
     return (
-      <div className="space-y-2">
-        <p className="text-xs text-muted-foreground">{headerSubtitle}</p>
+      <>
         {content}
-      </div>
+        {allowedPhonesDialog}
+      </>
     );
   }
 
   return (
-    <Card className="w-full shadow-none">
-      <CardContent className="p-0">{content}</CardContent>
-    </Card>
+    <>
+      {content}
+      {allowedPhonesDialog}
+    </>
   );
 }

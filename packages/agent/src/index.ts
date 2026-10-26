@@ -1,73 +1,32 @@
-import type { AutomationDefinition, ToolDefinition } from "@nakama/core";
-import {
+export type { AgentChatSession, AgentDependencies } from "./chat";
+
+export {
   createAgentChatSession,
-  type AgentChatSession,
-  type AgentChatSessionOptions,
-  type AgentDependencies,
-  type AgentRequest,
+  createAutomationFromPrompt,
 } from "./chat";
-import { parseAutomationResponse } from "./parse";
-import {
-  buildAutomationSystemPrompt,
-  buildAutomationUserPrompt,
-} from "./prompt";
 
-export interface AgentHarness {
-  createAutomationFromPrompt(
-    request: AgentRequest,
-    options?: { tools?: ToolDefinition[] },
-  ): Promise<AutomationDefinition>;
-  createChatSession(options?: AgentChatSessionOptions): AgentChatSession;
-}
+export type { CompactionConfig } from "./history-compaction";
 
-export function createAgentHarness(
-  dependencies: AgentDependencies = {},
-): AgentHarness {
-  const defaultTools = dependencies.tools ?? [];
-  const harness: AgentHarness = {
-    async createAutomationFromPrompt(request, options) {
-      const tools = options?.tools ?? defaultTools;
+export { expandLearnInLastUserMessage } from "./learn-prompt";
 
-      if (!dependencies.provider) {
-        throw new Error("Provider is not configured.");
-      }
+export { generateSessionTitleFromMessages } from "./session-title";
 
-      const result = await dependencies.provider.generateText({
-        system: buildAutomationSystemPrompt(tools),
-        prompt: buildAutomationUserPrompt(request.prompt, request.channel),
-      });
-
-      return parseAutomationResponse(result.content, {
-        prompt: request.prompt,
-        tools,
-      });
-    },
-    createChatSession(options) {
-      return createAgentChatSession(dependencies, harness, options);
-    },
-  };
-
-  return harness;
-}
+export {
+  buildSetupChecklist,
+  listSetupChecklistCandidates,
+} from "./setup-checklist";
 
 export type {
-  AgentChatSession,
-  AgentChatSessionOptions,
-  AgentDependencies,
-  AgentRequest,
-  ResolvePromptContextInput,
-} from "./chat";
-export type { CompactionConfig } from "./history-compaction";
-export type { DraftTaskPromptInput } from "./task-prompt";
-export { draftTaskPromptFromFields } from "./task-prompt";
-export { executeToolCall } from "./tool-loop";
-export {
-  suggestToolParamsFromPrompt,
-  parseSuggestedParams,
-  buildSuggestParamsUserPrompt,
-} from "./tool-playground-params";
-export {
-  buildSessionTitlePrompt,
-  generateSessionTitleFromMessages,
-  normalizeSessionTitle,
-} from "./session-title";
+  SkillConsolidateBodyInput,
+  SkillConsolidateMode,
+} from "./skill-consolidate";
+
+export { generateSkillConsolidateMarkdown } from "./skill-consolidate";
+
+export type { SkillPostTurnReviewOutcome } from "./skill-post-turn-review";
+
+export { generateSkillPostTurnReview } from "./skill-post-turn-review";
+
+export { canRunToolCallsInParallel, executeToolCall } from "./tool-loop";
+
+export { suggestToolParamsFromPrompt } from "./tool-playground-params";

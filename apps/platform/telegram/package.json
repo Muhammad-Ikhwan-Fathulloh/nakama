@@ -3,14 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "NODE_ENV=production bun run src/index.ts",
+    "build": "bun build ./src/index.ts --outdir dist --target bun --external @vscode/ripgrep --external @firecrawl/anydoc",
     "dev": "bun run src/index.ts",
-    "build": "bun build ./src/index.ts --outdir dist --target bun --external @vscode/ripgrep --external pdf-parse",
+    "start": "NODE_ENV=production bun run src/index.ts",
     "test": "bun test"
   },
   "dependencies": {
     "@nakama/client": "workspace:*",
     "@nakama/core": "workspace:*",
-    "grammy": "^1.35.0"
+    "grammy": "^1.46.0"
   }
 }

@@ -1,43 +1,52 @@
 import Anthropic, { APIError } from "@anthropic-ai/sdk";
-import type {
-  GenerateChatInput,
-  GenerateTextResult,
-  GenerateTextInput,
-  ProviderClient,
-  ProviderName,
-  StreamChatHandlers,
+import {
+  fetchWithoutIdleTimeout,
+  type GenerateChatInput,
+  type GenerateTextInput,
+  type GenerateTextResult,
+  type ProviderClient,
+  type ProviderName,
+  type StreamChatHandlers,
 } from "@nakama/core";
-import { continueAnthropicUntilDone } from "./web-search";
-import { buildTokenUsage } from "../shared";
+import { buildProviderResponseError, buildTokenUsage } from "../shared";
+import {
+  buildAnthropicThinkingRequest,
+  continueAnthropicUntilDone,
+} from "./web-search";
 
 const DEFAULT_PROVIDER_LABEL = "Anthropic";
 
 export interface AnthropicProviderOptions {
   apiKey: string;
-  model?: string;
   baseUrl?: string;
   /** Injected in tests to mock HTTP without touching global fetch. */
   fetch?: typeof fetch;
-  providerName?: ProviderName;
+  model?: string;
   providerLabel?: string;
+  providerName?: ProviderName;
 }
 
 function createAnthropicClient(
   apiKey: string,
   baseUrl?: string,
-  fetchImpl?: typeof fetch,
+  fetchImpl?: typeof fetch
 ): Anthropic {
-  return new Anthropic({
+  const options: ConstructorParameters<typeof Anthropic>[0] = {
     apiKey,
-    ...(baseUrl?.trim() ? { baseURL: baseUrl.trim() } : {}),
-    ...(fetchImpl ? { fetch: fetchImpl } : {}),
-  });
+    fetch: fetchImpl ?? fetchWithoutIdleTimeout,
+  };
+
+  if (baseUrl?.trim()) {
+    options.baseURL = baseUrl.trim();
+  }
+
+  return new Anthropic(options);
 }
 
-function formatAnthropicError(error: unknown, label: string): Error {
+function formatAnthropicError(error: Error, label: string): Error {
   if (error instanceof APIError) {
     return new Error(
-      `${label} request failed (${error.status}): ${error.message}`,
+      `${label} request failed (${error.status}): ${error.message}`
     );
   }
 
@@ -50,38 +59,75 @@ function formatAnthropicError(error: unknown, label: string): Error {
 
 async function withAnthropicError<T>(
   run: () => Promise<T>,
-  label: string,
+  label: string
 ): Promise<T> {
   try {
     return await run();
   } catch (error) {
-    throw formatAnthropicError(error, label);
+    throw formatAnthropicError(
+      error instanceof Error ? error : new Error(String(error)),
+      label
+    );
   }
 }
 
 export function createAnthropicProvider(
-  options: AnthropicProviderOptions,
+  options: AnthropicProviderOptions
 ): ProviderClient {
   const model = options.model ?? "claude-sonnet-4-6";
-  const client = createAnthropicClient(options.apiKey, options.baseUrl, options.fetch);
+
+  const client = createAnthropicClient(
+    options.apiKey,
+    options.baseUrl,
+    options.fetch
+  );
+
   const name: ProviderName = options.providerName ?? "anthropic";
   const label = options.providerLabel ?? DEFAULT_PROVIDER_LABEL;
 
   return {
-    name,
+    generateChat(input: GenerateChatInput) {
+      return withAnthropicError(
+        () =>
+          continueAnthropicUntilDone({
+            client,
+            messages: input.messages,
+            model,
+            provider: name,
+            signal: input.signal,
+            stream: false,
+            system: input.system,
+            thinking: input.providerOptions,
+            tools: input.tools,
+            webSearch: input.providerOptions?.webSearch ?? false,
+          }),
+        label
+      );
+    },
     generateText(input: GenerateTextInput) {
       const useJson = (input.format ?? "json") === "json";
+
       const system = useJson
         ? `${input.system}\n\nRespond with valid JSON only.`
         : `${input.system}\n\nReturn only the requested text. No JSON, labels, or markdown fences.`;
 
       return withAnthropicError(async () => {
-        const message = await client.messages.create({
-          model,
-          max_tokens: 2048,
-          system,
-          messages: [{ role: "user", content: input.prompt }],
-        });
+        const message = await client.messages.create(
+          {
+            max_tokens: 2048,
+            messages: [{ content: input.prompt, role: "user" }],
+            model,
+            system,
+            ...buildAnthropicThinkingRequest(undefined, model),
+          },
+          model === "claude-opus-5-5"
+            ? {
+                headers: {
+                  "anthropic-beta": "thinking-binding-controls-2026-08-01",
+                },
+              }
+            : undefined
+        );
 
         const content = message.content
           .filter((block) => block.type === "text")
@@ -90,60 +136,52 @@ export function createAnthropicProvider(
           .trim();
 
         if (!content) {
-          throw new Error(`${label} returned an empty response.`);
+          throw buildProviderResponseError(
+            `${label} returned an empty response.`
+          );
         }
 
         const usage = buildTokenUsage({
-          inputTokens: message.usage?.input_tokens,
+          cachedInputTokens: message.usage?.cache_read_input_tokens,
+          inputTokens:
+            (message.usage?.input_tokens ?? 0) +
+            (message.usage?.cache_read_input_tokens ?? 0) +
+            (message.usage?.cache_creation_input_tokens ?? 0),
           outputTokens: message.usage?.output_tokens,
         });
 
-        return {
+        const result: GenerateTextResult = {
           content,
-          ...(usage ? { usage } : {}),
-        } satisfies GenerateTextResult;
+        };
+
+        if (usage) {
+          result.usage = usage;
+        }
+
+        return result;
       }, label);
     },
-    generateChat(input: GenerateChatInput) {
-      return withAnthropicError(
-        () =>
-          continueAnthropicUntilDone({
-            client,
-            model,
-            system: input.system,
-            messages: input.messages,
-            tools: input.tools,
-            webSearch: input.providerOptions?.webSearch ?? false,
-            thinking: input.providerOptions,
-            stream: false,
-            provider: name,
-          }),
-        label,
-      );
-    },
+    name,
     streamChat(input: GenerateChatInput, handlers: StreamChatHandlers) {
       return withAnthropicError(
         () =>
           continueAnthropicUntilDone({
             client,
-            model,
-            system: input.system,
+            handlers,
             messages: input.messages,
+            model,
+            provider: name,
+            signal: input.signal,
+            stream: true,
+            system: input.system,
+            thinking: input.providerOptions,
             tools: input.tools,
             webSearch: input.providerOptions?.webSearch ?? false,
-            thinking: input.providerOptions,
-            stream: true,
-            handlers,
-            provider: name,
           }),
-        label,
+        label
       );
     },
   };
 }
 
-export {
-  buildAnthropicTools,
-  parseAnthropicContent,
-  toAnthropicMessages,
-} from "./web-search";
+export { parseAnthropicContent, toAnthropicMessages } from "./web-search";

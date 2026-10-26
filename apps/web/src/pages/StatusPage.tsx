@@ -1,35 +1,34 @@
-import {
-  ArrowDownLeftIcon,
-  ArrowUpRightIcon,
-  AlertTriangleIcon,
-  CheckCircle2Icon,
-  ClockIcon,
-  CoinsIcon,
-  ServerIcon,
-  SparklesIcon,
-  XCircleIcon,
-  ZapIcon,
-  type LucideIcon,
-} from "lucide-react";
-import { useMemo, type ReactNode } from "react";
+import type {
+  LlmUsageDayStats,
+  LlmUsageGroupStats,
+  LlmUsageStats,
+  LlmUsageStatus,
+  SystemStatusResponse,
+} from "@nakama/core/contract";
+import { Button } from "@nakama/ui/button";
+import { Card, CardContent } from "@nakama/ui/card";
+import { cn } from "@nakama/ui/utils";
+import type { Clock01Icon } from "hugeicons-react";
+import { type ReactNode, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import type { LlmUsageStatus, SystemStatusResponse } from "@nakama/core/contract";
-import { Button } from "@/components/ui/button";
-import { WorkerActionBar } from "@/components/WorkerActionBar";
-import { buildServiceColumns, deriveSummary, type StatusTone } from "@/pages/status-page.shared";
+import { OrgLlmQuotaCard } from "@/components/settings/OrgLlmQuotaCard";
+import {
+  WorkerActionBar,
+  WorkerViewLogsButton,
+} from "@/components/WorkerActionBar";
 import { useAuth } from "@/context/use-auth";
-import { useRefreshSystemStatus, useSystemStatusQuery } from "@/hooks/use-system-status";
+import {
+  useRefreshSystemStatus,
+  useSystemStatusQuery,
+} from "@/hooks/use-system-status";
+import { usePluginWorkers } from "@/hooks/use-worker-actions";
+import { formatUsd } from "@/lib/chat-usage";
 import { formatError } from "@/lib/client";
-import { PAGE_PATHS } from "@/lib/navigation";
 import { formatProviderLabel } from "@/lib/models";
-import { cn } from "@/lib/utils";
+import { PAGE_PATHS, pluginIcon } from "@/lib/navigation";
+import { buildServiceColumns } from "@/pages/status-page.shared";
 
-const sectionClass = "rounded-md border border-border bg-card";
-const iconTileClass =
-  "flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40";
-const iconClass = "size-5 text-foreground";
-
-export function StatusPage({ embedded = false }: { embedded?: boolean } = {}) {
+export function StatusPage() {
   const { data: status, error, isLoading } = useSystemStatusQuery();
   const { user } = useAuth();
   const refreshSystemStatus = useRefreshSystemStatus();
@@ -37,24 +36,21 @@ export function StatusPage({ embedded = false }: { embedded?: boolean } = {}) {
   const canManageWorkers = user?.isPlatformAdmin === true;
 
   return (
-    <div className={cn("min-w-0", embedded ? "divide-y divide-border" : "space-y-6")}>
+    <div className="mx-auto max-w-3xl space-y-8">
       {errorMessage ? (
         <div
-          className={cn(
-            "flex flex-wrap items-start justify-between gap-3 border-destructive/40 bg-destructive/10 px-4 py-3",
-            embedded ? "border-b" : "rounded-md border",
-          )}
+          className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3"
           role="alert"
         >
-          <p className="min-w-0 flex-1 text-sm text-destructive">
+          <p className="min-w-0 flex-1 text-destructive text-sm">
             Could not load system status: {errorMessage}
           </p>
           <Button
-            type="button"
-            variant="outline"
-            size="sm"
             className="shrink-0 border-destructive/30 bg-background text-destructive hover:bg-destructive/10"
             onClick={() => void refreshSystemStatus()}
+            size="sm"
+            type="button"
+            variant="outline"
           >
             Try again
           </Button>
@@ -62,270 +58,803 @@ export function StatusPage({ embedded = false }: { embedded?: boolean } = {}) {
       ) : null}
 
       {isLoading && !status ? (
-        <StatusSkeleton embedded={embedded} />
+        <StatusSkeleton />
       ) : status ? (
-        <>
-          <StatusDashboard
-            status={status}
-            canManageWorkers={canManageWorkers}
-            embedded={embedded}
-          />
-          <LlmUsageSection usage={status.llmUsage} embedded={embedded} />
-        </>
+        <StatusDashboard canManageWorkers={canManageWorkers} status={status} />
       ) : null}
+      <PluginWorkersSection />
     </div>
+  );
+}
+
+function PluginWorkersSection() {
+  const { data = [], error, refetch } = usePluginWorkers();
+  const { user, activeOrg } = useAuth();
+  const canManage = user?.isPlatformAdmin || activeOrg?.role === "admin";
+
+  if (error) {
+    return (
+      <div
+        className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3"
+        role="alert"
+      >
+        <p className="min-w-0 flex-1 text-destructive text-sm">
+          Could not load plugin workers: {formatError(error)}
+        </p>
+        <Button
+          className="shrink-0 border-destructive/30 bg-background text-destructive hover:bg-destructive/10"
+          onClick={() => void refetch()}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          Try again
+        </Button>
+      </div>
+    );
+  }
+
+  if (!data.length) {
+    return null;
+  }
+
+  return (
+    <section aria-label="Plugin workers" className="space-y-3">
+      <h2 className="type-section-title">Plugin workers</h2>
+      <Card className="w-full overflow-hidden shadow-none">
+        <CardContent className="divide-y divide-border p-0">
+          {data.map((worker) => {
+            const running = worker.process.status === "online";
+
+            const labels = {
+              errored: "Errored",
+              online: "Online",
+              stopped: "Offline",
+            };
+
+            const status = worker.process.status;
+
+            return (
+              <WorkerServiceRow
+                canManage={Boolean(canManage)}
+                icon={pluginIcon(worker.pluginId)}
+                key={worker.name}
+                status={status ? labels[status] : "PM2 unavailable"}
+                title={worker.label}
+                titleHref={`/plugins/${encodeURIComponent(worker.pluginId)}`}
+                tone={running ? "ok" : status ? "bad" : "warn"}
+                worker={{ process: worker.process, running }}
+                workerName={worker.name}
+              />
+            );
+          })}
+        </CardContent>
+      </Card>
+    </section>
   );
 }
 
 function StatusDashboard({
   status,
   canManageWorkers,
-  embedded = false,
 }: {
   status: SystemStatusResponse;
   canManageWorkers: boolean;
-  embedded?: boolean;
 }) {
-  const summary = useMemo(() => deriveSummary(status), [status]);
   const services = useMemo(() => buildServiceColumns(status), [status]);
-  const { automationWorker, telegramWorker, whatsappWorker, discordWorker } = status;
+
+  const {
+    automationWorker,
+    telegramWorker,
+    whatsappWorker,
+    discordWorker,
+    slackWorker,
+  } = status;
+
+  const workerByTitle = new Map<
+    string,
+    {
+      footerLink?: { label: string; to: string };
+      worker: Pick<
+        SystemStatusResponse["automationWorker"],
+        "running" | "process"
+      >;
+      workerName: string;
+    }
+  >([
+    ["Automation", { worker: automationWorker, workerName: "automation" }],
+    ["Discord", { worker: discordWorker, workerName: "discord" }],
+    ["Slack", { worker: slackWorker, workerName: "slack" }],
+    ["Telegram", { worker: telegramWorker, workerName: "telegram" }],
+    [
+      "WhatsApp",
+      {
+        footerLink:
+          whatsappWorker.configured &&
+          whatsappWorker.running &&
+          !whatsappWorker.paired
+            ? { label: "Scan QR in Settings", to: PAGE_PATHS.settings }
+            : undefined,
+        worker: whatsappWorker,
+        workerName: "whatsapp",
+      },
+    ],
+  ]);
+
+  const workerRows = services.flatMap((service) => {
+    const worker = workerByTitle.get(service.title);
+
+    return worker ? [{ ...service, ...worker }] : [];
+  });
 
   return (
-    <section
-      className={cn("min-w-0 overflow-hidden", !embedded && sectionClass)}
-    >
-      <SummaryStrip status={status} summary={summary} />
+    <div className="space-y-8">
+      <section aria-label="Automation activity" className="space-y-3">
+        <h2 className="type-section-title">Automation activity</h2>
+        <Card className="w-full overflow-hidden shadow-none">
+          <CardContent className="divide-y divide-border p-0">
+            <QuickStat
+              label="Scheduled jobs"
+              value={automationWorker.scheduledJobs}
+            />
+            <QuickStat
+              active={automationWorker.activeRuns > 0}
+              label="Running now"
+              value={automationWorker.activeRuns}
+            />
+          </CardContent>
+        </Card>
+      </section>
+      <section aria-label="Services" className="space-y-3">
+        <h2 className="type-section-title">Services</h2>
+        <Card className="w-full overflow-hidden shadow-none">
+          <CardContent className="divide-y divide-border p-0">
+            {workerRows.map((row) => (
+              <WorkerServiceRow
+                canManage={canManageWorkers}
+                footerLink={row.footerLink}
+                icon={row.icon}
+                key={row.title}
+                status={row.status}
+                title={row.title}
+                tone={row.tone}
+                worker={row.worker}
+                workerName={row.workerName}
+              />
+            ))}
+          </CardContent>
+        </Card>
+      </section>
+    </div>
+  );
+}
 
-      <div className="grid grid-cols-1 divide-y divide-border border-b border-border sm:grid-cols-2 sm:divide-x sm:divide-y-0">
-        <QuickStat label="Scheduled jobs" value={automationWorker.scheduledJobs} />
-        <QuickStat
-          label="Automation runs"
-          value={automationWorker.activeRuns}
-          active={automationWorker.activeRuns > 0}
+export function LlmUsageTab() {
+  const {
+    data: status,
+    dataUpdatedAt,
+    error,
+    isLoading,
+  } = useSystemStatusQuery();
+
+  const refreshSystemStatus = useRefreshSystemStatus();
+  const errorMessage = error ? formatError(error) : null;
+  const isStale = Boolean(errorMessage && status);
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-8">
+      <OrgLlmQuotaCard />
+      {isStale ? (
+        <div
+          className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/25 bg-primary/5 py-2.5 pr-2.5 pl-4"
+          role="status"
+        >
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <p className="font-medium text-sm">
+              Showing data from{" "}
+              {new Date(dataUpdatedAt).toLocaleTimeString(undefined, {
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+            </p>
+            <p className="text-muted-foreground text-xs">{errorMessage}</p>
+          </div>
+          <Button
+            className="shrink-0 bg-background"
+            onClick={() => void refreshSystemStatus()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            Retry
+          </Button>
+        </div>
+      ) : errorMessage ? (
+        <div
+          className="flex flex-wrap items-start justify-between gap-3 border-destructive/40 border-b bg-destructive/10 px-4 py-3"
+          role="alert"
+        >
+          <p className="min-w-0 flex-1 text-destructive text-sm">
+            Could not load usage: {errorMessage}
+          </p>
+          <Button
+            className="shrink-0 border-destructive/30 bg-background text-destructive hover:bg-destructive/10"
+            onClick={() => void refreshSystemStatus()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            Try again
+          </Button>
+        </div>
+      ) : null}
+
+      {isLoading && !status ? (
+        <div
+          aria-busy="true"
+          aria-label="Loading LLM usage"
+          className="h-80 animate-pulse bg-muted/40"
         />
+      ) : status ? (
+        <div className={cn(isStale && "opacity-60")}>
+          <LlmUsageSection usage={status.llmUsage} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function usesSavedModelPricing(provider: LlmUsageStatus["provider"]): boolean {
+  return (
+    provider === "openai_compatible" ||
+    provider === "openrouter" ||
+    provider === "cerebras" ||
+    provider === "fireworks"
+  );
+}
+
+function usesBrowsePricingHint(provider: LlmUsageStatus["provider"]): boolean {
+  return (
+    provider === "openrouter" ||
+    provider === "cerebras" ||
+    provider === "fireworks"
+  );
+}
+
+function llmUsageCostNote(
+  usage: LlmUsageStatus,
+  modelLabel: string,
+  trackedModelCount: number
+): string {
+  if (usage.costEstimated) {
+    if (trackedModelCount > 1) {
+      return `Based on tracked usage across ${trackedModelCount} models. Actual billing may differ.`;
+    }
+
+    if (usesSavedModelPricing(usage.provider)) {
+      return `Based on pricing saved in Settings for ${modelLabel}. Actual billing may differ.`;
+    }
+
+    return "Estimated cost uses Nakama's built-in model prices. Your provider may charge a different amount.";
+  }
+
+  if (usesBrowsePricingHint(usage.provider)) {
+    return "Browse or add models in Settings → Manage model to save pricing for cost estimates.";
+  }
+
+  return "Add input/output $/1M per model in Customize → AI Providers → Manage models to estimate cost.";
+}
+
+function LlmUsageTrackedBody({
+  usage,
+  modelLabel,
+}: {
+  usage: LlmUsageStatus;
+  modelLabel: string;
+}) {
+  const trackedModelCount = usage.models.length;
+
+  return (
+    <div className="space-y-8">
+      <UsageDashboard usage={usage} />
+
+      {usage.agents?.length ? (
+        <UsageGroupList
+          costEstimated={usage.costEstimated}
+          groups={usage.agents}
+          title="By agent"
+        />
+      ) : null}
+
+      <p className="px-4 text-muted-foreground text-xs">
+        {llmUsageCostNote(usage, modelLabel, trackedModelCount)}
+      </p>
+    </div>
+  );
+}
+
+const compactNumber = new Intl.NumberFormat(undefined, {
+  maximumFractionDigits: 1,
+  notation: "compact",
+});
+
+function formatUsageDay(day: string): string {
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
+}
+
+function initialsOf(label: string): string {
+  const words = label
+    .replace(/@.*/, "")
+    .split(/[\s._-]+/)
+    .filter(Boolean);
+
+  return (
+    words
+      .slice(0, 2)
+      .map((word) => word[0]?.toUpperCase() ?? "")
+      .join("") || "?"
+  );
+}
+
+/** Darkest shade goes to the provider with the most tokens in the window. */
+const PROVIDER_SHADES = [
+  "bg-primary/85",
+  "bg-primary/55",
+  "bg-primary/35",
+  "bg-muted-foreground/30",
+];
+
+function UsageDashboard({ usage }: { usage: LlmUsageStatus }) {
+  const daily = usage.daily ?? [];
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const selected = activeIndex ?? daily.length - 1;
+
+  // Money only when every model has published rates; tokens otherwise.
+  const metric = (entry: { estimatedCostUsd: number; totalTokens: number }) =>
+    usage.costEstimated ? entry.estimatedCostUsd : entry.totalTokens;
+
+  const formatMetric = (value: number) =>
+    usage.costEstimated
+      ? formatUsd(value)
+      : `${compactNumber.format(value)} tokens`;
+
+  const users = usage.users ?? [];
+
+  return (
+    <Card className="w-full overflow-hidden shadow-none">
+      <CardContent className="grid p-0 md:grid-cols-2">
+        <UsagePanel
+          aside={
+            activeIndex !== null && daily[activeIndex]
+              ? `${formatUsageDay(daily[activeIndex].day)} · ${formatMetric(metric(daily[activeIndex]))}`
+              : `${formatMetric(metric(usage))} · ${usage.requestCount.toLocaleString()} requests`
+          }
+          title="AI spend"
+        >
+          <SpendChart
+            daily={daily}
+            metric={metric}
+            onSelect={setActiveIndex}
+            selected={selected}
+          />
+        </UsagePanel>
+        <UsagePanel
+          aside={providerAside(daily[selected])}
+          className="border-border border-t md:border-t-0 md:border-l"
+          title="Model providers"
+        >
+          <ProviderBars
+            daily={daily}
+            onSelect={setActiveIndex}
+            selected={selected}
+          />
+        </UsagePanel>
+        <UsagePanel className="border-border border-t" title="Models">
+          <ModelShareList
+            formatMetric={formatMetric}
+            metric={metric}
+            models={usage.models}
+          />
+        </UsagePanel>
+        {users.length > 0 ? (
+          <UsagePanel
+            className="border-border border-t md:border-l"
+            title="Adoption"
+          >
+            <AdoptionGrid users={users} />
+          </UsagePanel>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function providerAside(day: LlmUsageDayStats | undefined): string | null {
+  const top = day?.providers[0];
+
+  if (!(day && top) || day.totalTokens === 0) {
+    return null;
+  }
+
+  const percent = Math.round((top.totalTokens / day.totalTokens) * 100);
+
+  return `${formatUsageDay(day.day)} · ${formatProviderLabel(top.provider)} ${percent}%`;
+}
+
+function UsagePanel({
+  title,
+  aside,
+  className,
+  children,
+}: {
+  title: string;
+  aside?: string | null;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className={cn("min-w-0 space-y-4 p-4", className)}>
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="type-section-title">{title}</h2>
+        {aside ? (
+          <p className="truncate text-muted-foreground text-xs tabular-nums">
+            {aside}
+          </p>
+        ) : null}
       </div>
-
-      <div className="grid grid-cols-1 divide-y divide-border lg:grid-cols-2 lg:divide-x lg:divide-y-0 xl:grid-cols-4">
-        {services.map((service) => {
-          if (service.title === "Automation") {
-            return (
-              <WorkerServiceColumn
-                key={service.title}
-                icon={service.icon}
-                title={service.title}
-                status={service.status}
-                tone={service.tone}
-                worker={automationWorker}
-                workerName="automation"
-                canManage={canManageWorkers}
-              />
-            );
-          }
-
-          if (service.title === "Telegram") {
-            return (
-              <WorkerServiceColumn
-                key={service.title}
-                icon={service.icon}
-                title={service.title}
-                status={service.status}
-                tone={service.tone}
-                worker={telegramWorker}
-                workerName="telegram"
-                canManage={canManageWorkers}
-              />
-            );
-          }
-
-          if (service.title === "WhatsApp") {
-            return (
-              <WorkerServiceColumn
-                key={service.title}
-                icon={service.icon}
-                title={service.title}
-                status={service.status}
-                tone={service.tone}
-                worker={whatsappWorker}
-                workerName="whatsapp"
-                canManage={canManageWorkers}
-                footerLink={
-                  whatsappWorker.configured &&
-                  whatsappWorker.running &&
-                  !whatsappWorker.paired
-                    ? { label: "Scan QR in Settings", to: PAGE_PATHS.settings }
-                    : undefined
-                }
-              />
-            );
-          }
-
-          if (service.title === "Discord") {
-            return (
-              <WorkerServiceColumn
-                key={service.title}
-                icon={service.icon}
-                title={service.title}
-                status={service.status}
-                tone={service.tone}
-                worker={discordWorker}
-                workerName="discord"
-                canManage={canManageWorkers}
-              />
-            );
-          }
-
-          return <ServiceColumn key={service.title} {...service} />;
-        })}
-      </div>
+      {children}
     </section>
   );
 }
 
-function LlmUsageSection({
-  usage,
-  embedded = false,
+function DayAxis({ daily }: { daily: LlmUsageDayStats[] }) {
+  if (daily.length === 0) {
+    return null;
+  }
+
+  const middle = daily[Math.floor((daily.length - 1) / 2)];
+  const last = daily.at(-1);
+
+  return (
+    <div className="flex justify-between text-2xs text-muted-foreground tabular-nums">
+      <span>{formatUsageDay(daily[0].day)}</span>
+      {middle ? <span>{formatUsageDay(middle.day)}</span> : null}
+      {last ? <span>{formatUsageDay(last.day)}</span> : null}
+    </div>
+  );
+}
+
+const CHART_WIDTH = 300;
+
+const CHART_HEIGHT = 120;
+
+export function SpendChart({
+  daily,
+  metric,
+  selected,
+  onSelect,
 }: {
-  usage: LlmUsageStatus;
-  embedded?: boolean;
+  daily: LlmUsageDayStats[];
+  metric: (day: LlmUsageDayStats) => number;
+  selected: number;
+  onSelect: (index: number | null) => void;
 }) {
+  const values = daily.map(metric);
+  const max = Math.max(...values, 0);
+  const step = daily.length > 1 ? CHART_WIDTH / (daily.length - 1) : 0;
+
+  const points = values.map((value, index) => ({
+    x: index * step,
+    y:
+      max > 0
+        ? CHART_HEIGHT - (value / max) * (CHART_HEIGHT - 8) - 4
+        : CHART_HEIGHT - 4,
+  }));
+
+  const line = points.map((point) => `${point.x},${point.y}`).join(" ");
+  const active = points[selected];
+
+  return (
+    <div className="space-y-2">
+      <svg
+        aria-label="Spend per day"
+        className="h-32 w-full overflow-visible text-primary"
+        onMouseLeave={() => onSelect(null)}
+        onMouseMove={(event) => {
+          const box = event.currentTarget.getBoundingClientRect();
+          const ratio = (event.clientX - box.left) / box.width;
+          onSelect(Math.round(ratio * (daily.length - 1)));
+        }}
+        preserveAspectRatio="none"
+        role="img"
+        viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
+      >
+        <defs>
+          <linearGradient id="usage-spend-fill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="currentColor" stopOpacity={0.18} />
+            <stop offset="100%" stopColor="currentColor" stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        {points.length > 1 ? (
+          <>
+            <polygon
+              fill="url(#usage-spend-fill)"
+              points={`0,${CHART_HEIGHT} ${line} ${CHART_WIDTH},${CHART_HEIGHT}`}
+            />
+            <polyline
+              fill="none"
+              points={line}
+              stroke="currentColor"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              vectorEffect="non-scaling-stroke"
+            />
+          </>
+        ) : null}
+        {active ? (
+          <line
+            stroke="currentColor"
+            strokeDasharray="2 3"
+            strokeOpacity={0.4}
+            vectorEffect="non-scaling-stroke"
+            x1={active.x}
+            x2={active.x}
+            y1={0}
+            y2={CHART_HEIGHT}
+          />
+        ) : null}
+      </svg>
+      <DayAxis daily={daily} />
+    </div>
+  );
+}
+
+function ProviderBars({
+  daily,
+  selected,
+  onSelect,
+}: {
+  daily: LlmUsageDayStats[];
+  selected: number;
+  onSelect: (index: number | null) => void;
+}) {
+  const ranked = useMemo(() => {
+    const totals = new Map<string | null, number>();
+
+    for (const day of daily) {
+      for (const share of day.providers) {
+        totals.set(
+          share.provider,
+          (totals.get(share.provider) ?? 0) + share.totalTokens
+        );
+      }
+    }
+
+    return [...totals.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .map(([provider]) => provider);
+  }, [daily]);
+
+  const shadeOf = (provider: string | null) =>
+    PROVIDER_SHADES[
+      Math.min(ranked.indexOf(provider), PROVIDER_SHADES.length - 1)
+    ];
+
+  return (
+    <div className="space-y-2">
+      <div
+        aria-label="Provider share per day"
+        className="flex h-32 items-stretch gap-0.5"
+        onMouseLeave={() => onSelect(null)}
+        role="img"
+      >
+        {daily.map((day, index) => (
+          <div
+            className={cn(
+              "flex flex-1 flex-col-reverse overflow-hidden rounded-xs bg-muted transition-opacity",
+              index === selected ? "opacity-100" : "opacity-70"
+            )}
+            key={day.day}
+            onMouseEnter={() => onSelect(index)}
+          >
+            {day.totalTokens > 0
+              ? [...day.providers]
+                  .sort(
+                    (left, right) =>
+                      ranked.indexOf(left.provider) -
+                      ranked.indexOf(right.provider)
+                  )
+                  .map((share) => (
+                    <div
+                      className={shadeOf(share.provider)}
+                      key={share.provider ?? ""}
+                      style={{
+                        height: `${(share.totalTokens / day.totalTokens) * 100}%`,
+                      }}
+                    />
+                  ))
+              : null}
+          </div>
+        ))}
+      </div>
+      <DayAxis daily={daily} />
+    </div>
+  );
+}
+
+function ShareRing({ share }: { share: number }) {
+  const radius = 7;
+  const circumference = 2 * Math.PI * radius;
+
+  return (
+    <svg
+      aria-label={`${Math.round(share * 100)} percent`}
+      className="size-5 shrink-0 -rotate-90 text-primary"
+      role="img"
+      viewBox="0 0 20 20"
+    >
+      <circle
+        className="text-muted"
+        cx={10}
+        cy={10}
+        fill="none"
+        r={radius}
+        stroke="currentColor"
+        strokeWidth={3}
+      />
+      <circle
+        cx={10}
+        cy={10}
+        fill="none"
+        r={radius}
+        stroke="currentColor"
+        strokeDasharray={`${share * circumference} ${circumference}`}
+        strokeLinecap="round"
+        strokeWidth={3}
+      />
+    </svg>
+  );
+}
+
+function ModelShareList({
+  models,
+  metric,
+  formatMetric,
+}: {
+  models: LlmUsageStatus["models"];
+  metric: (entry: LlmUsageStats) => number;
+  formatMetric: (value: number) => string;
+}) {
+  const total = models.reduce((sum, model) => sum + metric(model), 0);
+
+  return (
+    <ul className="space-y-3">
+      {models.map((model) => (
+        <li className="flex items-center gap-3" key={model.modelId}>
+          <span className="min-w-0 flex-1 truncate font-mono text-sm">
+            {model.modelId}
+          </span>
+          <span className="text-sm tabular-nums">
+            {formatMetric(metric(model))}
+          </span>
+          <ShareRing share={total > 0 ? metric(model) / total : 0} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function AdoptionGrid({ users }: { users: LlmUsageGroupStats[] }) {
+  return (
+    <ul className="grid grid-cols-3 gap-x-2 gap-y-4 sm:grid-cols-4">
+      {users.map((user) => {
+        const label = user.id ? (user.name ?? user.id) : "Unattributed";
+
+        return (
+          <li
+            className="flex min-w-0 flex-col items-center gap-1 text-center"
+            key={user.id ?? ""}
+          >
+            <span
+              aria-hidden="true"
+              className={cn(
+                "flex size-10 items-center justify-center rounded-full font-medium text-sm",
+                user.id
+                  ? "bg-primary/15 text-primary"
+                  : "bg-muted text-muted-foreground"
+              )}
+            >
+              {user.id ? initialsOf(label) : "–"}
+            </span>
+            <span className="w-full truncate text-sm">{label}</span>
+            <span className="whitespace-nowrap text-muted-foreground text-xs tabular-nums">
+              {compactNumber.format(user.requestCount)} requests
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function UsageGroupList({
+  title,
+  groups,
+  costEstimated,
+}: {
+  title: string;
+  groups: LlmUsageGroupStats[];
+  costEstimated: boolean;
+}) {
+  const maxTokens = Math.max(...groups.map((group) => group.totalTokens), 0);
+
+  return (
+    <div className="space-y-3">
+      <h2 className="type-section-title">{title}</h2>
+      <Card className="w-full overflow-hidden shadow-none">
+        <CardContent className="p-0">
+          {groups.map((group) => (
+            <UsageRow
+              costEstimated={costEstimated}
+              key={group.id ?? ""}
+              label={group.id ? (group.name ?? group.id) : "Unattributed"}
+              maxTokens={maxTokens}
+              usage={group}
+            />
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function LlmUsageBody({ usage }: { usage: LlmUsageStatus }) {
   const modelLabel =
     usage.currentModel ??
     (usage.providerConfigured ? "Default model" : "Not configured");
-  const hasUsage = usage.requestCount > 0;
-  const trackedModelCount = usage.models.length;
-  const maxModelTokens = usage.models[0]?.totalTokens ?? 0;
 
+  if (!usage.providerConfigured) {
+    return (
+      <LlmUsageEmptyState
+        action={
+          <Link
+            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground text-sm transition-colors hover:bg-primary/90"
+            to={PAGE_PATHS.providers}
+          >
+            Add provider
+          </Link>
+        }
+        description="Add a provider to start tracking token usage and API cost."
+        title="Connect a provider to track usage"
+      />
+    );
+  }
+
+  if (usage.requestCount === 0) {
+    return (
+      <LlmUsageEmptyState
+        description="Usage appears here after chat messages, automation runs, or task executions."
+        title="No LLM calls yet"
+      />
+    );
+  }
+
+  return <LlmUsageTrackedBody modelLabel={modelLabel} usage={usage} />;
+}
+
+function LlmUsageSection({ usage }: { usage: LlmUsageStatus }) {
   return (
-    <section className={cn("min-w-0 overflow-hidden", !embedded && sectionClass)}>
-      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border px-5 py-4">
-        <div className="min-w-0 space-y-1">
-          <div className="flex items-center gap-2">
-            <h2 className="type-section-title">LLM usage</h2>
-            {usage.providerConfigured ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
-                <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden />
-                Tracking
-              </span>
-            ) : null}
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Estimated spend and token volume since the server started.
-          </p>
-        </div>
+    <section className="min-w-0 space-y-8">
+      <LlmUsageBody usage={usage} />
 
-        {usage.providerConfigured && usage.provider ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs font-medium text-foreground">
-              {formatProviderLabel(usage.provider, usage.displayName)}
-            </span>
-          </div>
-        ) : null}
-      </div>
-
-      {!usage.providerConfigured ? (
-        <LlmUsageEmptyState
-          icon={SparklesIcon}
-          title="Connect a provider to track usage"
-          description="Add an API key in Settings to start estimating token usage and API cost."
-          action={
-            <Link
-              to={PAGE_PATHS.settings}
-              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-            >
-              Open Settings
-            </Link>
-          }
-        />
-      ) : !hasUsage ? (
-        <LlmUsageEmptyState
-          icon={ZapIcon}
-          title="No LLM calls yet"
-          description="Usage appears here after chat messages, automation runs, or task executions."
-        />
-      ) : (
-        <div className="space-y-4 p-5">
-          <div className="rounded-lg border border-border bg-background/50 p-4">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-              <CompactUsageStat
-                icon={CoinsIcon}
-                label="API cost"
-                value={usage.costEstimated ? formatUsd(usage.estimatedCostUsd) : "—"}
-              />
-              <CompactUsageStat
-                icon={ZapIcon}
-                label="Requests"
-                value={usage.requestCount.toLocaleString()}
-              />
-              <CompactUsageStat
-                icon={ArrowDownLeftIcon}
-                label="Input"
-                value={usage.inputTokens.toLocaleString()}
-              />
-              <CompactUsageStat
-                icon={ArrowUpRightIcon}
-                label="Output"
-                value={usage.outputTokens.toLocaleString()}
-              />
-              <CompactUsageStat
-                icon={SparklesIcon}
-                label="Total"
-                value={usage.totalTokens.toLocaleString()}
-              />
-            </div>
-
-            <div className="mt-4 border-t border-border pt-4">
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                  Token mix
-                </p>
-                <p className="text-xs tabular-nums text-muted-foreground">
-                  {usage.inputTokens.toLocaleString()} in / {usage.outputTokens.toLocaleString()} out
-                </p>
-              </div>
-              <TokenMixBar inputTokens={usage.inputTokens} outputTokens={usage.outputTokens} />
-            </div>
-
-            <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
-              {usage.costEstimated
-                ? trackedModelCount > 1
-                  ? `Based on tracked usage across ${trackedModelCount} models. Actual billing may differ.`
-                  : usage.provider === "openai_compatible" ||
-                      usage.provider === "openrouter" ||
-                      usage.provider === "cerebras"
-                    ? `Based on pricing saved in Settings for ${modelLabel}. Actual billing may differ.`
-                    : `Based on catalog pricing for ${modelLabel}. Actual billing may differ.`
-                : usage.provider === "openrouter" || usage.provider === "cerebras"
-                  ? "Browse or add models in Settings → Manage model to save pricing for cost estimates."
-                  : "Add input/output $/1M per model in Settings → Manage models to estimate cost."}
-            </p>
-          </div>
-
-          {trackedModelCount > 0 ? (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <p className="type-label">By model</p>
-                <p className="text-xs text-muted-foreground">
-                  {trackedModelCount} tracked
-                </p>
-              </div>
-              <div className="overflow-hidden rounded-lg border border-border bg-background/40">
-                {usage.models.map((modelUsage) => (
-                  <ModelUsageRow
-                    key={modelUsage.modelId}
-                    usage={modelUsage}
-                    costEstimated={usage.costEstimated}
-                    maxTokens={maxModelTokens}
-                  />
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </div>
-      )}
-
-      <div className="border-t border-border bg-muted/15 px-5 py-3 dark:bg-muted/10">
-        <p className="text-xs text-muted-foreground">
-          Tracking since {formatDate(usage.trackedSince)}. Figures reset when the server restarts.
+      <div className="px-4">
+        <p className="text-muted-foreground text-xs">
+          Tracking since {formatDate(usage.trackedSince)}. Figures reset when
+          the server restarts.
         </p>
       </div>
     </section>
@@ -333,109 +862,61 @@ function LlmUsageSection({
 }
 
 function LlmUsageEmptyState({
-  icon: Icon,
   title,
   description,
   action,
 }: {
-  icon: LucideIcon;
   title: string;
   description: string;
   action?: ReactNode;
 }) {
   return (
-    <div className="p-5">
-      <div className="flex flex-col items-center rounded-lg border border-dashed border-border bg-muted/15 px-6 py-10 text-center dark:bg-muted/10">
-        <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-muted/50 text-muted-foreground">
-          <Icon className="size-5" aria-hidden />
-        </div>
-        <p className="text-sm font-medium text-foreground">{title}</p>
-        <p className="mt-1 max-w-sm text-sm text-muted-foreground">{description}</p>
+    <Card className="w-full shadow-none">
+      <CardContent className="flex flex-col items-center px-4 py-8 text-center">
+        <p className="text-muted-foreground text-sm">{title}</p>
+        <p className="mt-1 max-w-sm text-muted-foreground text-xs">
+          {description}
+        </p>
         {action ? <div className="mt-4">{action}</div> : null}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
-function TokenMixBar({
-  inputTokens,
-  outputTokens,
-}: {
-  inputTokens: number;
-  outputTokens: number;
-}) {
-  const total = inputTokens + outputTokens;
-  const inputPercent = total > 0 ? (inputTokens / total) * 100 : 0;
-  const outputPercent = total > 0 ? 100 - inputPercent : 0;
-
-  return (
-    <div
-      className="flex h-2.5 overflow-hidden rounded-full bg-muted"
-      role="img"
-      aria-label={`Input ${inputPercent.toFixed(0)} percent, output ${outputPercent.toFixed(0)} percent`}
-    >
-      <div
-        className="bg-primary/80 transition-[width] duration-300 motion-reduce:transition-none"
-        style={{ width: `${inputPercent}%` }}
-      />
-      <div
-        className="bg-emerald-500/80 transition-[width] duration-300 motion-reduce:transition-none"
-        style={{ width: `${outputPercent}%` }}
-      />
-    </div>
-  );
-}
-
-function CompactUsageStat({
-  icon: Icon,
+function UsageRow({
   label,
-  value,
-}: {
-  icon: LucideIcon;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-3">
-      <div className="flex items-center gap-2">
-        <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
-      </div>
-      <p className="mt-1 text-lg font-semibold tabular-nums tracking-tight text-foreground">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function ModelUsageRow({
   usage,
   costEstimated,
   maxTokens,
 }: {
-  usage: LlmUsageStatus["models"][number];
+  label: string;
+  usage: LlmUsageStats;
   costEstimated: boolean;
   maxTokens: number;
 }) {
   return (
-    <div className="border-t border-border px-4 py-3 first:border-t-0">
+    <div className="border-border border-t px-4 py-3 first:border-t-0">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0 space-y-2 lg:flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <p className="truncate font-mono text-sm text-foreground">{usage.modelId}</p>
-            <p className="text-xs text-muted-foreground">
+            <p className="truncate text-foreground text-sm">{label}</p>
+            <p className="text-muted-foreground text-xs">
               {usage.totalTokens.toLocaleString()} tokens
             </p>
           </div>
-          <UsageShareBar value={usage.totalTokens} max={maxTokens} />
+          <UsageShareBar max={maxTokens} value={usage.totalTokens} />
         </div>
 
         <div className="flex items-center justify-between gap-4 lg:min-w-[9rem] lg:justify-end">
-          <UsageInlineMetric label="Req" value={usage.requestCount.toLocaleString()} align="right" />
           <UsageInlineMetric
+            align="right"
+            label="Req"
+            value={usage.requestCount.toLocaleString()}
+          />
+          <UsageInlineMetric
+            align="right"
             label="Cost"
             value={costEstimated ? formatUsd(usage.estimatedCostUsd) : "—"}
-            align="right"
           />
         </div>
       </div>
@@ -466,43 +947,13 @@ function UsageInlineMetric({
   align?: "left" | "right";
 }) {
   return (
-    <div className={cn("min-w-0", align === "right" ? "text-right" : undefined)}>
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className="truncate text-sm font-semibold tabular-nums text-foreground">{value}</p>
-    </div>
-  );
-}
-
-function SummaryStrip({
-  status,
-  summary,
-}: {
-  status: SystemStatusResponse;
-  summary: ReturnType<typeof deriveSummary>;
-}) {
-  return (
     <div
-      className="flex flex-wrap items-start gap-3 border-b border-border px-5 py-4 sm:gap-4"
+      className={cn("min-w-0", align === "right" ? "text-right" : undefined)}
     >
-      <div className={cn(iconTileClass, "bg-background/70")}>
-        <ToneIcon tone={summary.tone} className="size-5" />
-      </div>
-      <div className="min-w-0 flex-1 space-y-0.5">
-        <p className="text-sm font-semibold text-foreground">{summary.title}</p>
-        <p className="text-sm text-muted-foreground">{summary.description}</p>
-        {summary.tone === "warn" ? (
-          <Link
-            to={PAGE_PATHS.settings}
-            className="inline-block text-sm font-medium text-primary underline-offset-4 hover:underline"
-          >
-            Open Settings
-          </Link>
-        ) : null}
-      </div>
-      <div className="flex items-center gap-1.5 text-xs leading-none text-muted-foreground">
-        <ClockIcon className="size-3.5 shrink-0 opacity-70" aria-hidden />
-        <span title={formatDate(status.checkedAt)}>Updated {formatRelativeTime(status.checkedAt)}</span>
-      </div>
+      <p className="text-2xs text-muted-foreground">{label}</p>
+      <p className="truncate font-semibold text-foreground text-sm tabular-nums">
+        {value}
+      </p>
     </div>
   );
 }
@@ -519,15 +970,15 @@ function QuickStat({
   return (
     <div
       className={cn(
-        "space-y-1 px-5 py-4",
-        active && "bg-primary/5 dark:bg-primary/10",
+        "flex items-center justify-between gap-3 px-4 py-3",
+        active && "bg-primary/5 dark:bg-primary/10"
       )}
     >
-      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="font-medium text-foreground text-sm">{label}</p>
       <p
         className={cn(
-          "text-2xl font-semibold tabular-nums tracking-tight text-foreground",
-          active && "text-primary",
+          "font-medium text-foreground text-sm tabular-nums",
+          active && "text-primary"
         )}
       >
         {value}
@@ -538,75 +989,35 @@ function QuickStat({
 
 type ServiceStatusTone = "ok" | "warn" | "bad" | "muted";
 
-function ServiceColumn({
-  icon: Icon,
-  title,
+function ServiceStatusBadge({
   status,
   tone,
 }: {
-  icon: LucideIcon;
-  title: string;
   status: string;
   tone: ServiceStatusTone;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-3 p-5">
-      <span
-        className={cn(
-          iconTileClass,
-          tone === "bad" && "bg-destructive/5",
-        )}
-      >
-        <Icon className={iconClass} aria-hidden />
-      </span>
-      <div className="min-w-0 flex-1">
-        <h2 className="type-section-title leading-tight">{title}</h2>
-        <p
-          className={cn(
-            "mt-1 text-xs font-medium leading-none",
-            tone === "ok" && "text-emerald-700 dark:text-emerald-300",
-            tone === "warn" && "text-amber-700 dark:text-amber-300",
-            tone === "bad" && "text-destructive",
-            tone === "muted" && "text-muted-foreground",
-          )}
-        >
-          {status}
-        </p>
-      </div>
-    </div>
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center rounded-full border px-2.5 py-0.5 font-medium text-xs",
+        tone === "ok" &&
+          "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-200",
+        tone === "warn" &&
+          "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800/50 dark:bg-amber-950/30 dark:text-amber-100",
+        tone === "bad" &&
+          "border-destructive/30 bg-destructive/10 text-destructive",
+        tone === "muted" && "border-border bg-muted text-muted-foreground"
+      )}
+    >
+      {status}
+    </span>
   );
 }
 
-function MetricsDisplay({
-  cpuPercent,
-  memoryMb,
-}: {
-  cpuPercent: number | null | undefined;
-  memoryMb: number | null | undefined;
-}) {
-  if (cpuPercent == null && memoryMb == null) return null;
-
-  return (
-    <div className="flex items-center gap-3 border-t border-border px-5 py-2">
-      {cpuPercent != null ? (
-        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-          <ZapIcon className="size-3" aria-hidden />
-          CPU: {cpuPercent.toFixed(1)}%
-        </span>
-      ) : null}
-      {memoryMb != null ? (
-        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-          <ServerIcon className="size-3" aria-hidden />
-          Mem: {memoryMb < 1 ? `${(memoryMb * 1024).toFixed(0)} KB` : `${memoryMb.toFixed(1)} MB`}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-function WorkerServiceColumn({
+function WorkerServiceRow({
   icon: Icon,
   title,
+  titleHref,
   status,
   tone,
   worker,
@@ -614,8 +1025,9 @@ function WorkerServiceColumn({
   canManage,
   footerLink,
 }: {
-  icon: LucideIcon;
+  icon: typeof Clock01Icon;
   title: string;
+  titleHref?: string;
   status: string;
   tone: ServiceStatusTone;
   worker: Pick<SystemStatusResponse["automationWorker"], "running" | "process">;
@@ -623,129 +1035,63 @@ function WorkerServiceColumn({
   canManage: boolean;
   footerLink?: { label: string; to: string };
 }) {
+  const pm2Managed = worker.process?.managed ?? false;
+
   return (
-    <div className="flex flex-col">
-      <div className="flex min-w-0 items-center gap-3 p-5">
-        <span
-          className={cn(
-            iconTileClass,
-            tone === "bad" && "bg-destructive/5",
-          )}
-        >
-          <Icon className={iconClass} aria-hidden />
-        </span>
-        <div className="min-w-0 flex-1">
-          <h2 className="type-section-title leading-tight">{title}</h2>
-          <p
-            className={cn(
-              "mt-1 text-xs font-medium leading-none",
-              tone === "ok" && "text-emerald-700 dark:text-emerald-300",
-              tone === "warn" && "text-amber-700 dark:text-amber-300",
-              tone === "bad" && "text-destructive",
-              tone === "muted" && "text-muted-foreground",
-            )}
-          >
-            {status}
-          </p>
-        </div>
-      </div>
-      {canManage ? (
-        <WorkerActionBar
-          className="border-t border-border px-5 py-2"
-          running={worker.running}
-          pm2Managed={worker.process?.managed ?? false}
-          workerName={workerName}
-        />
-      ) : null}
-      {footerLink ? (
-        <div className="border-t border-border px-5 py-2">
+    <div className="flex flex-col gap-2 px-4 py-3 sm:min-h-14 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
+        <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        {titleHref ? (
           <Link
+            className="font-medium text-foreground text-sm hover:underline"
+            to={titleHref}
+          >
+            {title}
+          </Link>
+        ) : (
+          <span className="font-medium text-foreground text-sm">{title}</span>
+        )}
+        <ServiceStatusBadge status={status} tone={tone} />
+        {footerLink && (
+          <Link
+            className="text-primary text-xs underline underline-offset-4"
             to={footerLink.to}
-            className="text-xs font-medium text-primary underline underline-offset-4 hover:text-primary/90"
           >
             {footerLink.label}
           </Link>
+        )}
+      </div>
+      {canManage ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <WorkerActionBar
+            className="w-fit"
+            pm2Managed={pm2Managed}
+            running={worker.running}
+            showLogs={false}
+            workerName={workerName}
+          />
+          {pm2Managed && <WorkerViewLogsButton workerName={workerName} />}
         </div>
-      ) : null}
-      <MetricsDisplay
-        cpuPercent={worker.process?.cpuPercent}
-        memoryMb={worker.process?.memoryMb}
-      />
+      ) : (
+        <span className="text-muted-foreground text-xs">View only</span>
+      )}
     </div>
   );
 }
 
-function ToneIcon({ tone, className }: { tone: StatusTone; className?: string }) {
-  if (tone === "ok") {
-    return (
-      <CheckCircle2Icon
-        className={cn("text-emerald-600 dark:text-emerald-400", className)}
-        aria-hidden
-      />
-    );
-  }
-
-  if (tone === "warn") {
-    return (
-      <AlertTriangleIcon
-        className={cn("text-amber-600 dark:text-amber-400", className)}
-        aria-hidden
-      />
-    );
-  }
-
-  return <XCircleIcon className={cn("text-destructive", className)} aria-hidden />;
-}
-
-function StatusSkeleton({ embedded = false }: { embedded?: boolean } = {}) {
+function StatusSkeleton() {
   return (
     <div
-      className={cn(
-        "h-80 animate-pulse bg-muted/40",
-        embedded ? "border-0" : "rounded-md border border-border",
-      )}
       aria-busy="true"
       aria-label="Loading system status"
-    />
+      className="space-y-8"
+    >
+      <div className="h-24 animate-pulse rounded-md border border-border bg-muted/40" />
+      <div className="h-72 animate-pulse rounded-md border border-border bg-muted/40" />
+    </div>
   );
 }
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
-}
-
-function formatUsd(amount: number): string {
-  if (amount === 0) {
-    return "$0.00";
-  }
-
-  if (amount < 0.01) {
-    return `$${amount.toFixed(4)}`;
-  }
-
-  if (amount < 1) {
-    return `$${amount.toFixed(3)}`;
-  }
-
-  return `$${amount.toFixed(2)}`;
-}
-
-function formatRelativeTime(value: string): string {
-  const deltaMs = Date.now() - new Date(value).getTime();
-  const seconds = Math.max(0, Math.round(deltaMs / 1000));
-
-  if (seconds < 10) {
-    return "just now";
-  }
-
-  if (seconds < 60) {
-    return `${seconds}s ago`;
-  }
-
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) {
-    return `${minutes}m ago`;
-  }
-
-  return formatDate(value);
 }

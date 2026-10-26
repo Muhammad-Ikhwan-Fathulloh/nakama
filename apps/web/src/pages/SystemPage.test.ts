@@ -1,22 +1,22 @@
-import { describe, expect, test } from "bun:test";
-import { resolveSystemTab, visibleSystemTabs } from "./system-page.shared";
+import { expect, test } from "bun:test";
+import { legacySystemDestination } from "./system-page.shared";
 
-describe("SystemPage tab access", () => {
-  test("shows status to all system users and data portability only to platform admins", () => {
-    expect(visibleSystemTabs(true).map((tab) => tab.id)).toEqual([
-      "status",
-      "tools",
-      "mcp",
-      "data",
-    ]);
-    expect(visibleSystemTabs(false).map((tab) => tab.id)).toEqual(["status", "tools"]);
-  });
+test.each([
+  ["", "/customize/tools"],
+  ["tab=tools", "/customize/tools"],
+  ["tab=mcp", "/customize/mcp"],
+  ["tab=usage", "/customize/usage"],
+  ["tab=plugins", "/customize/plugins"],
+  ["tab=status", "/workers"],
+  ["tab=organization&profile=alex", "/organization?profile=alex"],
+])("old System links redirect: %s", (query, expected) => {
+  expect(legacySystemDestination(new URLSearchParams(query), true)).toBe(
+    expected
+  );
+});
 
-  test("resolves status for all system users and forces non-platform users off admin tabs", () => {
-    expect(resolveSystemTab("status", true)).toBe("status");
-    expect(resolveSystemTab("status", false)).toBe("status");
-    expect(resolveSystemTab("data", true)).toBe("data");
-    expect(resolveSystemTab("data", false)).toBe("tools");
-    expect(resolveSystemTab("unknown", true)).toBe("tools");
-  });
+test("org admins cannot use the legacy link to reach MCP", () => {
+  expect(legacySystemDestination(new URLSearchParams("tab=mcp"), false)).toBe(
+    "/customize/tools"
+  );
 });

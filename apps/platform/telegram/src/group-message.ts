@@ -6,7 +6,6 @@ export interface TelegramBotInfo {
 }
 
 export interface GroupMessageHandlingDecision {
-  shouldHandle: boolean;
   reason:
     | "slash-command"
     | "missing-bot-info"
@@ -14,6 +13,7 @@ export interface GroupMessageHandlingDecision {
     | "bot-mention"
     | "no-text"
     | "no-trigger";
+  shouldHandle: boolean;
 }
 
 export function isTelegramGroupChat(ctx: Context): boolean {
@@ -25,17 +25,22 @@ export function isTelegramGroupChat(ctx: Context): boolean {
 export function resolveChannelOrgKey(
   chatId: string,
   userId: number,
-  isGroup: boolean,
+  isGroup: boolean
 ): string {
   return isGroup ? `g:${chatId}` : `u:${userId}`;
 }
 
-export function resolveConversationKey(ctx: Context, chatId: string, isGroup: boolean): string {
+export function resolveConversationKey(
+  ctx: Context,
+  chatId: string,
+  isGroup: boolean
+): string {
   if (!isGroup) {
     return chatId;
   }
 
   const topicId = getTelegramTopicId(ctx);
+
   return topicId === undefined ? chatId : `g:${chatId}:t:${topicId}`;
 }
 
@@ -44,15 +49,14 @@ export function isTelegramTopicMessage(ctx: Context): boolean {
 }
 
 function getTelegramTopicId(ctx: Context): number | undefined {
-  const value = (ctx.message as { message_thread_id?: unknown } | undefined)
-    ?.message_thread_id;
+  const value = ctx.message?.message_thread_id;
 
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return value !== undefined && Number.isFinite(value) ? value : undefined;
 }
 
 export function resolveBotInfo(
   ctx: Context,
-  storedBotInfo?: TelegramBotInfo | undefined,
+  storedBotInfo?: TelegramBotInfo | undefined
 ): TelegramBotInfo | undefined {
   if (ctx.me?.id) {
     return { id: ctx.me.id, username: ctx.me.username };
@@ -61,53 +65,58 @@ export function resolveBotInfo(
   if (storedBotInfo?.id) {
     return storedBotInfo;
   }
-
-  return undefined;
 }
 
 export function shouldHandleGroupMessage(
   ctx: Context,
-  storedBotInfo?: TelegramBotInfo | undefined,
+  storedBotInfo?: TelegramBotInfo | undefined
 ): boolean {
   return explainGroupMessageHandling(ctx, storedBotInfo).shouldHandle;
 }
 
 export function explainGroupMessageHandling(
   ctx: Context,
-  storedBotInfo?: TelegramBotInfo | undefined,
+  storedBotInfo?: TelegramBotInfo | undefined
 ): GroupMessageHandlingDecision {
   const text = ctx.message?.text?.trim() ?? "";
   const botInfo = resolveBotInfo(ctx, storedBotInfo);
 
   if (text.startsWith("/")) {
-    return { shouldHandle: true, reason: "slash-command" };
+    return { reason: "slash-command", shouldHandle: true };
   }
 
   if (!botInfo) {
-    return { shouldHandle: false, reason: "missing-bot-info" };
+    return { reason: "missing-bot-info", shouldHandle: false };
   }
 
   if (isReplyToBot(ctx, botInfo.id)) {
-    return { shouldHandle: true, reason: "reply-to-bot" };
+    return { reason: "reply-to-bot", shouldHandle: true };
   }
 
   if (hasBotMention(ctx, botInfo)) {
-    return { shouldHandle: true, reason: "bot-mention" };
+    return { reason: "bot-mention", shouldHandle: true };
   }
 
   return {
-    shouldHandle: false,
     reason: text ? "no-trigger" : "no-text",
+    shouldHandle: false,
   };
 }
 
-export function stripBotMention(text: string, username: string | undefined): string {
+export function stripBotMention(
+  text: string,
+  username: string | undefined
+): string {
   if (!username?.trim()) {
     return text.trim();
   }
 
   const mention = `@${username.trim()}`;
-  const pattern = new RegExp(mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+
+  const pattern = new RegExp(
+    mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    "gi"
+  );
 
   return text.replace(pattern, "").replace(/\s+/g, " ").trim();
 }
@@ -125,9 +134,10 @@ function hasBotMention(ctx: Context, botInfo: TelegramBotInfo): boolean {
 
   if (username) {
     const mention = `@${username}`;
+
     const mentionPattern = new RegExp(
       `@${username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\b|$)`,
-      "i",
+      "i"
     );
 
     if (mentionPattern.test(text)) {

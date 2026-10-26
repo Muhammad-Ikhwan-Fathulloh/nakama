@@ -1,64 +1,289 @@
-import { useEffect, useMemo, useState } from "react";
+import { cn } from "@nakama/ui/utils";
+import { Download04Icon } from "hugeicons-react";
+import { useEffect, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import { ArtifactAttachmentPanelBody } from "@/components/chat/artifact-attachment-panel-body";
+import { usePublicArtifactShare } from "@/hooks/use-public-artifact-share";
+import { ARTIFACT_HTML_IFRAME_SANDBOX } from "@/lib/artifact-html-preview";
 import {
   artifactCodeLanguage,
+  isDelimitedSpreadsheetFile,
   isDocxFile,
   isHtmlArtifactMimeType,
+  isImageArtifactMimeType,
   isLegacyDocFile,
   isMarkdownArtifactMimeType,
   isTextArtifactMimeType,
   isUnknownArtifactMimeType,
-  looksLikeUtf8Text,
+  isVideoArtifactMimeType,
   resolveArtifactMimeType,
 } from "@/lib/chat-artifacts";
-import { client } from "@/lib/client";
-import {
-  ARTIFACT_HTML_IFRAME_SANDBOX,
-  htmlForArtifactPreview,
-} from "@/lib/artifact-html-preview";
-import { cn } from "@/lib/utils";
+import { client, formatError } from "@/lib/client";
+import { buildPublicArtifactShareUrl } from "@/lib/public-artifact-share-url";
 
-interface PublicShareMetadata {
+function publicShareError(
+  token: string,
+  loadError: string | null
+): string | null {
+  if (!token) {
+    return "Share link not found.";
+  }
+
+  if (loadError) {
+    return loadError;
+  }
+
+  return null;
+}
+
+function deriveSharePreview(
+  metadata: {
+    filename: string;
+    mimeType: string;
+  } | null
+) {
+  const mimeType = metadata
+    ? resolveArtifactMimeType(metadata.mimeType, metadata.filename)
+    : "";
+
+  const isHtml = isHtmlArtifactMimeType(mimeType);
+  const isImage = isImageArtifactMimeType(mimeType);
+  const isVideo = isVideoArtifactMimeType(mimeType);
+
+  const isWordDocument =
+    metadata != null &&
+    (isDocxFile(metadata.filename, mimeType) ||
+      isLegacyDocFile(metadata.filename, mimeType));
+
+  const isMarkdown = isMarkdownArtifactMimeType(mimeType) || isWordDocument;
+
+  const isSpreadsheet =
+    metadata != null && isDelimitedSpreadsheetFile(metadata.filename, mimeType);
+
+  const canPreview =
+    metadata != null &&
+    (isHtml ||
+      isImage ||
+      isVideo ||
+      isWordDocument ||
+      isTextArtifactMimeType(mimeType) ||
+      isUnknownArtifactMimeType(mimeType));
+
+  return {
+    canPreview,
+    isHtml,
+    isImage,
+    isMarkdown,
+    isSpreadsheet,
+    isVideo,
+    language: metadata ? artifactCodeLanguage(metadata.filename) : null,
+    mimeType,
+  };
+}
+
+function PublicArtifactShareHeader({
+  filename,
+  token,
+  downloadUrl,
+}: {
   filename: string;
-  mimeType: string;
-  sizeBytes: number;
-  inlineAllowed: boolean;
+  token: string;
+  downloadUrl: string | null;
+}) {
+  return (
+    <header className="border-border border-b px-3 py-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="truncate font-medium text-xs">{filename}</p>
+        {token && downloadUrl ? (
+          <a
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 font-medium text-xs hover:bg-muted"
+            href={downloadUrl}
+          >
+            <Download04Icon className="h-3 w-3" />
+            Download
+          </a>
+        ) : null}
+      </div>
+    </header>
+  );
+}
+
+type SharePreview = ReturnType<typeof deriveSharePreview>;
+
+function PublicArtifactPreview({
+  artifact,
+  content,
+  downloadUrl,
+  preview,
+}: {
+  artifact: {
+    filename: string;
+    mimeType: string;
+    path: string;
+    savedAt: string;
+    sizeBytes: number;
+  };
+  content: string | null;
+  downloadUrl: string | null;
+  preview: SharePreview;
+}) {
+  const {
+    canPreview,
+    isHtml,
+    isImage,
+    isMarkdown,
+    isSpreadsheet,
+    isVideo,
+    language,
+  } = preview;
+
+  if (isImage) {
+    return (
+      <ArtifactAttachmentPanelBody
+        artifact={artifact}
+        canPreview={canPreview}
+        error={null}
+        imagePreviewUrl={downloadUrl ?? undefined}
+        kind="image"
+        loading={false}
+      />
+    );
+  }
+
+  if (isVideo) {
+    return (
+      <ArtifactAttachmentPanelBody
+        artifact={artifact}
+        canPreview={canPreview}
+        error={null}
+        kind="video"
+        loading={false}
+        videoPreviewUrl={downloadUrl ?? undefined}
+      />
+    );
+  }
+
+  if (isHtml) {
+    return (
+      <ArtifactAttachmentPanelBody
+        artifact={artifact}
+        canPreview={canPreview}
+        content={content}
+        error={null}
+        htmlSandbox={ARTIFACT_HTML_IFRAME_SANDBOX}
+        kind="html"
+        loading={false}
+      />
+    );
+  }
+
+  if (isSpreadsheet) {
+    return (
+      <ArtifactAttachmentPanelBody
+        artifact={artifact}
+        canPreview={canPreview}
+        content={content}
+        error={null}
+        kind="spreadsheet"
+        loading={false}
+      />
+    );
+  }
+
+  return (
+    <ArtifactAttachmentPanelBody
+      artifact={artifact}
+      canPreview={canPreview}
+      content={content}
+      error={null}
+      format={isMarkdown ? "markdown" : "plain"}
+      kind="text"
+      language={language}
+      loading={false}
+    />
+  );
+}
+
+function PublicArtifactShareMain({
+  artifact,
+  content,
+  downloadUrl,
+  error,
+  filename,
+  loading,
+  preview,
+}: {
+  artifact: {
+    filename: string;
+    mimeType: string;
+    path: string;
+    savedAt: string;
+    sizeBytes: number;
+  } | null;
+  content: string | null;
+  downloadUrl: string | null;
+  error: string | null;
+  filename?: string;
+  loading: boolean;
+  preview: SharePreview;
+}) {
+  if (loading) {
+    return <p className="text-muted-foreground text-sm">Loading…</p>;
+  }
+
+  if (error) {
+    return <p className="text-destructive text-sm">{error}</p>;
+  }
+
+  if (artifact && preview.canPreview) {
+    return (
+      <PublicArtifactPreview
+        artifact={artifact}
+        content={content}
+        downloadUrl={downloadUrl}
+        preview={preview}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-3 text-muted-foreground text-sm">
+      <p>This file is available for download.</p>
+      {downloadUrl ? (
+        <a className="font-medium text-foreground underline" href={downloadUrl}>
+          Download {filename}
+        </a>
+      ) : null}
+    </div>
+  );
 }
 
 export function PublicArtifactSharePage() {
   const { token = "" } = useParams();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [metadata, setMetadata] = useState<PublicShareMetadata | null>(null);
-  const [content, setContent] = useState<string | null>(null);
+  const { data, isLoading, error: loadError } = usePublicArtifactShare(token);
+  const metadata = data?.metadata ?? null;
+  const content = data?.content ?? null;
 
-  const mimeType = metadata ? resolveArtifactMimeType(metadata.mimeType, metadata.filename) : "";
-  const isHtml = isHtmlArtifactMimeType(mimeType);
-  const isWordDocument =
-    metadata != null &&
-    (isDocxFile(metadata.filename, mimeType) || isLegacyDocFile(metadata.filename, mimeType));
-  const isMarkdown = isMarkdownArtifactMimeType(mimeType) || isWordDocument;
-  const language = metadata ? artifactCodeLanguage(metadata.filename) : null;
-  const canPreview =
-    metadata != null &&
-    (isHtml ||
-      isWordDocument ||
-      isTextArtifactMimeType(mimeType) ||
-      isUnknownArtifactMimeType(mimeType));
+  const error = publicShareError(
+    token,
+    loadError ? formatError(loadError) : null
+  );
+
+  const loading = token.length > 0 && isLoading;
+  const preview = deriveSharePreview(metadata);
 
   const artifact = useMemo(
     () =>
       metadata
         ? {
             filename: metadata.filename,
-            path: metadata.filename,
             mimeType: metadata.mimeType,
-            sizeBytes: metadata.sizeBytes,
+            path: metadata.filename,
             savedAt: "",
+            sizeBytes: metadata.sizeBytes,
           }
         : null,
-    [metadata],
+    [metadata]
   );
 
   useEffect(() => {
@@ -66,162 +291,53 @@ export function PublicArtifactSharePage() {
     meta.name = "referrer";
     meta.content = "no-referrer";
     document.head.append(meta);
+
     return () => {
       meta.remove();
     };
   }, []);
 
-  useEffect(() => {
-    if (!token) {
-      setError("Share link not found.");
-      setLoading(false);
-      return;
-    }
+  let downloadUrl: string | null = null;
 
-    let cancelled = false;
+  try {
+    downloadUrl = buildPublicArtifactShareUrl(client.baseUrl, token);
+  } catch {
+    downloadUrl = null;
+  }
 
-    async function loadShare() {
-      setLoading(true);
-      setError(null);
-
-      try {
-        const metaResponse = await fetch(
-          `${client.baseUrl}/v1/public/artifact-shares/${encodeURIComponent(token)}?meta=1`,
-        );
-
-        if (!metaResponse.ok) {
-          throw new Error("This share link is unavailable.");
-        }
-
-        const meta = (await metaResponse.json()) as PublicShareMetadata;
-        if (cancelled) {
-          return;
-        }
-
-        setMetadata(meta);
-
-        const resolvedMime = resolveArtifactMimeType(meta.mimeType, meta.filename);
-        const previewAsHtml = isHtmlArtifactMimeType(resolvedMime);
-
-        // HTML is blocked from inline API serving (same-origin XSS) but still previewed
-        // here via a sandboxed iframe srcDoc on the web app origin.
-        if (!meta.inlineAllowed && !previewAsHtml) {
-          setContent(null);
-          setLoading(false);
-          return;
-        }
-
-        const contentResponse = await fetch(
-          `${client.baseUrl}/v1/public/artifact-shares/${encodeURIComponent(token)}`,
-        );
-
-        if (!contentResponse.ok) {
-          throw new Error("This share link is unavailable.");
-        }
-
-        const bytes = new Uint8Array(await contentResponse.arrayBuffer());
-        const contentType = resolveArtifactMimeType(
-          contentResponse.headers.get("Content-Type") ?? meta.mimeType,
-          meta.filename,
-        );
-
-        if (isHtmlArtifactMimeType(contentType)) {
-          setContent(htmlForArtifactPreview(new TextDecoder().decode(bytes)));
-        } else if (looksLikeUtf8Text(bytes)) {
-          setContent(new TextDecoder().decode(bytes));
-        } else {
-          setContent(null);
-        }
-      } catch (loadError) {
-        if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : "Unable to load share.");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    }
-
-    void loadShare();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
-
-  const downloadUrl = `${client.baseUrl}/v1/public/artifact-shares/${encodeURIComponent(token)}`;
+  const fillViewport = preview.isHtml || preview.isSpreadsheet;
 
   return (
     <div
       className={cn(
-        "bg-background text-foreground",
-        isHtml ? "flex h-svh flex-col overflow-hidden" : "min-h-svh",
+        "artifact-share-page bg-background text-foreground",
+        fillViewport
+          ? "flex h-svh flex-col overflow-hidden"
+          : "h-svh overflow-y-auto"
       )}
     >
-      <header className="border-b border-border px-4 py-3">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">
-              {metadata?.filename ?? "Shared artifact"}
-            </p>
-            <p className="text-xs text-muted-foreground">Nakama shared artifact</p>
-          </div>
-          {token ? (
-            <a
-              href={downloadUrl}
-              className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
-            >
-              Download
-            </a>
-          ) : null}
-        </div>
-      </header>
+      <PublicArtifactShareHeader
+        downloadUrl={downloadUrl}
+        filename={metadata?.filename ?? "Shared artifact"}
+        token={token}
+      />
 
       <main
         className={cn(
-          isHtml
+          fillViewport
             ? "flex min-h-0 flex-1 flex-col overflow-hidden"
-            : "mx-auto max-w-5xl px-4 py-6",
+            : "mx-auto max-w-5xl px-4 py-6"
         )}
       >
-        {loading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : error ? (
-          <p className="text-sm text-destructive">{error}</p>
-        ) : artifact && canPreview ? (
-          isHtml ? (
-            <ArtifactAttachmentPanelBody
-              kind="html"
-              loading={false}
-              error={null}
-              content={content}
-              canPreview={canPreview}
-              artifact={artifact}
-              htmlSandbox={ARTIFACT_HTML_IFRAME_SANDBOX}
-            />
-          ) : (
-            <ArtifactAttachmentPanelBody
-              kind="text"
-              format={isMarkdown ? "markdown" : "plain"}
-              language={language}
-              loading={false}
-              error={null}
-              content={content}
-              canPreview={canPreview}
-              artifact={artifact}
-            />
-          )
-        ) : (
-          <div className="space-y-3 text-sm text-muted-foreground">
-            <p>This file is available for download.</p>
-            {downloadUrl ? (
-              <a href={downloadUrl} className="font-medium text-foreground underline">
-                Download {metadata?.filename}
-              </a>
-            ) : null}
-          </div>
-        )}
+        <PublicArtifactShareMain
+          artifact={artifact}
+          content={content}
+          downloadUrl={downloadUrl}
+          error={error}
+          filename={metadata?.filename}
+          loading={loading}
+          preview={preview}
+        />
       </main>
     </div>
   );

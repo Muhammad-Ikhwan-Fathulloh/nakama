@@ -1,11 +1,12 @@
+import { NakamaApiError } from "./api-error";
 import type {
   ChatMessage,
   DocumentAttachment,
   ImageAttachment,
+  JsonValue,
   MessageContentPart,
   ProviderName,
 } from "./contract";
-import { NakamaApiError } from "./api-error";
 import {
   resolveUserContentForProvider,
   toAnthropicDocumentBlock,
@@ -13,11 +14,18 @@ import {
 } from "./document-content";
 
 export const MAX_ATTACHMENTS_PER_MESSAGE = 5;
-export const MAX_IMAGES_PER_MESSAGE = MAX_ATTACHMENTS_PER_MESSAGE;
+
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
 export const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
-export const TOKENS_PER_IMAGE_ESTIMATE = 1_500;
-export const TOKENS_PER_DOCUMENT_ESTIMATE = 2_000;
+
+export const MAX_KNOWLEDGE_DOCUMENT_BYTES = 20 * 1024 * 1024;
+
+export const MAX_KNOWLEDGE_ZIP_BYTES = 20 * 1024 * 1024;
+
+export const TOKENS_PER_IMAGE_ESTIMATE = 1500;
+
+export const TOKENS_PER_DOCUMENT_ESTIMATE = 2000;
 
 const ALLOWED_IMAGE_MEDIA_TYPES = new Set([
   "image/jpeg",
@@ -26,22 +34,45 @@ const ALLOWED_IMAGE_MEDIA_TYPES = new Set([
   "image/webp",
 ]);
 
+const XLSX_MEDIA_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+const XLS_MEDIA_TYPE = "application/vnd.ms-excel";
+
+const XLSM_MEDIA_TYPE = "application/vnd.ms-excel.sheet.macroEnabled.12";
+
+const XLSB_MEDIA_TYPE = "application/vnd.ms-excel.sheet.binary.macroEnabled.12";
+
 const ALLOWED_DOCUMENT_MEDIA_TYPES = new Set([
   "application/pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  XLSX_MEDIA_TYPE,
+  XLS_MEDIA_TYPE,
+  XLSM_MEDIA_TYPE,
+  XLSB_MEDIA_TYPE,
   "text/plain",
   "text/csv",
+  "text/markdown",
 ]);
 
-const DOCUMENT_EXTENSION_MEDIA_TYPES: Record<string, string> = {
-  ".pdf": "application/pdf",
-  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+const CANONICAL_BASE64_PATTERN =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+const DOCUMENT_EXTENSION_MEDIA_TYPES = {
   ".csv": "text/csv",
+  ".docx":
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".md": "text/markdown",
+  ".pdf": "application/pdf",
   ".txt": "text/plain",
-};
+  ".xls": XLS_MEDIA_TYPE,
+  ".xlsb": XLSB_MEDIA_TYPE,
+  ".xlsm": XLSM_MEDIA_TYPE,
+  ".xlsx": XLSX_MEDIA_TYPE,
+} satisfies Record<string, string>;
 
 export function isMessageContentPartArray(
-  content: string | MessageContentPart[],
+  content: string | MessageContentPart[]
 ): content is MessageContentPart[] {
   return Array.isArray(content);
 }
@@ -49,21 +80,21 @@ export function isMessageContentPartArray(
 export function normalizeUserContent(
   message: string,
   images?: ImageAttachment[],
-  documents?: DocumentAttachment[],
+  documents?: DocumentAttachment[]
 ): string | MessageContentPart[] {
   const hasImages = Boolean(images?.length);
   const hasDocuments = Boolean(documents?.length);
 
-  if (!hasImages && !hasDocuments) {
+  if (!(hasImages || hasDocuments)) {
     return message;
   }
 
-  if (hasImages) {
-    validateImageAttachments(images!);
+  if (images?.length) {
+    validateImageAttachments(images);
   }
 
-  if (hasDocuments) {
-    validateDocumentAttachments(documents!);
+  if (documents?.length) {
+    validateDocumentAttachments(documents);
   }
 
   validateCombinedAttachmentCount(images?.length ?? 0, documents?.length ?? 0);
@@ -71,30 +102,30 @@ export function normalizeUserContent(
   const parts: MessageContentPart[] = [];
 
   if (message.trim()) {
-    parts.push({ type: "text", text: message });
+    parts.push({ text: message, type: "text" });
   }
 
   for (const image of images ?? []) {
     parts.push({
-      type: "image",
-      mediaType: image.mediaType,
       data: image.data,
+      mediaType: image.mediaType,
+      type: "image",
     });
   }
 
   for (const document of documents ?? []) {
     parts.push({
-      type: "document",
+      data: document.data,
       filename: document.filename,
       mediaType: document.mediaType,
-      data: document.data,
+      type: "document",
     });
   }
 
   if (parts.length === 0) {
     throw new NakamaApiError(
       "Message must include text or at least one attachment.",
-      400,
+      400
     );
   }
 
@@ -103,14 +134,14 @@ export function normalizeUserContent(
 
 export function validateCombinedAttachmentCount(
   imageCount: number,
-  documentCount: number,
+  documentCount: number
 ): void {
   const total = imageCount + documentCount;
 
   if (total > MAX_ATTACHMENTS_PER_MESSAGE) {
     throw new NakamaApiError(
       `At most ${MAX_ATTACHMENTS_PER_MESSAGE} attachments per message.`,
-      400,
+      400
     );
   }
 }
@@ -119,7 +150,7 @@ export function validateImageAttachments(images: ImageAttachment[]): void {
   if (images.length > MAX_ATTACHMENTS_PER_MESSAGE) {
     throw new NakamaApiError(
       `At most ${MAX_ATTACHMENTS_PER_MESSAGE} images per message.`,
-      400,
+      400
     );
   }
 
@@ -127,7 +158,7 @@ export function validateImageAttachments(images: ImageAttachment[]): void {
     if (!ALLOWED_IMAGE_MEDIA_TYPES.has(image.mediaType)) {
       throw new NakamaApiError(
         `Unsupported image type: ${image.mediaType}. Allowed: jpeg, png, gif, webp.`,
-        400,
+        400
       );
     }
 
@@ -135,11 +166,13 @@ export function validateImageAttachments(images: ImageAttachment[]): void {
   }
 }
 
-export function validateDocumentAttachments(documents: DocumentAttachment[]): void {
+export function validateDocumentAttachments(
+  documents: DocumentAttachment[]
+): void {
   if (documents.length > MAX_ATTACHMENTS_PER_MESSAGE) {
     throw new NakamaApiError(
       `At most ${MAX_ATTACHMENTS_PER_MESSAGE} documents per message.`,
-      400,
+      400
     );
   }
 
@@ -154,8 +187,8 @@ export function validateDocumentAttachments(documents: DocumentAttachment[]): vo
 
     if (!ALLOWED_DOCUMENT_MEDIA_TYPES.has(mediaType)) {
       throw new NakamaApiError(
-        `Unsupported document type: ${document.mediaType}. Allowed: pdf, docx, csv, txt.`,
-        400,
+        `Unsupported document type: ${document.mediaType}. Allowed: pdf, docx, xls, xlsx, xlsm, xlsb, csv, txt, md.`,
+        400
       );
     }
 
@@ -163,7 +196,10 @@ export function validateDocumentAttachments(documents: DocumentAttachment[]): vo
   }
 }
 
-export function normalizeDocumentMediaType(mediaType: string, filename: string): string {
+export function normalizeDocumentMediaType(
+  mediaType: string,
+  filename: string
+): string {
   const trimmed = mediaType.trim().toLowerCase();
 
   if (ALLOWED_DOCUMENT_MEDIA_TYPES.has(trimmed)) {
@@ -171,91 +207,165 @@ export function normalizeDocumentMediaType(mediaType: string, filename: string):
   }
 
   const extension = filename.slice(filename.lastIndexOf(".")).toLowerCase();
-  return DOCUMENT_EXTENSION_MEDIA_TYPES[extension] ?? trimmed;
+
+  return (
+    Object.entries(DOCUMENT_EXTENSION_MEDIA_TYPES).find(
+      ([candidate]) => candidate === extension
+    )?.[1] ?? trimmed
+  );
 }
 
-function validateAttachmentBytes(data: string, maxBytes: number, label: string): void {
+function validateAttachmentBytes(
+  data: string,
+  maxBytes: number,
+  label: string
+): void {
+  normalizeAttachmentBase64(data, maxBytes, label);
+}
+
+export function normalizeAttachmentBase64(
+  data: string,
+  maxBytes = MAX_DOCUMENT_BYTES,
+  label = "attachment"
+): string {
   const raw = data.trim();
 
   if (!raw) {
     throw new NakamaApiError(`${label} data must not be empty.`, 400);
   }
 
-  const base64 = raw.includes(",") ? (raw.split(",")[1] ?? "") : raw;
+  const dataUrl = /^data:[^,]*;base64,([^,]+)$/is.exec(raw);
+  const base64 = dataUrl?.[1] ?? raw;
+
+  if (!CANONICAL_BASE64_PATTERN.test(base64)) {
+    throw new NakamaApiError(`${label} data must be valid base64.`, 400);
+  }
+
   const byteLength = estimateBase64DecodedLength(base64);
+
+  if (byteLength === 0) {
+    throw new NakamaApiError(`${label} data must not be empty.`, 400);
+  }
 
   if (byteLength > maxBytes) {
     throw new NakamaApiError(
       `Each ${label} must be at most ${maxBytes / (1024 * 1024)} MB.`,
-      400,
+      400
     );
   }
+
+  try {
+    const decoded = atob(base64);
+
+    if (decoded.length !== byteLength || btoa(decoded) !== base64) {
+      throw new Error("noncanonical base64");
+    }
+  } catch {
+    throw new NakamaApiError(`${label} data must be valid base64.`, 400);
+  }
+
+  return base64;
 }
 
 function estimateBase64DecodedLength(base64: string): number {
   const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+
   return Math.floor((base64.length * 3) / 4) - padding;
 }
 
-export function getUserMessageText(content: string | MessageContentPart[]): string {
-  if (typeof content === "string") {
+export function getUserMessageText(
+  content: string | MessageContentPart[]
+): string {
+  if (!Array.isArray(content)) {
     return content;
   }
 
   return content
-    .filter((part): part is Extract<MessageContentPart, { type: "text" }> => part.type === "text")
+    .filter(
+      (part): part is Extract<MessageContentPart, { type: "text" }> =>
+        part.type === "text"
+    )
     .map((part) => part.text)
     .join("\n")
     .trim();
 }
 
-export function countUserImages(content: string | MessageContentPart[]): number {
-  if (typeof content === "string") {
+export function countUserImages(
+  content: string | MessageContentPart[]
+): number {
+  if (!Array.isArray(content)) {
     return 0;
   }
 
-  return content.filter((part) => part.type === "image" || part.type === "image_ref").length;
+  return content.filter(
+    (part) => part.type === "image" || part.type === "image_ref"
+  ).length;
 }
 
-export function countUserDocuments(content: string | MessageContentPart[]): number {
-  if (typeof content === "string") {
+export function countUserDocuments(
+  content: string | MessageContentPart[]
+): number {
+  if (!Array.isArray(content)) {
     return 0;
   }
 
-  return content.filter((part) => part.type === "document" || part.type === "document_ref").length;
+  return content.filter(
+    (part) => part.type === "document" || part.type === "document_ref"
+  ).length;
 }
 
-export function messageContentHasImages(content: string | MessageContentPart[]): boolean {
+export function messageContentHasImages(
+  content: string | MessageContentPart[]
+): boolean {
   return countUserImages(content) > 0;
 }
 
-export function messageContentHasDocuments(content: string | MessageContentPart[]): boolean {
+export function messageContentHasDocuments(
+  content: string | MessageContentPart[]
+): boolean {
   return countUserDocuments(content) > 0;
 }
 
-export function messagesIncludeUserImages(messages: readonly ChatMessage[]): boolean {
+export function messagesIncludeUserImages(
+  messages: readonly ChatMessage[]
+): boolean {
   return messages.some(
-    (message) => message.role === "user" && messageContentHasImages(message.content),
+    (message) =>
+      message.role === "user" && messageContentHasImages(message.content)
   );
 }
 
-export function messagesIncludeUserDocuments(messages: readonly ChatMessage[]): boolean {
+export function messagesIncludeUserDocuments(
+  messages: readonly ChatMessage[]
+): boolean {
   return messages.some(
-    (message) => message.role === "user" && messageContentHasDocuments(message.content),
+    (message) =>
+      message.role === "user" && messageContentHasDocuments(message.content)
   );
 }
 
-export function estimateUserContentTokens(content: string | MessageContentPart[]): number {
+export function estimateUserContentTokens(
+  content: string | MessageContentPart[]
+): number {
   const text = getUserMessageText(content);
   const textTokens = Math.ceil(text.length / 4);
   const imageTokens = countUserImages(content) * TOKENS_PER_IMAGE_ESTIMATE;
-  const documentTokens = countUserDocuments(content) * TOKENS_PER_DOCUMENT_ESTIMATE;
+
+  const documentTokens =
+    countUserDocuments(content) * TOKENS_PER_DOCUMENT_ESTIMATE;
+
   return textTokens + imageTokens + documentTokens;
 }
 
-export function stripImagesForCompaction(messages: readonly ChatMessage[]): ChatMessage[] {
+export function stripImagesForCompaction(
+  messages: readonly ChatMessage[]
+): ChatMessage[] {
   return messages.map((message) => {
-    if (message.role !== "user" || typeof message.content === "string") {
+    if (message.role === "tool" && message.attachments?.length) {
+      return { ...message, attachments: undefined };
+    }
+
+    if (message.role !== "user" || !Array.isArray(message.content)) {
       return message;
     }
 
@@ -266,54 +376,58 @@ export function stripImagesForCompaction(messages: readonly ChatMessage[]): Chat
 
     if (imageCount > 0) {
       suffixParts.push(
-        `[${imageCount} image${imageCount === 1 ? "" : "s"} omitted from summary]`,
+        `[${imageCount} image${imageCount === 1 ? "" : "s"} omitted from summary]`
       );
     }
 
     if (documentCount > 0) {
       suffixParts.push(
-        `[${documentCount} document${documentCount === 1 ? "" : "s"} omitted from summary]`,
+        `[${documentCount} document${documentCount === 1 ? "" : "s"} omitted from summary]`
       );
     }
 
     const suffix = suffixParts.length > 0 ? `\n${suffixParts.join("\n")}` : "";
 
     return {
-      role: "user",
       content: `${text}${suffix}`.trim() || "[attachment]",
+      role: "user",
     };
   });
 }
 
 export function parseDataUrl(dataUrl: string): ImageAttachment | null {
-  const match = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl.trim());
+  const match = /^data:(?:([^;,]+))?(?:;[^,]*)*;base64,(.+)$/s.exec(
+    dataUrl.trim()
+  );
 
   if (!match) {
     return null;
   }
 
   return {
-    mediaType: match[1]!,
     data: match[2]!,
+    mediaType: match[1] ?? "image/png",
   };
 }
 
 export function parseDocumentDataUrl(
   dataUrl: string,
-  filename: string,
+  filename: string
 ): DocumentAttachment | null {
-  const match = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl.trim());
+  const match = /^data:(?:([^;,]+))?(?:;[^,]*)*;base64,(.+)$/s.exec(
+    dataUrl.trim()
+  );
 
   if (!match) {
     return null;
   }
 
-  const mediaType = normalizeDocumentMediaType(match[1]!, filename);
+  const mediaType = normalizeDocumentMediaType(match[1] ?? "", filename);
 
   return {
+    data: match[2]!,
     filename,
     mediaType,
-    data: match[2]!,
   };
 }
 
@@ -321,39 +435,22 @@ export function toDataUrl(mediaType: string, base64: string): string {
   return `data:${mediaType};base64,${base64}`;
 }
 
-export function imageAttachmentFromBase64(
-  mediaType: string,
-  base64: string,
-): ImageAttachment {
-  const data = base64.includes(",") ? (base64.split(",")[1] ?? base64) : base64;
-  return { mediaType, data };
-}
-
-export function documentAttachmentFromBase64(
-  filename: string,
-  mediaType: string,
-  base64: string,
-): DocumentAttachment {
-  const data = base64.includes(",") ? (base64.split(",")[1] ?? base64) : base64;
-  return {
-    filename,
-    mediaType: normalizeDocumentMediaType(mediaType, filename),
-    data,
-  };
-}
-
-type ProviderContentBlock = Record<string, unknown>;
+type ProviderContentBlock = Record<string, JsonValue>;
 
 async function mapResolvedUserContent(
   content: string | MessageContentPart[],
   provider: ProviderName,
   mapText: (text: string) => ProviderContentBlock,
-  mapDocument: (part: Extract<MessageContentPart, { type: "document" }>) => ProviderContentBlock,
-  mapImage: (part: Extract<MessageContentPart, { type: "image" }>) => ProviderContentBlock,
+  mapDocument: (
+    part: Extract<MessageContentPart, { type: "document" }>
+  ) => ProviderContentBlock,
+  mapImage: (
+    part: Extract<MessageContentPart, { type: "image" }>
+  ) => ProviderContentBlock
 ): Promise<string | ProviderContentBlock[]> {
   const resolved = await resolveUserContentForProvider(content, provider);
 
-  if (typeof resolved === "string") {
+  if (!Array.isArray(resolved)) {
     return resolved;
   }
 
@@ -370,58 +467,58 @@ async function mapResolvedUserContent(
       return mapImage(part);
     }
 
-    throw new Error(`Unsupported content part type: ${(part as { type: string }).type}`);
+    throw new Error(`Unsupported content part type: ${part.type}`);
   });
 }
 
 export async function toAnthropicUserContent(
   content: string | MessageContentPart[],
-  provider: ProviderName = "anthropic",
-): Promise<string | Array<Record<string, unknown>>> {
+  provider: ProviderName = "anthropic"
+): Promise<string | ProviderContentBlock[]> {
   return mapResolvedUserContent(
     content,
     provider,
-    (text) => ({ type: "text", text }),
+    (text) => ({ text, type: "text" }),
     (part) => toAnthropicDocumentBlock(part),
     (part) => ({
-      type: "image",
       source: {
-        type: "base64",
-        media_type: part.mediaType,
         data: part.data,
+        media_type: part.mediaType,
+        type: "base64",
       },
-    }),
+      type: "image",
+    })
   );
 }
 
 export async function toOpenAIChatUserContent(
   content: string | MessageContentPart[],
-  provider: ProviderName = "openai",
-): Promise<string | Array<Record<string, unknown>>> {
+  provider: ProviderName = "openai"
+): Promise<string | ProviderContentBlock[]> {
   return mapResolvedUserContent(
     content,
     provider,
-    (text) => ({ type: "text", text }),
+    (text) => ({ text, type: "text" }),
     (part) => toOpenAIResponsesDocumentBlock(part, toDataUrl),
     (part) => ({
-      type: "image_url",
       image_url: { url: toDataUrl(part.mediaType, part.data) },
-    }),
+      type: "image_url",
+    })
   );
 }
 
 export async function toOpenAIResponsesUserContent(
   content: string | MessageContentPart[],
-  provider: ProviderName = "openai",
-): Promise<string | Array<Record<string, unknown>>> {
+  provider: ProviderName = "openai"
+): Promise<string | ProviderContentBlock[]> {
   return mapResolvedUserContent(
     content,
     provider,
-    (text) => ({ type: "input_text", text }),
+    (text) => ({ text, type: "input_text" }),
     (part) => toOpenAIResponsesDocumentBlock(part, toDataUrl),
     (part) => ({
-      type: "input_image",
       image_url: toDataUrl(part.mediaType, part.data),
-    }),
+      type: "input_image",
+    })
   );
 }

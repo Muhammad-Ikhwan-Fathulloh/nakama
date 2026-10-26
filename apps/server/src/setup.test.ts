@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createProviderInstanceId,
   getUserConfigPath,
   isProviderConfigured,
   loadUserConfig,
-  saveUserConfig,
 } from "@nakama/core";
 import { ensureProviderConfigured } from "./setup";
 
@@ -21,31 +20,68 @@ describe("isProviderConfigured", () => {
           defaultProviderId: id,
           providers: [
             {
-              id,
-              type: "openai",
-              label: "OpenAI",
               apiKey: "",
               createdAt: "2026-06-07T10:00:00.000Z",
+              id,
+              label: "OpenAI",
+              type: "openai",
             },
           ],
         },
-        { OPENAI_API_KEY: "sk-test" },
-      ),
+        { OPENAI_API_KEY: "sk-test" }
+      )
     ).toBe(true);
+  });
+
+  test("treats a mounted API key file as configured", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nakama-provider-key-"));
+    const keyPath = join(directory, "openai");
+    await writeFile(keyPath, "sk-mounted\n");
+    const id = createProviderInstanceId();
+
+    try {
+      expect(
+        isProviderConfigured(
+          {
+            defaultProviderId: id,
+            providers: [
+              {
+                apiKey: "",
+                createdAt: "2026-06-07T10:00:00.000Z",
+                id,
+                label: "OpenAI",
+                type: "openai",
+              },
+            ],
+          },
+          { OPENAI_API_KEY_FILE: keyPath }
+        )
+      ).toBe(true);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 });
 
 describe("ensureProviderConfigured", () => {
   let configDir = "";
+
   const envKeys = [
     "NAKAMA_CONFIG_DIR",
     "NAKAMA_PROVIDER",
     "OPENAI_API_KEY",
+    "OPENAI_API_KEY_FILE",
     "ANTHROPIC_API_KEY",
     "OPENROUTER_API_KEY",
     "GEMINI_API_KEY",
+    "NETRA_API_KEY",
+    "NETRA_API_KEY_FILE",
+    "NETRA_MODEL",
   ] as const;
-  const previousEnv: Partial<Record<(typeof envKeys)[number], string | undefined>> = {};
+
+  const previousEnv: Partial<
+    Record<(typeof envKeys)[number], string | undefined>
+  > = {};
 
   afterEach(async () => {
     for (const key of envKeys) {
@@ -57,7 +93,7 @@ describe("ensureProviderConfigured", () => {
     }
 
     if (configDir) {
-      await rm(configDir, { recursive: true, force: true });
+      await rm(configDir, { force: true, recursive: true });
       configDir = "";
     }
   });
@@ -88,5 +124,51 @@ describe("ensureProviderConfigured", () => {
     expect(loaded?.defaultProviderId).toBe(userConfig?.defaultProviderId);
     expect(isProviderConfigured(loaded, process.env)).toBe(true);
     expect(getUserConfigPath()).toContain(configDir);
+  });
+
+  test("bootstraps from a mounted API key without persisting the secret", async () => {
+    snapshotEnv();
+    configDir = await mkdtemp(join(tmpdir(), "nakama-setup-key-file-"));
+    const keyPath = join(configDir, "openai-secret");
+    await writeFile(keyPath, "sk-mounted\n");
+    process.env.NAKAMA_CONFIG_DIR = configDir;
+    process.env.NAKAMA_PROVIDER = "openai";
+    process.env.OPENAI_API_KEY_FILE = keyPath;
+
+    const { provider, userConfig } = await ensureProviderConfigured();
+
+    expect(provider).not.toBeNull();
+    expect(userConfig?.providers[0]?.apiKey).toBe("");
+    expect(await readFile(getUserConfigPath(), "utf8")).not.toContain(
+      "sk-mounted"
+    );
+  });
+
+  test.each([
+    undefined,
+    "deepseek/deepseek-v4-flash-0731",
+    "deepseek/deepseek-v4.1-flash",
+  ])("starts Netra V4.1 for saved model %s", async (model) => {
+    snapshotEnv();
+    configDir = await mkdtemp(join(tmpdir(), "nakama-setup-netra-"));
+    process.env.NAKAMA_CONFIG_DIR = configDir;
+    process.env.NETRA_API_KEY = "netra-test-key";
+
+    if (model) {
+      process.env.NETRA_MODEL = model;
+    } else {
+      delete process.env.NETRA_MODEL;
+    }
+
+    const { provider } = await ensureProviderConfigured();
+    expect(provider?.name).toBe("netra");
+    const userConfig = await loadUserConfig();
+    expect(userConfig?.providers[0]?.type).toBe("netra");
+    expect(userConfig?.providers[0]?.customModels).toEqual([
+      { default: true, id: "deepseek/deepseek-v4.1-flash" },
+    ]);
+    expect(await readFile(getUserConfigPath(), "utf8")).not.toContain(
+      "netra-test-key"
+    );
   });
 });

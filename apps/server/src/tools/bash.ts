@@ -1,29 +1,64 @@
 import { spawn } from "node:child_process";
-import { realpath } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import {
+  mkdir,
+  readdir,
+  realpath,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
+import { homedir } from "node:os";
+import path from "node:path";
+import {
+  comparablePath,
   getProfileSoulDir,
+  getUserConfigDir,
   guardFilePath,
+  resolveWithRealpath,
   type ToolContext,
   type ToolDefinition,
 } from "@nakama/core";
+import { getToolExecutionEnv } from "../lib/ensure-process-path";
 import { mergeCodingAgentSpawnEnv } from "../services/coding-agent-spawn-env";
+import { killProcessTree } from "../services/custom-tool-subprocess";
+import {
+  isTenantBashEnabled,
+  resolveBashBackend,
+  TENANT_BASH_DISABLED,
+} from "./bash-config";
+import { remoteBashDescription, runRemoteBash } from "./bash-remote";
+import {
+  commandLooksLikeCursorAgent,
+  formatCodingAgentBashStdout,
+} from "./cursor-agent-output";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
 const MAX_TIMEOUT_MS = 30 * 60_000;
+
 const MAX_OUTPUT_CHARS = 32_000;
 
+const EXIT_STDIO_GRACE_MS = 100;
+
+/** In-memory capture for coding-agent runs before summarize / keep-tail. */
+const CODING_AGENT_MAX_CAPTURE_CHARS = 5_000_000;
+
+/** Keep the newest N coding-agent logs; prune the rest after each write. */
+const CODING_AGENT_LOG_RETENTION = 10;
+
 export interface BashInput {
+  codingAgent?: boolean;
   command: string;
   cwd?: string;
-  timeoutMs?: number;
-  codingAgent?: boolean;
   env?: Record<string, string>;
+  timeoutMs?: number;
 }
 
 export interface BashOutput {
   exitCode: number | null;
-  stdout: string;
   stderr: string;
+  stdout: string;
   timedOut: boolean;
 }
 
@@ -31,36 +66,54 @@ interface BashRunOptions {
   workspaceRoot?: string;
 }
 
+interface ShellRunOptions {
+  codingAgentMode: boolean;
+  signal?: AbortSignal;
+  workspaceRoot: string;
+}
+
+const BASH_TOOL_DESCRIPTION_BASE =
+  "Run a one-off shell command and return stdout, stderr, and exit code. In local CLI sessions, commands start in the directory where the CLI was launched; otherwise they start in the active profile workspace. Do not use this to create persistent tools, tool files, shell wrappers, or .sh scripts. If the user wants a reusable tool, translate shell examples into JavaScript instead.";
+
+function bashToolDescription(): string {
+  if (resolveBashBackend() === "remote") {
+    return `${BASH_TOOL_DESCRIPTION_BASE} ${remoteBashDescription()}`;
+  }
+
+  return `${BASH_TOOL_DESCRIPTION_BASE} Host execution is unrestricted by Nakama and uses the server process's OS permissions. Commands can access files outside the profile workspace, including other profiles' files when OS permissions allow. Assign host bash only to trusted profiles.`;
+}
+
 export const bashTool: ToolDefinition<BashInput, BashOutput> = {
+  description: bashToolDescription(),
   name: "bash",
-  description:
-    "Run a one-off shell command in the active profile workspace and return stdout, stderr, and exit code. Do not use this to create persistent tools, tool files, shell wrappers, or .sh scripts. If the user wants a reusable tool, translate shell examples into JavaScript instead.",
   parameters: {
-    type: "object",
+    additionalProperties: false,
     properties: {
-      command: { type: "string", description: "Shell command to run." },
-      cwd: {
-        type: "string",
-        description:
-          "Optional working directory within the profile workspace. Defaults to the profile workspace root.",
-      },
-      timeoutMs: {
-        type: "number",
-        description: "Timeout in milliseconds. Defaults to 30000, max 1800000 (30 minutes).",
-      },
       codingAgent: {
-        type: "boolean",
         description:
-          "When true, Nakama merges coding-agent spawn env (model gateway routing) for this command.",
+          "When true, Nakama merges coding-agent spawn env (provider passthrough) for this command.",
+        type: "boolean",
+      },
+      command: { description: "Shell command to run.", type: "string" },
+      cwd: {
+        description:
+          "Optional working directory within the active shell workspace. Defaults to the CLI launch directory in local CLI sessions, or the profile workspace otherwise.",
+        type: "string",
       },
       env: {
-        type: "object",
-        description: "Optional environment variables to merge into the spawned shell process.",
         additionalProperties: { type: "string" },
+        description:
+          "Optional environment variables to merge into the spawned shell process.",
+        type: "object",
+      },
+      timeoutMs: {
+        description:
+          "Timeout in milliseconds. Defaults to 30000, max 1800000 (30 minutes).",
+        type: "number",
       },
     },
     required: ["command"],
-    additionalProperties: false,
+    type: "object",
   },
   run(input, context) {
     return runBash(input, context);
@@ -68,28 +121,65 @@ export const bashTool: ToolDefinition<BashInput, BashOutput> = {
 };
 
 export async function runBash(
-  input: unknown,
+  input: BashInput,
   context: ToolContext,
-  options: BashRunOptions = {},
+  options: BashRunOptions = {}
 ): Promise<BashOutput> {
   const profileId = context.profileId?.trim();
   const orgId = context.orgId?.trim();
+
   if (!profileId) {
     throw new Error("profileId is required.");
   }
+
   if (!orgId) {
     throw new Error("orgId is required.");
   }
 
-  const command = readString(input, "command");
+  // Seeding and assignment also drop bash when it is off, but a profile can
+  // still hold it from before (or via clone), so this is the gate that counts.
+  // The CLI channel is the operator's own terminal.
+  if (context.channel !== "cli" && !isTenantBashEnabled()) {
+    throw new Error(TENANT_BASH_DISABLED);
+  }
+
+  const command = input.command.trim();
+
   if (!command) {
     throw new Error("command is required.");
   }
 
+  const codingAgentMode =
+    input.codingAgent === true || commandLooksLikeCursorAgent(command);
+
+  // The CLI channel stays on host bash: it is the operator's own terminal.
+  if (context.channel !== "cli" && resolveBashBackend() === "remote") {
+    return runRemoteBash({
+      codingAgent: codingAgentMode,
+      command,
+      cwd: input.cwd,
+      env: input.env,
+      orgId,
+      profileId,
+      signal: context.signal,
+      timeoutMs: readTimeout(input.timeoutMs),
+    });
+  }
+
+  const codingWorkspace =
+    context.channel === "cli" || codingAgentMode
+      ? context.codingWorkspaceRoot
+      : undefined;
+
   const workspaceRoot = await resolveWorkspaceRoot(
-    options.workspaceRoot ?? getProfileSoulDir(orgId, profileId),
+    options.workspaceRoot ??
+      codingWorkspace ??
+      context.workspaceRoot ??
+      getProfileSoulDir(orgId, profileId)
   );
-  const rawCwd = readString(input, "cwd");
+
+  const rawCwd = input.cwd?.trim() ?? "";
+
   const cwd = rawCwd
     ? (
         await guardFilePath(rawCwd, workspaceRoot, undefined, {
@@ -98,10 +188,191 @@ export async function runBash(
         })
       ).resolved
     : workspaceRoot;
-  const timeoutMs = readTimeout(readOptionalNumber(input, "timeoutMs"));
-  const env = readStringRecord(readOptionalRecord(input, "env"));
 
-  return runShellCommand(command, cwd, timeoutMs, env);
+  refuseNakamaStateAccess(command, cwd, [
+    workspaceRoot,
+    getProfileSoulDir(orgId, profileId),
+  ]);
+
+  const timeoutMs = readTimeout(input.timeoutMs);
+  const env = input.env ?? {};
+
+  return runShellCommand(command, cwd, timeoutMs, env, {
+    codingAgentMode,
+    signal: context.signal,
+    workspaceRoot,
+  });
+}
+
+/** Names that only Nakama's own secret state uses, refused wherever they appear. */
+const NAKAMA_SECRET_FILE_PATTERN =
+  /(?:^|[\s/=:<>(`])(?:config\.ini|local-auth-token|tool-credentials\.key|whatsapp-context-token|nakama\.(?:sqlite|db))(?=$|[\s;|&)<>`])/i;
+
+/** Credential or database shapes, refused when the command also reaches the config dir. */
+const NAKAMA_STATE_PATTERN =
+  /\.(?:sqlite3?|db|ini|key)\b|\bsqlite3\b|token|\/auth\b/i;
+
+const SHELL_WORD_DELIMITER = /[\s;|&<>()`]+/;
+
+const OTHER_WORKSPACE_REFUSAL =
+  "Refused: this command reaches into Nakama's org data outside this profile's workspace. Bash can only read this profile's own files. Use the Nakama tools assigned to this profile for anything else.";
+
+const NAKAMA_STATE_REFUSAL =
+  "Refused: this command reads Nakama's internal state (local auth token, config.ini, credential keys, or server SQLite databases). The bash tool cannot call the Nakama API or read its databases. Use the Nakama tools assigned to this profile; if no tool fits, tell the user what is missing.";
+
+/**
+ * Defense in depth, not a sandbox: refuse commands that name Nakama's secret
+ * files or reach into the config dir for credentials and databases. Profile
+ * workspaces under the config dir stay usable.
+ */
+function refuseNakamaStateAccess(
+  command: string,
+  cwd: string,
+  workspaceDirs: string[]
+): void {
+  // Fold quoting, backslashes, and ${VAR} into one shape before matching.
+  const normalized = command
+    .replaceAll("\\", "/")
+    .replace(/["']/g, "")
+    .replace(/\$\{(\w+)\}/g, "$$$1");
+
+  if (NAKAMA_SECRET_FILE_PATTERN.test(normalized)) {
+    throw new Error(NAKAMA_STATE_REFUSAL);
+  }
+
+  if (
+    NAKAMA_STATE_PATTERN.test(normalized) &&
+    reachesNakamaConfigDir(normalized, cwd, workspaceDirs)
+  ) {
+    throw new Error(NAKAMA_STATE_REFUSAL);
+  }
+
+  // Other orgs' and profiles' files hold no secret-shaped name, so the
+  // pattern gate above never sees them. Anything under orgs/ outside this
+  // profile's workspace is refused.
+  if (reachesNakamaConfigDir(normalized, cwd, workspaceDirs, "orgs")) {
+    throw new Error(OTHER_WORKSPACE_REFUSAL);
+  }
+}
+
+function reachesNakamaConfigDir(
+  command: string,
+  cwd: string,
+  workspaceDirs: string[],
+  subdir = ""
+): boolean {
+  const configDir = path.resolve(getUserConfigDir());
+  const configRoots = [configDir, resolveWithRealpath(configDir)];
+  const scopes = configRoots.map((root) => path.join(root, subdir));
+
+  const exemptDirs = workspaceDirs
+    .flatMap((dir) => [path.resolve(dir), resolveWithRealpath(dir)])
+    .filter((dir) =>
+      configRoots.some((root) => isInsideDir(dir, root) && dir !== root)
+    );
+
+  // With a subdir, a parent of it inside the config dir counts too:
+  // `grep -r x ~/.nakama` reads orgs/.
+  const reachesState = (target: string) =>
+    configRoots.some((root) => isInsideDir(target, root)) &&
+    scopes.some(
+      (scope) =>
+        isInsideDir(target, scope) ||
+        (subdir !== "" && isInsideDir(scope, target))
+    ) &&
+    !exemptDirs.some((dir) => isInsideDir(target, dir));
+
+  const homeRelative = path
+    .relative(homedir(), configDir)
+    .replaceAll("\\", "/");
+
+  const prefixes = new Map<string, string>([["$NAKAMA_CONFIG_DIR", configDir]]);
+
+  for (const root of configRoots) {
+    prefixes.set(root.replaceAll("\\", "/"), root);
+  }
+
+  if (homeRelative && !homeRelative.startsWith("..")) {
+    for (const home of ["~", "$HOME"]) {
+      prefixes.set(`${home}/${homeRelative}`, configDir);
+    }
+  }
+
+  for (const [prefix, root] of prefixes) {
+    let index = command.indexOf(prefix);
+
+    while (index !== -1) {
+      const rest = command.slice(index + prefix.length);
+      const tail = rest.split(SHELL_WORD_DELIMITER)[0] ?? "";
+
+      if (
+        (tail === "" || tail.startsWith("/")) &&
+        reachesState(path.join(root, tail))
+      ) {
+        return true;
+      }
+
+      index = command.indexOf(prefix, index + prefix.length);
+    }
+  }
+
+  return command
+    .split(SHELL_WORD_DELIMITER)
+    .some(
+      (word) => word.includes("..") && reachesState(path.resolve(cwd, word))
+    );
+}
+
+function isInsideDir(target: string, dir: string): boolean {
+  const relative = path.relative(comparablePath(dir), comparablePath(target));
+
+  return (
+    relative === "" || !(relative.startsWith("..") || path.isAbsolute(relative))
+  );
+}
+
+export function resolveHostBash(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (file: string) => boolean = existsSync,
+  which: (name: string) => string | null = Bun.which
+): string {
+  if (platform !== "win32") {
+    const shell = exists("/bin/bash") ? "/bin/bash" : which("bash");
+
+    if (shell) {
+      return shell;
+    }
+
+    throw new Error("No Bash shell found. Install Bash and add it to PATH.");
+  }
+
+  for (const root of [env.ProgramFiles, env["ProgramFiles(x86)"]]) {
+    if (root) {
+      // Use Bash itself, rather than Git's launcher, so its PID owns the tree.
+      const shell = path.win32.join(root, "Git", "usr", "bin", "bash.exe");
+
+      if (exists(shell)) {
+        return shell;
+      }
+    }
+  }
+
+  const shell = which("bash.exe");
+
+  // The WSL launcher uses a different filesystem and toolchain from the host.
+  if (
+    shell &&
+    !/^[a-z]:\\windows\\(?:system32|sysnative)\\bash\.exe$/i.test(
+      shell.replaceAll("/", "\\")
+    )
+  ) {
+    return shell;
+  }
+
+  throw new Error(
+    "No native Bash shell found. Install Git for Windows (https://git-scm.com/download/win) or add a native Bash executable to PATH."
+  );
 }
 
 function runShellCommand(
@@ -109,46 +380,257 @@ function runShellCommand(
   cwd: string,
   timeoutMs: number,
   envOverrides: Record<string, string> = {},
+  options: ShellRunOptions
 ): Promise<BashOutput> {
   return new Promise((resolve, reject) => {
-    const child = spawn("/bin/bash", ["-lc", command], {
+    options.signal?.throwIfAborted();
+    const env = mergeCodingAgentSpawnEnv(getToolExecutionEnv(), envOverrides);
+
+    // A login shell may rebuild PATH from /etc/profile, as Debian in the Docker
+    // image does. Put back the dirs the harness probe finds CLIs in, after the
+    // profile's own so nothing that resolved before changes.
+    const restorePath =
+      process.platform !== "win32" && env.PATH
+        ? 'PATH="$PATH:$NAKAMA_TOOL_PATH"; unset NAKAMA_TOOL_PATH; '
+        : "";
+
+    const child = spawn(resolveHostBash(), ["-lc", restorePath + command], {
       cwd,
-      env: mergeCodingAgentSpawnEnv(process.env, envOverrides),
+      detached: process.platform !== "win32",
+      env: restorePath ? { ...env, NAKAMA_TOOL_PATH: env.PATH } : env,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let stdoutOverflow = false;
+    let stderrOverflow = false;
+    let exitTimer: ReturnType<typeof setTimeout> | undefined;
+    let exited = false;
+    let settled = false;
+    let abortHandled = false;
+    let treeKilled: Promise<void> | undefined;
+
+    const killCommand = () => {
+      treeKilled ??= killProcessTree(child, "SIGKILL");
+    };
+
+    const onAbort = () => {
+      if (abortHandled) {
+        return;
+      }
+
+      abortHandled = true;
+      killCommand();
+    };
+
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+
+    if (options.signal?.aborted) {
+      onAbort();
+    }
 
     const timeoutId = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
+      killCommand();
     }, timeoutMs);
 
+    // A descendant may retain the pipes after the shell exits. Keep draining
+    // active output, but release idle inherited handles like Pi does.
+    const armExitTimer = () => {
+      if (exited && !settled) {
+        clearTimeout(exitTimer);
+        exitTimer = setTimeout(
+          () => finish(child.exitCode),
+          EXIT_STDIO_GRACE_MS
+        );
+      }
+    };
+
     child.stdout?.on("data", (chunk: Buffer | string) => {
+      armExitTimer();
+
+      if (options.codingAgentMode) {
+        const next = appendCodingAgentCapture(stdout, String(chunk));
+        stdout = next.value;
+        stdoutOverflow = stdoutOverflow || next.overflowed;
+
+        return;
+      }
+
       stdout = appendOutput(stdout, String(chunk));
     });
 
     child.stderr?.on("data", (chunk: Buffer | string) => {
+      armExitTimer();
+
+      if (options.codingAgentMode) {
+        const next = appendCodingAgentCapture(stderr, String(chunk));
+        stderr = next.value;
+        stderrOverflow = stderrOverflow || next.overflowed;
+
+        return;
+      }
+
       stderr = appendOutput(stderr, String(chunk));
     });
 
-    child.on("error", (error) => {
-      clearTimeout(timeoutId);
-      reject(error);
-    });
+    async function finish(exitCode: number | null, error?: Error) {
+      if (settled) {
+        return;
+      }
 
-    child.on("close", (exitCode) => {
+      settled = true;
       clearTimeout(timeoutId);
-      resolve({
+      clearTimeout(exitTimer);
+      options.signal?.removeEventListener("abort", onAbort);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      // The shell can exit before taskkill finishes terminating descendants.
+      await treeKilled;
+
+      if (error || abortHandled) {
+        reject(
+          error ?? new DOMException("The operation was aborted", "AbortError")
+        );
+
+        return;
+      }
+
+      void finalizeCodingAgentOutput({
+        codingAgentMode: options.codingAgentMode,
         exitCode,
-        stdout,
         stderr,
+        stderrOverflow,
+        stdout,
+        stdoutOverflow,
         timedOut,
-      });
+        workspaceRoot: options.workspaceRoot,
+      })
+        .then(resolve)
+        .catch(reject);
+    }
+
+    child.once("error", (error) => finish(null, error));
+    child.once("exit", () => {
+      exited = true;
+      armExitTimer();
     });
+    child.once("close", (exitCode) => finish(exitCode));
   });
+}
+
+async function finalizeCodingAgentOutput(args: {
+  codingAgentMode: boolean;
+  workspaceRoot: string;
+  stdout: string;
+  stderr: string;
+  stdoutOverflow: boolean;
+  stderrOverflow: boolean;
+  exitCode: number | null;
+  timedOut: boolean;
+}): Promise<BashOutput> {
+  if (!args.codingAgentMode) {
+    return {
+      exitCode: args.exitCode,
+      stderr: args.stderr,
+      stdout: args.stdout,
+      timedOut: args.timedOut,
+    };
+  }
+
+  const logPath = await writeCodingAgentLog(
+    args.workspaceRoot,
+    args.stdout,
+    args.stderr
+  );
+
+  let stdout = formatCodingAgentBashStdout(args.stdout, {
+    exitCode: args.exitCode,
+    logPath,
+  });
+
+  if (args.stdoutOverflow) {
+    stdout = `${stdout}\n\n(stdout capture hit ${CODING_AGENT_MAX_CAPTURE_CHARS} char limit; see full log)`;
+  }
+
+  let stderr = keepTail(args.stderr, MAX_OUTPUT_CHARS);
+
+  if (args.stderrOverflow) {
+    stderr = `${stderr}\n\n(stderr capture hit ${CODING_AGENT_MAX_CAPTURE_CHARS} char limit; see full log)`;
+  }
+
+  return {
+    exitCode: args.exitCode,
+    stderr,
+    stdout,
+    timedOut: args.timedOut,
+  };
+}
+
+async function writeCodingAgentLog(
+  workspaceRoot: string,
+  stdout: string,
+  stderr: string
+): Promise<string | null> {
+  if (!path.isAbsolute(workspaceRoot)) {
+    throw new Error(
+      "workspaceRoot must be an absolute path; relative roots resolve against process.cwd() and break profile isolation."
+    );
+  }
+
+  try {
+    const dir = path.join(workspaceRoot, "artifacts", "coding-agent-runs");
+    await mkdir(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const fileName = `${stamp}-${Math.random().toString(36).slice(2, 8)}.log`;
+    const absolutePath = path.join(dir, fileName);
+
+    const body = [
+      "=== stdout ===",
+      stdout,
+      "",
+      "=== stderr ===",
+      stderr,
+      "",
+    ].join("\n");
+
+    await writeFile(absolutePath, body, "utf8");
+    await pruneCodingAgentLogs(dir);
+
+    return path.join("artifacts", "coding-agent-runs", fileName);
+  } catch {
+    return null;
+  }
+}
+
+async function pruneCodingAgentLogs(dir: string): Promise<void> {
+  const names = await readdir(dir);
+  const logs = names.filter((name) => name.endsWith(".log"));
+
+  if (logs.length <= CODING_AGENT_LOG_RETENTION) {
+    return;
+  }
+
+  const ranked = await Promise.all(
+    logs.map(async (name) => {
+      try {
+        const info = await stat(path.join(dir, name));
+
+        return { mtimeMs: info.mtimeMs, name };
+      } catch {
+        return { mtimeMs: 0, name };
+      }
+    })
+  );
+
+  ranked.sort((a, b) => b.mtimeMs - a.mtimeMs || (a.name < b.name ? 1 : -1));
+
+  for (const stale of ranked.slice(CODING_AGENT_LOG_RETENTION)) {
+    await unlink(path.join(dir, stale.name)).catch(() => undefined);
+  }
 }
 
 function appendOutput(current: string, chunk: string): string {
@@ -161,7 +643,46 @@ function appendOutput(current: string, chunk: string): string {
   return combined.slice(0, MAX_OUTPUT_CHARS) + "\n...[truncated]";
 }
 
+interface CodingAgentCapture {
+  overflowed: boolean;
+  value: string;
+}
+
+function appendCodingAgentCapture(
+  current: string,
+  chunk: string
+): CodingAgentCapture {
+  if (current.length >= CODING_AGENT_MAX_CAPTURE_CHARS) {
+    return { overflowed: true, value: current };
+  }
+
+  const remaining = CODING_AGENT_MAX_CAPTURE_CHARS - current.length;
+
+  if (chunk.length <= remaining) {
+    return { overflowed: false, value: current + chunk };
+  }
+
+  return {
+    overflowed: true,
+    value: current + chunk.slice(0, remaining),
+  };
+}
+
+function keepTail(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+
+  return `...[truncated]\n${value.slice(value.length - maxChars)}`;
+}
+
 async function resolveWorkspaceRoot(rawWorkspaceRoot: string): Promise<string> {
+  if (!path.isAbsolute(rawWorkspaceRoot)) {
+    throw new Error(
+      "workspaceRoot must be an absolute path; relative roots resolve against process.cwd() and break profile isolation."
+    );
+  }
+
   try {
     return await realpath(rawWorkspaceRoot);
   } catch {
@@ -169,53 +690,10 @@ async function resolveWorkspaceRoot(rawWorkspaceRoot: string): Promise<string> {
   }
 }
 
-function readTimeout(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+function readTimeout(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
     return DEFAULT_TIMEOUT_MS;
   }
 
   return Math.min(value, MAX_TIMEOUT_MS);
-}
-
-function readOptionalNumber(input: unknown, key: string): unknown {
-  if (typeof input !== "object" || input === null || !(key in input)) {
-    return undefined;
-  }
-
-  return (input as Record<string, unknown>)[key];
-}
-
-function readString(input: unknown, key: string): string | null {
-  if (typeof input !== "object" || input === null || !(key in input)) {
-    return null;
-  }
-
-  const value = (input as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readOptionalRecord(input: unknown, key: string): Record<string, unknown> | null {
-  if (typeof input !== "object" || input === null || !(key in input)) {
-    return null;
-  }
-
-  const value = (input as Record<string, unknown>)[key];
-
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return null;
-  }
-
-  return value as Record<string, unknown>;
-}
-
-function readStringRecord(record: Record<string, unknown> | null): Record<string, string> {
-  if (!record) {
-    return {};
-  }
-
-  return Object.fromEntries(
-    Object.entries(record).flatMap(([key, value]) =>
-      typeof value === "string" ? [[key, value] as const] : [],
-    ),
-  );
 }

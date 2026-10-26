@@ -1,28 +1,62 @@
-<p align="center"> <img alt="Nakama logo" src="nakama.png" width="188"> </p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/nakama-logo-white.svg" />
+    <img alt="Nakama logo" src="assets/nakama-logo.svg" width="220" />
+  </picture>
+</p>
+
+<p align="center">
+  <a href="https://github.com/ahmadrosid/nakama/releases"><img src="https://img.shields.io/github/v/release/ahmadrosid/nakama?display_name=tag&sort=semver" alt="Latest release"></a>
+  <a href="https://github.com/ahmadrosid/nakama/graphs/contributors"><img src="https://img.shields.io/github/contributors/ahmadrosid/nakama?style=flat-square" alt="Contributors"></a>
+  <a href="https://discord.gg/wG6FY4cKRx"><img src="https://img.shields.io/badge/Discord-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord"></a>
+</p>
 
 # Nakama
 
-> Deploy your own AI Agent platform as easily as spinning up WordPress.
-
 [Documentation](https://ahmadrosid.github.io/nakama/) · [Managed hosting](https://getnakama.cloud/)
 
-Nakama is a small, self-hosted Bun + TypeScript monorepo for running AI agents. Prefer not to run your own server? Use [managed hosting at getnakama.cloud](https://getnakama.cloud/) — sign up, create an instance, and open your dedicated URL (for example `acme.getnakama.cloud`). The first 24 hours are free with no credit card required.
+> Your next hire will still be human.
+> Nakama runs the agents. Your team keeps the important work.
 
-Inspired by [OpenClaw](https://github.com/openclaw/openclaw) and [Hermes Agent](https://github.com/nousresearch/hermes-agent) — same self-hosted agent idea (tools, channels, soul, automations) — but **multi-tenant by design**. Those projects target one operator on one machine; Nakama is one server, many orgs, with isolated profiles, sessions, member invites, and roles built in.
+Nakama is an AI agent platform for your team. You chat in a dashboard that feels like ChatGPT. Behind that, each agent can use tools, skills, memory, and channels (Telegram, WhatsApp, Discord, and Slack) — with its own identity and permissions.
 
-![Demo](./nakama-demo.png)
+It was built for teams from day one: one server, many orgs, invites and roles, agents isolated from each other. Set it up with managed cloud or one Docker container.
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for system design, or the [docs site](https://ahmadrosid.github.io/nakama/) for the full guide.
+Coming from [OpenClaw](https://github.com/openclaw/openclaw) or [Hermes Agent](https://github.com/nousresearch/hermes-agent)? Same class of capability, without the setup maze, and not limited to one operator on one machine.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/chat-dark.png" />
+  <img alt="Nakama dashboard: start a chat with an agent, with the agent rail, navigation, and recent chats on the left" src="assets/screenshots/chat-light.png" />
+</picture>
+
+Pick an agent from the rail on the left and start a chat. Every agent has its own prompt files, tools, skills, and memory.
+
+| Agent | Control center |
+|---|---|
+| <img alt="Agent page with the system prompt, SOUL, STYLE, INSTRUCTIONS and MEMORY files, and tabs for channels, tools, MCP and skills" src="assets/screenshots/agent.png" /> | <img alt="Control center with workspace settings, AI providers, tools, skills, MCP, plugins and integrations" src="assets/screenshots/control-center.png" /> |
+
+Open [ARCHITECTURE.md](./ARCHITECTURE.md) for the system design.
+Open the [docs site](https://ahmadrosid.github.io/nakama/) for the full guide.
+
+## Desktop downloads
+
+macOS downloads are available in [desktop releases](https://github.com/ahmadrosid/nakama/releases?q=desktop-v). Windows has no published installation link here yet; unsigned MSIX files in older releases are Partner Center uploads, not installable downloads. See [Windows installation](apps/desktop/README.md#windows-installation) for availability and alternatives.
 
 ## Quick start
 
 ### Managed hosting
 
-The fastest way to try Nakama is [Nakama Cloud](https://getnakama.cloud/). Create an account, provision an instance, complete the first-time setup wizard in the browser, and you are live — no Bun, Docker, or VPS required.
+Use [Nakama Cloud](https://getnakama.cloud/) to try Nakama with the least work.
+
+1. Create an account.
+2. Provision an instance.
+3. Complete the first-time setup wizard in the browser.
+
+You do not need Bun, Docker, or a VPS.
 
 ### Run locally
 
-Requires [Bun](https://bun.sh).
+You need [Bun](https://bun.sh).
 
 ```bash
 # Install dependencies
@@ -32,9 +66,9 @@ bun install
 bun run dev:web
 ```
 
-Visit web dashboard: http://localhost:3000
+Open the web dashboard: http://localhost:3003
 
-Or run the server on its own:
+Or start the server alone:
 
 ```bash
 bun run dev:server
@@ -42,43 +76,83 @@ bun run dev:server
 
 ### Docker
 
-You can also run Nakama with Docker.
+You can also run Nakama with Docker. It runs as one container and needs about
+200 MB idle, so 1 vCPU and 1 GB is enough for the server on its own. See
+[Requirements](https://ahmadrosid.github.io/nakama/docker#requirements) before
+enabling channel workers.
 
-**Prebuilt image (quickest):**
+**Prebuilt image (fastest):**
 
 ```bash
 # Pull and run the latest image
 docker pull ghcr.io/ahmadrosid/nakama:latest
-docker run -d -p 4310:4310 -v nakama-data:/nakama/data --name nakama ghcr.io/ahmadrosid/nakama:latest
+umask 077
+printf 'NAKAMA_SECRETS_KEY=%s\n' "$(openssl rand -base64 32)" > nakama-secrets.env
+docker run -d -p 4310:4310 -v nakama-data:/nakama/data --env-file nakama-secrets.env --name nakama ghcr.io/ahmadrosid/nakama:latest
 ```
 
 **Build from source:**
 
 ```bash
-./scripts/docker-build.sh
-docker run -d -p 4310:4310 -v nakama-data:/nakama/data --name nakama nakama
+./scripts/docker-build-run.sh
 ```
 
-**Fresh start:**
+**Fresh start (destroys data):**
 
 ```bash
-./scripts/docker-reset.sh
-./scripts/docker-build.sh
-docker run -d -p 4310:4310 -v nakama-data:/nakama/data --name nakama nakama
+./scripts/docker-destroy.sh
+./scripts/docker-build-run.sh
 ```
 
-The dashboard will be available at http://localhost:4310.
+The reset script also removes every container publishing port 4310, including
+unrelated containers. It does not remove the cached
+`ghcr.io/ahmadrosid/nakama:latest` image. See the
+[Docker reset documentation](https://ahmadrosid.github.io/nakama/docker#reset-a-local-docker-install)
+for the complete cleanup scope.
+
+Open the dashboard at http://localhost:4310.
 
 ### Integrations
 
-Nakama integrates with **Telegram**, **WhatsApp**, and **Composio** (SaaS app connections). Enable them in the web app under **Integrations**.
+Nakama connects to **Telegram**, **WhatsApp**, **Discord**, **Slack**, and
+**Composio**. With Composio, you can connect to more than 1,000 external apps.
+Enable them in the web app under **Integrations**.
 
-For Composio, save your API key under **Integrations → Composio** (stored in `~/.nakama/composio/config.ini`). Org admins connect OAuth apps on Integrations; assign toolkits per profile on **Profiles**.
+On the first run, the server asks for a provider and an API key if none is configured.
+The server saves settings to `~/.nakama/config.ini`.
 
-On first run, the server prompts for a provider and API key if none is configured. Settings are saved to `~/.nakama/config.ini`.
-
-The server listens on `http://127.0.0.1:4310` by default. Interactive API docs are available at `http://127.0.0.1:4310/docs`.
+The server listens on `http://127.0.0.1:4310` by default.
+Interactive API docs are at `http://127.0.0.1:4310/docs`.
 
 ## License
 
 MIT
+
+## Maintainers
+
+<p align="center">
+  <a href="https://github.com/ahmadrosid"><img src="https://images.weserv.nl/?url=github.com/ahmadrosid.png&mask=circle&w=96&h=96" width="96" alt="ahmadrosid" /></a>
+  <a href="https://github.com/fajarhide"><img src="https://images.weserv.nl/?url=github.com/fajarhide.png&mask=circle&w=96&h=96" width="96" alt="fajarhide" /></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/ahmadrosid">@ahmadrosid</a> and <a href="https://github.com/fajarhide">@fajarhide</a>
+</p>
+
+## Contributors
+
+Thanks to everyone who helps make Nakama better.
+
+<p align="center">
+  <a href="https://github.com/ahmadrosid/nakama/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=ahmadrosid/nakama" alt="Nakama contributors" width="812" />
+  </a>
+</p>
+
+## Star History
+
+<p align="center">
+  <a href="https://star-history.dera.page/#ahmadrosid/nakama">
+    <img src="https://star-history.dera.page/svg?repos=ahmadrosid/nakama" alt="Star History Chart" width="800" />
+  </a>
+</p>

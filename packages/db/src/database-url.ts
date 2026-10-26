@@ -1,6 +1,6 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
-import { getUserConfigDir } from "@nakama/core";
+import { getUserConfigDir, PRIVATE_DIR_MODE } from "@nakama/core";
 
 export interface ResolveDatabasePathOptions {
   /** Anchor relative file: paths (defaults to ~/.nakama). */
@@ -9,11 +9,11 @@ export interface ResolveDatabasePathOptions {
 
 export function resolveDatabasePath(
   databaseUrl: string,
-  options: ResolveDatabasePathOptions = {},
+  options: ResolveDatabasePathOptions = {}
 ): string {
   const trimmed = databaseUrl.trim();
 
-  if (trimmed === ":memory:" || trimmed === "memory:") {
+  if (trimmed === ":memory:") {
     return ":memory:";
   }
 
@@ -35,5 +35,13 @@ export function ensureDatabaseDirectory(databasePath: string): void {
     return;
   }
 
-  mkdirSync(dirname(databasePath), { recursive: true });
+  if (!isAbsolute(databasePath)) {
+    throw new Error("Database path must be absolute.");
+  }
+
+  const directory = dirname(databasePath);
+  mkdirSync(directory, { mode: PRIVATE_DIR_MODE, recursive: true });
+  // mkdir masks a new directory's mode with the umask and leaves an existing
+  // one alone, so re-tighten instead of trusting creation.
+  chmodSync(directory, PRIVATE_DIR_MODE);
 }

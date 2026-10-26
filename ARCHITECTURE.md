@@ -1,6 +1,11 @@
 # Nakama Architecture
 
-Nakama is a multi-tenant AI agent platform with one shared server runtime and several thin clients. Each **organization** is the tenant boundary. Profiles, sessions, tools, MCP servers, skills, automations, tasks, attachments, and usage data are all scoped to an org unless explicitly platform-level.
+Nakama is an agent platform for teams. The platform does not replace the team. One shared server runtime serves thin clients.
+
+The org is the isolation boundary. Profiles, sessions, tools, MCP, skills, automations, attachments, and usage are org-scoped unless they are platform-level.
+
+Security trust boundaries, STRIDE analysis, and residual risks are maintained in
+[`THREAT_MODEL.md`](./THREAT_MODEL.md).
 
 ## System overview
 
@@ -11,6 +16,8 @@ flowchart TB
     cli["apps/cli"]
     tg["apps/platform/telegram"]
     wa["apps/platform/whatsapp"]
+    dc["apps/platform/discord"]
+    sl["apps/platform/slack"]
   end
 
   subgraph sdk ["@nakama/client"]
@@ -25,6 +32,7 @@ flowchart TB
     routes["Routes"]
     workers["WorkerManagerService"]
     notif["Notification services"]
+    plugins["PluginService"]
   end
 
   subgraph runtime ["Runtime services"]
@@ -38,6 +46,7 @@ flowchart TB
   subgraph data ["State"]
     db["@nakama/db (SQLite)"]
     soul["~/.nakama/orgs/.../profiles/..."]
+    orgmem["~/.nakama/orgs/{orgId}/MEMORY.md"]
     config["~/.nakama/config.ini"]
     files["Attachments / knowledge files"]
   end
@@ -46,6 +55,9 @@ flowchart TB
     automation["automation worker"]
     telegram["telegram worker"]
     whatsapp["whatsapp worker"]
+    discord["discord worker"]
+    slack["slack worker"]
+    pluginworkers["plugin workers"]
   end
 
   clients --> client
@@ -56,253 +68,182 @@ flowchart TB
   routes --> agent
   routes --> workers
   routes --> notif
+  routes --> plugins
   agent --> harness
   agent --> tools
   agent --> providers
   agent --> mcp
+  agent --> plugins
   agent --> persist
   harness --> db
   persist --> db
   tools --> soul
   agent --> soul
+  agent --> orgmem
   db --> files
   server --> config
   workers --> automation
   workers --> telegram
   workers --> whatsapp
+  workers --> discord
+  workers --> pluginworkers
 ```
 
-**Dependency rule:** `packages/*` can be imported by `apps/*`, but not the other way around.
+Apps can import from `packages/*`. Packages must not import from `apps/*`.
 
 ## Repo map
 
 ```text
 nakama/
 ├── apps/
-│   ├── server/              # HTTP API, auth, org middleware, agent orchestration
-│   ├── web/                 # Dashboard
-│   ├── cli/                 # Terminal client
-│   └── platform/
-│       ├── automation/      # Scheduler / automation worker
-│       ├── telegram/        # Telegram bridge
-│       └── whatsapp/        # WhatsApp bridge
+│   ├── server/                 # HTTP API, auth, org, agent runtime
+│   ├── web/                    # Dashboard
+│   ├── cli/                    # Terminal client
+│   └── platform/{automation,telegram,whatsapp,discord,slack}/
 ├── packages/
-│   ├── agent/               # Prompt assembly, tool loop, chat session runtime
-│   ├── core/                # Contracts, soul system, config, builtin tool defs
-│   ├── db/                  # SQLite schema, adapters, migrations
-│   └── client/              # Shared HTTP/SSE client
-└── docs/website/            # Documentation site
+│   ├── agent/                  # Prompt assembly, tool loop, chat session
+│   ├── core/                   # Contracts, soul, config, builtin tools
+│   ├── db/                     # SQLite schema, adapters, migrations
+│   ├── client/                 # Shared HTTP/SSE client
+│   ├── plugins/                # Bundled plugins, including workflows, Supermemory, and Google Meet
+│   ├── telegram-manager/      # Telegram manager client and store
+│   └── ui/                    # Shared UI components
+└── docs/website/
 ```
 
-## Main boundaries
+## Boundaries
 
-**Clients are thin.** `apps/web`, `apps/cli`, Telegram, and WhatsApp talk to `apps/server` through HTTP/SSE. They do not run the agent loop themselves.
+| Layer | Duty |
+|---|---|
+| Clients (`web`, `cli`, channels) | Thin HTTP and SSE client. This layer has no agent loop. |
+| `apps/server` `AgentService` | Assembles the profile, provider, tools, MCP, soul, Composio, org-memory, attachments, and persistence. |
+| `packages/agent` | This package owns prompts, the tool loop, compaction, and `AgentChatSession`. |
+| `packages/core` | This package owns contracts, soul compose, builtins, channel helpers, and config. |
+| `packages/db` | This package owns the schema and adapters for persisted entities. |
+| `packages/plugins` | Bundled plugins add capabilities such as workflows, Supermemory, and Google Meet. `PluginService` manages releases and org installations. |
 
-**Server owns orchestration.** `apps/server/src/services/agent-service.ts` is the main composition layer. It wires profiles, providers, tools, MCP servers, soul files, attachments, questionnaire/todo state, and persistence around `@nakama/agent`.
+## HTTP
 
-**Agent package is runtime logic.** `packages/agent` builds prompts, runs the tool loop, manages compaction, and exposes `AgentChatSession`.
+The entrypoint is [`apps/server/src/http/app.ts`](./apps/server/src/http/app.ts).
 
-**Core package is shared contract/config logic.** `packages/core` holds request/response types, soul composition, built-in tool definitions, channel helpers, attachment helpers, and config readers.
+The HTTP app does these steps in this order:
 
-**DB package owns persistence.** `packages/db` defines schema and adapters for orgs, users, memberships, profiles, sessions, messages, automations, tasks, notifications, MCP servers, skills, attachments, and usage stats.
+1. The app serves static web assets if `webDistDir` is set.
+2. The app applies auth and CSRF middleware.
+3. Internal routes for automation, curator, notification webhooks, Composio OAuth, and MCP OAuth run before org middleware.
+4. Org middleware resolves the active org and checks membership. Audit logging runs after it when the database is available.
+5. Routes call services.
+6. The same Hono registration produces `/openapi.json`.
 
-## HTTP architecture
+These route groups run before org middleware: `internal-automations`, `internal-curator`, `notification-webhooks`, Composio OAuth, MCP OAuth.
 
-The server entrypoint is [`apps/server/src/http/app.ts`](./nakama/apps/server/src/http/app.ts). Request flow is:
+These route groups run after org middleware: `system`, `audit-events`, `auth`, `setup-import`, `workers`, `models`, `user-context`, `sessions`, `profiles`, `profile-portability`, `artifact-shares`, `mcp`, `skills`, `tools`, `plugins`, `automations`, `notification-destinations`, `automation-worker-settings`, `coding-harnesses`, `composio`, `platform-orgs`, `data-portability`, `org-members`, `org-memory`, `org-curator`, `skill-proposals`, `skill-suggestions`.
 
-1. Static web assets are served first when `webDistDir` is present.
-2. Auth middleware validates bearer auth or browser session auth and applies CSRF checks where needed.
-3. Internal automation and notification webhook routes are registered before org middleware.
-4. Org middleware resolves `X-Org-Id` or browser `active_org_id`, verifies membership, and attaches `orgRole`.
-5. Route modules under `apps/server/src/http/routes/*` call services.
-6. `/openapi.json` is generated from the same Hono route registration used at runtime.
+## Multi-tenancy
 
-Current route groups include:
+Org-scoped authenticated requests need an active org. The middleware resolves it from `X-Org-Id`, the plugin UI path, or the active org in the auth context or session. Local-token requests can fall back to the user's first org. Auth and platform routes skip this check.
 
-- `auth`
-- `sessions`
-- `profiles`
-- `tools`
-- `skills`
-- `mcp`
-- `automations`
-- `tasks`
-- `notification-destinations`
-- `notification-webhooks`
-- `workers`
-- `platform-orgs`
-- `org-members`
-- `data-portability`
-- `system`
-- `models`
-- `user-context`
+Org roles are `admin`, `member`, and `viewer`. A platform admin uses `/v1/platform/*`.
 
-## Multi-tenancy and auth
-
-Organizations are the tenant boundary. Every authenticated non-platform request must resolve an active org.
-
-- Header-based org selection: `X-Org-Id`
-- Browser session fallback: `active_org_id`
-- Org roles: `admin`, `member`, `viewer`
-- Platform admin routes stay under `/v1/platform/*`
-
-Important files:
-
-- [`apps/server/src/http/org-middleware.ts`](./nakama/apps/server/src/http/org-middleware.ts)
-- [`apps/server/src/http/org-guards.ts`](./nakama/apps/server/src/http/org-guards.ts)
-- [`apps/server/src/services/org-service.ts`](./nakama/apps/server/src/services/org-service.ts)
+- [`org-middleware.ts`](./apps/server/src/http/org-middleware.ts)
+- [`org-guards.ts`](./apps/server/src/http/org-guards.ts)
+- [`org-service.ts`](./apps/server/src/services/org-service.ts)
 
 ## Agent runtime
 
-The runtime is assembled in [`apps/server/src/services/agent-service.ts`](./nakama/apps/server/src/services/agent-service.ts).
+`AgentService` in [`agent-service.ts`](./apps/server/src/services/agent-service.ts) assembles the agent runtime.
 
-Per session, the server resolves:
+The service loads the profile, the soul, the provider, and the model. The service attaches builtin tools, custom JS tools, custom Python tools, MCP tools, and enabled plugin tools. The service attaches Composio tools and org-memory tools when they apply. Super Nakama gets extra tools when the profile permits them. The service also attaches questionnaire, todo, and attachments. Discord sessions get Discord artifact tools.
 
-- profile + soul files
-- provider/model selection
-- built-in tools
-- assigned custom JS tools
-- assigned MCP tools
-- Super Bot runtime-only tools
-- questionnaire/todo state
-- attachment save/load helpers
+Prompt layers:
 
-Prompt construction happens in three layers:
+1. [`soul/compose.ts`](./packages/core/src/soul/compose.ts) supplies soul content.
+2. [`skills/compose.ts`](./packages/core/src/skills/compose.ts) supplies the skills catalog and agent-browser text.
+3. The service adds org memory from `~/.nakama/orgs/{orgId}/MEMORY.md` for roles that are not `viewer`.
+4. [`chat-prompt.ts`](./packages/agent/src/chat-prompt.ts) supplies structure and tool instructions.
+5. [`chat.ts`](./packages/agent/src/chat.ts) generates the per-turn reply.
 
-1. [`packages/core/src/soul/compose.ts`](./nakama/packages/core/src/soul/compose.ts) for soul content
-2. [`packages/agent/src/chat-prompt.ts`](./nakama/packages/agent/src/chat-prompt.ts) for chat structure and tool instructions
-3. [`packages/agent/src/chat.ts`](./nakama/packages/agent/src/chat.ts) for final per-turn generation
+Per-turn context can include todos, matched skills, and Composio connections. A knowledge-base catalog can also attach to the system prompt.
 
-## Sessions and persistence
+## Sessions
 
-This was one of the main places the old doc drifted.
-
-- `AgentChatSession` still manages live conversation state in memory while a session is active.
-- Session history is also persisted to SQLite in `session_messages`.
-- `apps/server/src/services/session-persistence.ts` wraps sessions so sends, streaming replies, and compaction update durable history.
-- Session metadata also stores questionnaire and todo state on the `sessions` table.
-
-Relevant tables:
-
-- `sessions`
-- `session_messages`
-- `attachments`
+- Live state is the in-memory `AgentChatSession`.
+- Durable history is SQLite `session_messages` through [`session-persistence.ts`](./apps/server/src/services/session-persistence.ts).
+- Cognito sessions are intentionally ephemeral: their history stays in memory and has no `sessions` or `session_messages` row.
+- Questionnaire and todo are on `sessions` metadata.
+- The tables are `sessions`, `session_messages`, and `attachments`.
 
 ## Tools and MCP
 
-Built-in tool definitions live in `packages/core/src/tools/*`.
+| Kind | Where |
+|---|---|
+| Builtin definitions | `packages/core/src/tools/*` |
+| Server runtime tools | `apps/server/src/tools/*` |
+| Custom JS | `javascript-tool-loader.ts` |
+| Custom Python | `python-tool-loader.ts` |
+| MCP | `mcp-tool-bridge.ts` |
+| Composio | `composio-tool-bridge.ts` |
+| Plugins | `plugin-service.ts` |
 
-Execution paths are split:
+Tool definitions are shared; `profile_tools` controls which custom tools a profile can use. Super Nakama can get extra runtime tools when the profile permits them.
 
-- built-in shared tools: `packages/core/src/tools/*`
-- server-side runtime tools: `apps/server/src/tools/*`
-- custom JavaScript tools: loaded by `apps/server/src/services/javascript-tool-loader.ts`
-- MCP-backed tools: expanded through `apps/server/src/services/mcp-tool-bridge.ts`
+## Workers and automations
 
-Tool access is profile-scoped. The model only receives tools assigned to the active profile, plus extra runtime tools for Super Bot when allowed.
+The server starts workers with PM2 through [`worker-manager-service.ts`](./apps/server/src/services/worker-manager-service.ts).
 
-## Workers, automations, and tasks
+- `apps/platform/automation` does scheduled work and skill-curator ticks.
+- `apps/platform/telegram`, `whatsapp`, `discord`, and `slack` are channel bridges.
+- Installed plugins can contribute their own workers.
 
-Nakama now has a clearer worker/runtime split than the older doc suggested.
+The database stores automations in `automations` and `automation_runs`.
 
-- `apps/platform/automation` runs scheduled automation work
-- `apps/platform/telegram` handles Telegram delivery/inbound flow
-- `apps/platform/whatsapp` handles WhatsApp delivery/inbound flow
-- `apps/server/src/services/worker-manager-service.ts` manages them through PM2
-
-Automations and tasks are separate persisted concepts:
-
-- `automations` + `automation_runs`
-- `tasks` + `task_runs`
-
-Core services:
-
-- [`apps/server/src/services/automation-service.ts`](./nakama/apps/server/src/services/automation-service.ts)
-- [`apps/server/src/services/automation-runner.ts`](./nakama/apps/server/src/services/automation-runner.ts)
-- [`apps/server/src/services/task-service.ts`](./nakama/apps/server/src/services/task-service.ts)
-- [`apps/server/src/services/task-runner.ts`](./nakama/apps/server/src/services/task-runner.ts)
+The services are `automation-service.ts` and `automation-runner.ts`.
 
 ## Notifications and attachments
 
-Two newer areas that deserve explicit mention:
+Destinations and inbound webhooks use `notification-destination-service.ts` and `notification-webhook-service.ts`.
 
-- Notification destinations and incoming webhooks are first-class server features.
-- Attachments are stored as records in SQLite and files on disk, then rehydrated into model/provider message format when needed.
+Attachments have SQLite records and files on disk. The server adds them to provider messages through `attachment-service.ts`.
 
-Key files:
+## CLI terminal UI
 
-- [`apps/server/src/services/notification-destination-service.ts`](./nakama/apps/server/src/services/notification-destination-service.ts)
-- [`apps/server/src/services/notification-webhook-service.ts`](./nakama/apps/server/src/services/notification-webhook-service.ts)
-- [`apps/server/src/services/attachment-service.ts`](./nakama/apps/server/src/services/attachment-service.ts)
+| File | Purpose |
+|---|---|
+| `terminal-renderer.ts` | Composer, transcript, stream, and status rules |
+| `terminal-layout.ts` | Viewport, pinned input, stream buffer, frame component, and cursor |
+| `virtual-message-list.ts` | Transcript wrap and spacing |
 
-## CLI terminal rendering
+`PersistentPrompt` sends composer state to `TerminalRenderer`, which calls `buildComposerLines()`. `TerminalLayout` reserves composer rows. The transcript uses `beginMessage`, `writelnScroll`, and `endMessage`. The stream writes to `streamBuffer`. `endStream()` seals the stream.
 
-The CLI uses a small terminal UI pipeline instead of printing lines directly.
+Spacing has layers. User-bubble padding, composer padding, and inter-message gaps are different. `shouldInsertLeadingGap` adds a gap before a message. `endStream()` adds a gap after the stream.
 
-### Main files
+## Persistence
 
-- [`apps/cli/src/terminal-renderer.ts`](./nakama/apps/cli/src/terminal-renderer.ts): semantic layer for composer state, transcript events, streaming state, and status lines
-- [`apps/cli/src/terminal-layout.ts`](./nakama/apps/cli/src/terminal-layout.ts): viewport math, pinned input area, stream buffer, frame diffing, and terminal writes
-- [`apps/cli/src/virtual-message-list.ts`](./nakama/apps/cli/src/virtual-message-list.ts): transcript storage plus lazy wrapping and message spacing rules
-- [`apps/cli/src/terminal-frame.ts`](./nakama/apps/cli/src/terminal-frame.ts): frame diff and cursor placement
+The schema is [`packages/db/sql/schema.sql`](./packages/db/sql/schema.sql).
 
-### Terms
+The internal `sessions.app_user_id` column marks retired sessions from the removed external-app integration. Normal reads and writes exclude these rows. Private files remain under `retired-app-users/` outside profile workspaces and are included only in full operator backups.
 
-- `composer`: the live prompt UI at the bottom, including the gray padded box, current input, pending queue, and suggestions
-- `reserved rows`: terminal rows permanently held for the composer so output does not overwrite it
-- `transcript`: sealed message history already committed into `VirtualMessageList`
-- `open message`: a message started with `beginMessage()` but not yet sealed with `endMessage()`
-- `stream buffer`: temporary assistant text while streaming is still in progress
-- `status line`: ephemeral line such as thinking/loading state, rendered between transcript content and the composer
-- `viewport`: the visible terminal region managed by the diff renderer
-- `pinned input`: the behavior where the composer stays attached to the bottom of the viewport while history scrolls above it
+| Area | Tables |
+|---|---|
+| Tenant / auth | `organizations`, `users`, `org_members`, `org_invites`, `browser_sessions`, `channel_org_mappings`, `password_reset_tokens`, `user_mfa_backup_codes`, `user_passkeys`, `user_passkey_challenges` |
+| Agent config | `profiles`, `tools`, `profile_tools`, `skills`, `profile_skills`, `profile_skill_usage`, `mcp_servers`, `profile_mcp_servers` |
+| Runtime | `sessions`, `session_messages`, `attachments`, `artifact_shares` |
+| Execution | `automations`, `automation_runs`, `automation_run_read_state`, `automation_run_steps`, `workflows`, `workflow_runs`, `workflow_run_steps` |
+| Approvals | `org_memory_proposals`, `skill_proposals`, `skill_suggestions` |
+| Composio | `composio_toolkits`, `profile_composio_toolkits`, `composio_user_connections` |
+| Notifications | `notification_destinations`, `notification_webhook_deliveries` |
+| Plugins | `plugin_releases`, `org_plugins` |
+| Audit / files | `audit_events`, `profile_change_events`, `file_pins` |
+| Analytics / config | `llm_usage_stats`, `llm_usage_model_stats`, `workspace_settings` |
 
-### Flow
+Org memory is also on disk at `~/.nakama/orgs/{orgId}/MEMORY.md`.
 
-1. `PersistentPrompt` updates composer state.
-2. `TerminalRenderer` converts that state into display lines with `buildComposerLines()`.
-3. `TerminalLayout` reserves rows for those lines and renders the current frame.
-4. Submitted messages and tool/output events are appended as transcript messages through `beginMessage()`, `writelnScroll()`, and `endMessage()`.
-5. Assistant streaming writes into `streamBuffer` first, then `endStream()` flushes it into the transcript as a sealed assistant message.
+## Invariants
 
-### Spacing rules
-
-- Submitted user messages intentionally render as a padded "bubble" with one blank surface row above and below the text.
-- Composer input also keeps blank surface rows above and below the current input line for the same visual treatment.
-- Conversational blocks (`user`, `assistant`, `tool`) get a leading blank separator before the block when they are not the first message.
-- Output-only lines stay compact and do not automatically get conversational separators.
-- When an assistant stream becomes a sealed transcript message, `TerminalLayout.endStream()` inserts one extra wrapped blank row above that sealed assistant reply. This is separate from the normal conversational separator.
-
-### Where confusion usually comes from
-
-The CLI has multiple independent sources of "space":
-
-- user bubble padding in `VirtualMessageList`
-- composer padding in `buildComposerLines()`
-- inter-message separators in `shouldInsertLeadingGap()`
-- post-stream assistant spacing in `TerminalLayout.endStream()`
-
-When adjusting terminal spacing, treat these as separate layers. A visual gap in the CLI is often caused by one of these rules, not all of them.
-
-## Persistence model
-
-The main SQLite schema lives in [`packages/db/sql/schema.sql`](./nakama/packages/db/sql/schema.sql).
-
-High-value tables today:
-
-- tenant + auth: `organizations`, `users`, `org_members`, `org_invites`, `browser_sessions`
-- agent config: `profiles`, `tools`, `profile_tools`, `skills`, `profile_skills`, `mcp_servers`, `profile_mcp_servers`
-- runtime state: `sessions`, `session_messages`, `attachments`
-- execution: `automations`, `automation_runs`, `tasks`, `task_runs`
-- notifications: `notification_destinations`
-- analytics/config: `llm_usage_stats`, `llm_usage_model_stats`, `workspace_settings`
-
-## Current invariants
-
-- `packages/*` must not import from `apps/*`
-- Org membership is checked before org-scoped routes run
-- Profiles control agent behavior and tool availability
-- Message history is durable, not purely process-memory anymore
-- OpenAPI is generated from the same Hono app used at runtime
-- Channel apps are transport bridges, not separate agent implementations
-- PM2 worker management is optional at runtime but is the intended orchestration path for platform workers
+- Packages must not import from `apps/*`.
+- The server examines org membership before org-scoped routes.
+- Profiles control behavior and tool availability.
+- Message history is durable except for intentionally ephemeral Cognito sessions.
+- The same Hono app produces OpenAPI and serves runtime requests.
+- Channel apps are transport bridges. They are not separate agent runtimes.
+- PM2 is optional. PM2 is the intended path to start workers.

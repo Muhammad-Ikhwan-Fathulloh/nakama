@@ -8,21 +8,24 @@ export function isTheme(value: string | null | undefined): value is Theme {
   return value === "light" || value === "dark" || value === "system";
 }
 
-export function getStoredTheme(): Theme | null {
+function getStoredTheme(): Theme | null {
   try {
     const stored = localStorage.getItem(THEME_STORAGE_KEY);
+
     return isTheme(stored) ? stored : null;
   } catch {
     return null;
   }
 }
 
-export function getSystemTheme(): ResolvedTheme {
+function getSystemTheme(): ResolvedTheme {
   if (typeof window === "undefined") {
     return "dark";
   }
 
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 }
 
 export function resolveTheme(theme: Theme): ResolvedTheme {
@@ -38,7 +41,29 @@ export function getInitialTheme(): Theme {
 }
 
 export function applyTheme(theme: Theme): void {
+  document.documentElement.dataset.theme = theme;
   const resolved = resolveTheme(theme);
   document.documentElement.classList.toggle("dark", resolved === "dark");
   document.documentElement.style.colorScheme = resolved;
+  applyFavicon(resolved);
+}
+
+export function markLogoSrc(resolvedTheme: ResolvedTheme): string {
+  return resolvedTheme === "light"
+    ? "/nakama-mark.svg"
+    : "/nakama-mark-white.svg";
+}
+
+function applyFavicon(resolved: ResolvedTheme): void {
+  const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+
+  if (!favicon) {
+    return;
+  }
+
+  const href = markLogoSrc(resolved);
+
+  if (favicon.getAttribute("href") !== href) {
+    favicon.setAttribute("href", href);
+  }
 }

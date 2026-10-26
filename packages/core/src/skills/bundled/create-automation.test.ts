@@ -1,184 +1,12 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { discoverSkillDirectory } from "../discover";
 import { matchSkillsForMessage } from "../match";
-import { parseSkillMarkdown } from "../parse";
 import { readBundledSkillMarkdown } from "./index";
 import { ensureBundledSkillFiles } from "./install";
-
-describe("bundled create-automation skill", () => {
-  test("description matches scheduling messages", async () => {
-    const content = await readBundledSkillMarkdown("create-automation");
-    const parsed = parseSkillMarkdown(content, "create-automation/SKILL.md");
-    const discovered = {
-      name: parsed.frontmatter.name,
-      description: parsed.frontmatter.description,
-      disableModelInvocation: false,
-      includeBodyOnMatch: true,
-      directory: "/tmp/create-automation",
-      skillFilePath: "/tmp/create-automation/SKILL.md",
-      body: parsed.body,
-      hasTool: false,
-      toolPath: null,
-    };
-
-    expect(
-      matchSkillsForMessage([discovered], "Remind me every weekday at 8am to check email").map(
-        (skill) => skill.name,
-      ),
-    ).toEqual(["create-automation"]);
-  });
-});
-
-describe("bundled create-profile skill", () => {
-  test("description matches profile creation messages", async () => {
-    const content = await readBundledSkillMarkdown("create-profile");
-    const parsed = parseSkillMarkdown(content, "create-profile/SKILL.md");
-    const discovered = {
-      name: parsed.frontmatter.name,
-      description: parsed.frontmatter.description,
-      disableModelInvocation: false,
-      includeBodyOnMatch: true,
-      directory: "/tmp/create-profile",
-      skillFilePath: "/tmp/create-profile/SKILL.md",
-      body: parsed.body,
-      hasTool: false,
-      toolPath: null,
-    };
-
-    expect(
-      matchSkillsForMessage([discovered], "Create a support bot profile for billing").map(
-        (skill) => skill.name,
-      ),
-    ).toEqual(["create-profile"]);
-  });
-
-  test("body requires draft-and-confirm before create_profile", async () => {
-    const content = await readBundledSkillMarkdown("create-profile");
-    const parsed = parseSkillMarkdown(content, "create-profile/SKILL.md");
-    const body = parsed.body.toLowerCase();
-
-    expect(body).toContain("draft");
-    expect(body).toMatch(/confirm|confirmation|explicit/);
-    expect(body).toContain("create_profile");
-    expect(body).not.toMatch(/otherwise proceed/);
-    expect(body).toContain("memory.md");
-    expect(body).toMatch(/empty/);
-    expect(body).toContain("web_fetch");
-    expect(body).toMatch(/isSuper|is super|super profile/i);
-    expect(body).toMatch(/revise|edit/);
-    expect(body).toMatch(/open|dashboard|profiles/);
-  });
-});
-
-describe("bundled manage-skills skill", () => {
-  test("description matches skill management messages", async () => {
-    const content = await readBundledSkillMarkdown("manage-skills");
-    const parsed = parseSkillMarkdown(content, "manage-skills/SKILL.md");
-    const discovered = {
-      name: parsed.frontmatter.name,
-      description: parsed.frontmatter.description,
-      disableModelInvocation: false,
-      includeBodyOnMatch: true,
-      directory: "/tmp/manage-skills",
-      skillFilePath: "/tmp/manage-skills/SKILL.md",
-      body: parsed.body,
-      hasTool: false,
-      toolPath: null,
-    };
-
-    expect(
-      matchSkillsForMessage([discovered], "Create a reusable skill for bug triage").map(
-        (skill) => skill.name,
-      ),
-    ).toEqual(["manage-skills"]);
-  });
-});
-
-describe("bundled archive-profile-memory skill", () => {
-  test("description matches archive and cleanup messages", async () => {
-    const content = await readBundledSkillMarkdown("archive-profile-memory");
-    const parsed = parseSkillMarkdown(content, "archive-profile-memory/SKILL.md");
-    const discovered = {
-      name: parsed.frontmatter.name,
-      description: parsed.frontmatter.description,
-      disableModelInvocation: false,
-      includeBodyOnMatch: true,
-      directory: "/tmp/archive-profile-memory",
-      skillFilePath: "/tmp/archive-profile-memory/SKILL.md",
-      body: parsed.body,
-      hasTool: false,
-      toolPath: null,
-    };
-
-    expect(
-      matchSkillsForMessage([discovered], "Please forget that preference").map(
-        (skill) => skill.name,
-      ),
-    ).toEqual(["archive-profile-memory"]);
-
-    expect(
-      matchSkillsForMessage([discovered], "Clean up old memory from last month").map(
-        (skill) => skill.name,
-      ),
-    ).toEqual(["archive-profile-memory"]);
-  });
-});
-
-describe("bundled update-profile-memory skill", () => {
-  test("description matches remember and preference messages", async () => {
-    const content = await readBundledSkillMarkdown("update-profile-memory");
-    const parsed = parseSkillMarkdown(content, "update-profile-memory/SKILL.md");
-    const discovered = {
-      name: parsed.frontmatter.name,
-      description: parsed.frontmatter.description,
-      disableModelInvocation: false,
-      includeBodyOnMatch: true,
-      directory: "/tmp/update-profile-memory",
-      skillFilePath: "/tmp/update-profile-memory/SKILL.md",
-      body: parsed.body,
-      hasTool: false,
-      toolPath: null,
-    };
-
-    expect(
-      matchSkillsForMessage([discovered], "Remember that I prefer dark mode").map(
-        (skill) => skill.name,
-      ),
-    ).toEqual(["update-profile-memory"]);
-  });
-});
-
-describe("bundled save-artifact skill", () => {
-  test("description matches save and report messages", async () => {
-    const content = await readBundledSkillMarkdown("save-artifact");
-    const parsed = parseSkillMarkdown(content, "save-artifact/SKILL.md");
-    const discovered = {
-      name: parsed.frontmatter.name,
-      description: parsed.frontmatter.description,
-      disableModelInvocation: false,
-      includeBodyOnMatch: true,
-      directory: "/tmp/save-artifact",
-      skillFilePath: "/tmp/save-artifact/SKILL.md",
-      body: parsed.body,
-      hasTool: false,
-      toolPath: null,
-    };
-
-    expect(
-      matchSkillsForMessage([discovered], "Save this report for later").map(
-        (skill) => skill.name,
-      ),
-    ).toEqual(["save-artifact"]);
-
-    expect(
-      matchSkillsForMessage([discovered], "move it to artifact please").map(
-        (skill) => skill.name,
-      ),
-    ).toEqual(["save-artifact"]);
-  });
-});
 
 describe("ensureBundledSkillFiles", () => {
   let configDir: string;
@@ -200,22 +28,254 @@ describe("ensureBundledSkillFiles", () => {
     expect(created).toContain("manage-skills");
     expect(created).toContain("update-profile-memory");
     expect(created).toContain("archive-profile-memory");
-    expect(created).toContain("save-artifact");
+    expect(created).toContain("artifact-design");
     expect(created).toContain("create-profile");
-    expect(created).toContain("coding-delegation");
+    expect(created).toContain("coding-agent");
     expect(created).toContain("coding-backend-codex");
     expect(created).toContain("coding-backend-claude-code");
     expect(created).toContain("coding-backend-opencode");
+    expect(created).toContain("coding-backend-pi");
+    expect(created).toContain("coding-backend-cursor");
+  });
+
+  test("installs the create-plugin scaffold that writes a built draft", async () => {
+    await ensureBundledSkillFiles();
+
+    const skill = await discoverSkillDirectory(
+      join(configDir, "agent", "skills", "create-plugin")
+    );
+
+    expect(skill).not.toBeNull();
+    expect(skill?.scriptIssues).toEqual([]);
+    expect(skill?.hasTool).toBe(false);
+    const workspace = await mkdtemp(join(tmpdir(), "nakama-plugin-ws-"));
+
+    const script = join(
+      configDir,
+      "agent",
+      "skills",
+      "create-plugin",
+      "scripts",
+      "new-plugin.mjs"
+    );
+
+    const run = Bun.spawnSync(
+      ["bun", script, "standup-digest", "Standup Digest", "summarize"],
+      { cwd: workspace }
+    );
+
+    expect(run.exitCode).toBe(0);
+
+    const draft = join(workspace, "plugin-drafts", "standup-digest");
+
+    const manifest = JSON.parse(
+      await readFile(join(draft, "nakama.plugin.json"), "utf8")
+    );
+
+    expect(manifest.id).toBe("standup-digest");
+    expect(manifest.actions[0].entry).toBe("actions/summarize.js");
+    expect(manifest.ui.entryModule).toBe("ui/app.js");
+
+    const page = await readFile(join(draft, "ui", "app.js"), "utf8");
+
+    expect(page).toContain('[data-plugin-id="standup-digest"]');
+    expect(page).not.toMatch(/from\s*"react/);
+    expect(
+      await Bun.file(join(draft, "actions", "summarize.js")).exists()
+    ).toBe(true);
+
+    const again = Bun.spawnSync(["bun", script, "standup-digest", "Again"], {
+      cwd: workspace,
+    });
+
+    expect(again.exitCode).toBe(1);
+  });
+
+  test("the create-plugin data scaffold builds working list and save actions", async () => {
+    await ensureBundledSkillFiles();
+
+    const workspace = await mkdtemp(join(tmpdir(), "nakama-plugin-ws-"));
+
+    const script = join(
+      configDir,
+      "agent",
+      "skills",
+      "create-plugin",
+      "scripts",
+      "new-plugin.mjs"
+    );
+
+    const run = Bun.spawnSync(
+      ["bun", script, "book-log", "Book Log", "--data"],
+      {
+        cwd: workspace,
+      }
+    );
+
+    expect(run.exitCode).toBe(0);
+
+    const draft = join(workspace, "plugin-drafts", "book-log");
+
+    const manifest = JSON.parse(
+      await readFile(join(draft, "nakama.plugin.json"), "utf8")
+    );
+
+    expect(manifest.actions.map(({ key }: { key: string }) => key)).toEqual([
+      "list_items",
+      "save_item",
+      "delete_item",
+    ]);
+    expect(await readdir(join(draft, "src"))).not.toContain("greet.js");
+
+    const databasePath = join(draft, "test.sqlite");
+    const db = new Database(databasePath);
+    db.exec(
+      await readFile(join(draft, manifest.database.migrations[0].path), "utf8")
+    );
+    db.close();
+
+    const save = await import(join(draft, "actions", "save_item.js"));
+    const list = await import(join(draft, "actions", "list_items.js"));
+    const context = { databasePath };
+
+    const { item } = await save.run({ name: "Dune", notes: "sci-fi" }, context);
+    await save.run({ id: item.id, name: "Dune Messiah" }, context);
+    await save.run({ name: "Emma" }, context);
+
+    const all = await list.run({}, context);
+    const found = await list.run({ query: "dune" }, context);
+
+    expect(all.items).toHaveLength(2);
+    expect(found.items.map(({ name }: { name: string }) => name)).toEqual([
+      "Dune Messiah",
+    ]);
+
+    const remove = await import(join(draft, "actions", "delete_item.js"));
+    await remove.run({ id: item.id }, context);
+
+    const left = await list.run({}, context);
+
+    expect(left.items.map(({ name }: { name: string }) => name)).toEqual([
+      "Emma",
+    ]);
+    await expect(remove.run({ id: item.id }, context)).rejects.toThrow();
+
+    const page = await readFile(join(draft, "ui", "app.js"), "utf8");
+
+    expect(page).toContain('[data-plugin-id="book-log"]');
+    expect(page).not.toMatch(/from\s*"react/);
   });
 
   test("does not overwrite existing skill files", async () => {
-    const skillPath = join(configDir, "agent", "skills", "create-automation", "SKILL.md");
-    await mkdir(join(configDir, "agent", "skills", "create-automation"), { recursive: true });
-    await Bun.write(skillPath, "---\nname: create-automation\ndescription: custom\n---\n");
+    const skillPath = join(
+      configDir,
+      "agent",
+      "skills",
+      "create-automation",
+      "SKILL.md"
+    );
+
+    await mkdir(join(configDir, "agent", "skills", "create-automation"), {
+      recursive: true,
+    });
+    await Bun.write(
+      skillPath,
+      "---\nname: create-automation\ndescription: custom\n---\n"
+    );
 
     const created = await ensureBundledSkillFiles();
 
     expect(created).not.toContain("create-automation");
     expect(await readFile(skillPath, "utf8")).toContain("description: custom");
+  });
+
+  test("force-refreshes manage-skills even when an installed copy exists", async () => {
+    const skillPath = join(
+      configDir,
+      "agent",
+      "skills",
+      "manage-skills",
+      "SKILL.md"
+    );
+
+    await mkdir(join(configDir, "agent", "skills", "manage-skills"), {
+      recursive: true,
+    });
+    await Bun.write(
+      skillPath,
+      "---\nname: manage-skills\ndescription: stale\n---\n"
+    );
+
+    const created = await ensureBundledSkillFiles();
+    const content = await readFile(skillPath, "utf8");
+
+    expect(created).toContain("manage-skills");
+    expect(content).toContain("skill_manage");
+    expect(content).not.toContain("description: stale");
+  });
+
+  test("refreshes an installed artifact-design skill on startup", async () => {
+    const directory = join(configDir, "agent", "skills", "artifact-design");
+    const skillPath = join(directory, "SKILL.md");
+    await mkdir(directory, { recursive: true });
+    await Bun.write(skillPath, "outdated bundled skill");
+
+    const refreshed = await ensureBundledSkillFiles();
+
+    expect(refreshed).toContain("artifact-design");
+    expect(await readFile(skillPath, "utf8")).toBe(
+      await readBundledSkillMarkdown("artifact-design")
+    );
+  });
+
+  test("moves an installed save-artifact skill to artifact-design", async () => {
+    const skillsDir = join(configDir, "agent", "skills");
+    const legacyDir = join(skillsDir, "save-artifact");
+    await mkdir(legacyDir, { recursive: true });
+    await Bun.write(join(legacyDir, "SKILL.md"), "legacy skill");
+
+    await ensureBundledSkillFiles();
+
+    expect(await readdir(skillsDir)).not.toContain("save-artifact");
+    expect(
+      await readFile(join(skillsDir, "artifact-design", "SKILL.md"), "utf8")
+    ).toBe(await readBundledSkillMarkdown("artifact-design"));
+  });
+
+  test("matches artifact-design for a casual slide deck request", async () => {
+    await ensureBundledSkillFiles();
+
+    const skill = await discoverSkillDirectory(
+      join(configDir, "agent", "skills", "artifact-design")
+    );
+
+    expect(skill).not.toBeNull();
+
+    const matched = matchSkillsForMessage(
+      skill ? [skill] : [],
+      "hey can you make me a slide deck for our team sync on friday? it's about Q3 results. keep it like 6-7 slides"
+    );
+
+    expect(matched.map((entry) => entry.name)).toEqual(["artifact-design"]);
+  });
+
+  test("refreshes an installed memory archive skill on startup", async () => {
+    const directory = join(
+      configDir,
+      "agent",
+      "skills",
+      "archive-profile-memory"
+    );
+
+    const skillPath = join(directory, "SKILL.md");
+    await mkdir(directory, { recursive: true });
+    await Bun.write(skillPath, "outdated bundled skill");
+
+    const refreshed = await ensureBundledSkillFiles();
+
+    expect(refreshed).toContain("archive-profile-memory");
+    expect(await readFile(skillPath, "utf8")).toBe(
+      await readBundledSkillMarkdown("archive-profile-memory")
+    );
   });
 });

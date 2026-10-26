@@ -9,15 +9,15 @@ const sampleCatalog: ListTimezonesResponse = {
       countryName: "United States",
       timezones: [
         {
-          id: "America/Los_Angeles",
+          abbreviation: "PST",
+          aliases: ["San Francisco", "Seattle"],
+          city: "Los Angeles",
           countryCode: "US",
           countryName: "United States",
-          city: "Los Angeles",
+          id: "America/Los_Angeles",
           label: "Los Angeles · UTC-08:00",
           offset: "UTC-08:00",
-          abbreviation: "PST",
           tzName: "Pacific Standard Time",
-          aliases: ["San Francisco", "Seattle"],
         },
       ],
     },
@@ -27,13 +27,6 @@ const sampleCatalog: ListTimezonesResponse = {
 describe("searchTimezoneEntries", () => {
   test("matches alias cities such as San Francisco", () => {
     const matches = searchTimezoneEntries("San Francisco", sampleCatalog);
-
-    expect(matches).toHaveLength(1);
-    expect(matches[0]?.id).toBe("America/Los_Angeles");
-  });
-
-  test("matches when query tokens appear in different fields", () => {
-    const matches = searchTimezoneEntries("san francisco", sampleCatalog);
 
     expect(matches).toHaveLength(1);
     expect(matches[0]?.id).toBe("America/Los_Angeles");

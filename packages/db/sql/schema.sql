@@ -1,5 +1,14 @@
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS managed_secrets (
+  scope TEXT NOT NULL,
+  name TEXT NOT NULL,
+  source TEXT NOT NULL CHECK(source IN ('environment', 'settings')),
+  encrypted_value TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (scope, name)
+);
+
 CREATE TABLE IF NOT EXISTS profiles (
   id TEXT PRIMARY KEY NOT NULL,
   name TEXT NOT NULL,
@@ -10,6 +19,15 @@ CREATE TABLE IF NOT EXISTS profiles (
   is_super INTEGER DEFAULT 0 NOT NULL,
   org_id TEXT,
   is_default INTEGER DEFAULT 0 NOT NULL,
+  automations_enabled INTEGER DEFAULT 0 NOT NULL,
+  groups_enabled INTEGER DEFAULT 1 NOT NULL,
+  skills_write_approval INTEGER,
+  skills_post_turn_review INTEGER,
+  skills_curator_consolidate_enabled INTEGER,
+  acp_agent TEXT,
+  acp_settings TEXT,
+  owner_user_id TEXT,
+  shared_with_team INTEGER DEFAULT 1 NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (org_id) REFERENCES organizations (id) ON DELETE CASCADE
@@ -21,6 +39,8 @@ CREATE TABLE IF NOT EXISTS tools (
   description TEXT NOT NULL,
   handler_type TEXT NOT NULL,
   handler_config TEXT DEFAULT '{}' NOT NULL,
+  plugin_id TEXT,
+  plugin_key TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -39,13 +59,26 @@ CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY NOT NULL,
   profile_id TEXT NOT NULL,
   channel TEXT NOT NULL,
+  app_user_id TEXT,
   user_id TEXT,
   created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
   title TEXT,
+  pinned INTEGER NOT NULL DEFAULT 0,
+  parent_session_id TEXT REFERENCES sessions (id) ON DELETE SET NULL,
+  branch_message_index INTEGER,
+  model TEXT,
   agent_todos TEXT DEFAULT '[]' NOT NULL,
   agent_questionnaire TEXT,
   FOREIGN KEY (profile_id) REFERENCES profiles (id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS session_user_order (
+  session_id TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  sort_position INTEGER NOT NULL,
+  PRIMARY KEY (session_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS session_messages (
@@ -72,6 +105,7 @@ CREATE TABLE IF NOT EXISTS attachments (
   size_bytes INTEGER NOT NULL,
   storage_path TEXT NOT NULL,
   created_at TEXT NOT NULL,
+  ephemeral INTEGER DEFAULT 0 NOT NULL,
   FOREIGN KEY (org_id) REFERENCES organizations (id) ON DELETE CASCADE,
   FOREIGN KEY (profile_id) REFERENCES profiles (id) ON DELETE CASCADE,
   FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE SET NULL
@@ -100,14 +134,31 @@ CREATE TABLE IF NOT EXISTS automation_runs (
   started_at TEXT NOT NULL,
   completed_at TEXT,
   output TEXT,
+  progress TEXT,
   error TEXT,
   delivery_status TEXT,
   delivery_error TEXT,
+  resume_count INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (automation_id) REFERENCES automations (id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS automation_runs_automation_started
   ON automation_runs (automation_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS automation_run_steps (
+  run_id TEXT NOT NULL,
+  tool_call_id TEXT NOT NULL,
+  tool_group_id TEXT,
+  tool_name TEXT NOT NULL,
+  args TEXT NOT NULL,
+  result TEXT,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  position INTEGER NOT NULL,
+  PRIMARY KEY (run_id, tool_call_id),
+  FOREIGN KEY (run_id) REFERENCES automation_runs (id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS automation_run_read_state (
   user_id TEXT NOT NULL,
@@ -120,39 +171,52 @@ CREATE TABLE IF NOT EXISTS automation_run_read_state (
   FOREIGN KEY (automation_id) REFERENCES automations (id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS tasks (
+CREATE TABLE IF NOT EXISTS workflows (
   id TEXT PRIMARY KEY NOT NULL,
-  title TEXT NOT NULL,
-  description TEXT DEFAULT '' NOT NULL,
-  prompt TEXT NOT NULL,
+  name TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  definition TEXT NOT NULL,
   profile_id TEXT NOT NULL,
   org_id TEXT,
-  status TEXT NOT NULL DEFAULT 'backlog',
-  position INTEGER NOT NULL DEFAULT 0,
-  session_id TEXT,
+  enabled INTEGER DEFAULT 1 NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (profile_id) REFERENCES profiles (id) ON DELETE CASCADE,
-  FOREIGN KEY (org_id) REFERENCES organizations (id) ON DELETE CASCADE,
-  FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE SET NULL
+  FOREIGN KEY (org_id) REFERENCES organizations (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS tasks_status_position
-  ON tasks (status, position);
-
-CREATE TABLE IF NOT EXISTS task_runs (
+CREATE TABLE IF NOT EXISTS workflow_runs (
   id TEXT PRIMARY KEY NOT NULL,
-  task_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
   status TEXT NOT NULL,
+  input TEXT,
   started_at TEXT NOT NULL,
   completed_at TEXT,
   output TEXT,
   error TEXT,
-  FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE
+  FOREIGN KEY (workflow_id) REFERENCES workflows (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS task_runs_task_started
-  ON task_runs (task_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS workflow_runs_workflow_started
+  ON workflow_runs (workflow_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS workflow_run_steps (
+  id TEXT PRIMARY KEY NOT NULL,
+  run_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  input TEXT,
+  output TEXT,
+  error TEXT,
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  position INTEGER NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES workflow_runs (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS workflow_run_steps_run_position
+  ON workflow_run_steps (run_id, position);
 
 CREATE TABLE IF NOT EXISTS notification_destinations (
   id TEXT PRIMARY KEY NOT NULL,
@@ -168,6 +232,18 @@ CREATE TABLE IF NOT EXISTS notification_destinations (
 
 CREATE INDEX IF NOT EXISTS notification_destinations_org_id
   ON notification_destinations (org_id);
+
+-- Idempotency ledger for public POST /v1/notify/:destinationId (claim before send).
+CREATE TABLE IF NOT EXISTS notification_webhook_deliveries (
+  destination_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (destination_id, event_id),
+  FOREIGN KEY (destination_id) REFERENCES notification_destinations (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS notification_webhook_deliveries_created_at
+  ON notification_webhook_deliveries (created_at);
 
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY NOT NULL,
@@ -200,6 +276,9 @@ CREATE TABLE IF NOT EXISTS skills (
   has_tool INTEGER DEFAULT 0 NOT NULL,
   disable_model_invocation INTEGER DEFAULT 0 NOT NULL,
   enabled INTEGER DEFAULT 1 NOT NULL,
+  created_by TEXT NOT NULL DEFAULT 'bundled',
+  plugin_id TEXT,
+  plugin_key TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -214,24 +293,45 @@ CREATE TABLE IF NOT EXISTS profile_skills (
   FOREIGN KEY (skill_id) REFERENCES skills (id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS llm_usage_stats (
+-- SKILL.md snapshots, one row per saved change.
+CREATE TABLE IF NOT EXISTS skill_versions (
   id TEXT PRIMARY KEY NOT NULL,
+  skill_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  content TEXT NOT NULL,
+  note TEXT,
+  actor_user_id TEXT,
+  source TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (skill_id) REFERENCES skills (id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS skill_versions_skill_version
+  ON skill_versions (skill_id, version);
+
+CREATE TABLE IF NOT EXISTS llm_usage_stats (
+  org_id TEXT NOT NULL,
+  id TEXT NOT NULL,
   request_count INTEGER NOT NULL DEFAULT 0,
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
   estimated_cost_usd REAL NOT NULL DEFAULT 0,
   tracked_since TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (org_id, id)
 );
 
 CREATE TABLE IF NOT EXISTS llm_usage_model_stats (
-  model_id TEXT PRIMARY KEY NOT NULL,
+  org_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
   request_count INTEGER NOT NULL DEFAULT 0,
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
   estimated_cost_usd REAL NOT NULL DEFAULT 0,
   tracked_since TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (org_id, model_id)
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -241,17 +341,73 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT,
   phone TEXT,
   is_platform_admin INTEGER DEFAULT 0 NOT NULL,
+  mfa_enabled INTEGER DEFAULT 0 NOT NULL,
+  mfa_totp_secret_enc TEXT,
+  -- Legacy: pre-org USER.md; migrateLegacyUserContextToOrgMembers copies into org_members (#550).
   user_context TEXT,
+  disabled_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (email);
 
-CREATE TABLE IF NOT EXISTS organizations (
+CREATE TABLE IF NOT EXISTS user_mfa_backup_codes (
   id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS user_mfa_backup_codes_hash_unique
+  ON user_mfa_backup_codes (code_hash);
+
+CREATE INDEX IF NOT EXISTS user_mfa_backup_codes_user_idx
+  ON user_mfa_backup_codes (user_id, used_at);
+
+CREATE TABLE IF NOT EXISTS user_passkeys (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  counter INTEGER NOT NULL DEFAULT 0,
+  transports TEXT NOT NULL DEFAULT '[]',
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS user_passkeys_credential_unique
+  ON user_passkeys (credential_id);
+
+CREATE INDEX IF NOT EXISTS user_passkeys_user_idx
+  ON user_passkeys (user_id);
+
+CREATE TABLE IF NOT EXISTS user_passkey_challenges (
+  challenge TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT,
+  type TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS organizations (
+  allowed_invite_domains TEXT NOT NULL DEFAULT '[]',
+  id TEXT PRIMARY KEY NOT NULL,
+  parent_org_id TEXT REFERENCES organizations (id) ON DELETE RESTRICT CHECK (parent_org_id <> id),
   name TEXT NOT NULL,
   slug TEXT NOT NULL,
+  skills_write_approval INTEGER NOT NULL DEFAULT 0,
+  skills_post_turn_review INTEGER NOT NULL DEFAULT 0,
+  skills_curator_enabled INTEGER NOT NULL DEFAULT 0,
+  skills_curator_stale_after_days INTEGER NOT NULL DEFAULT 30,
+  skills_curator_archive_after_days INTEGER NOT NULL DEFAULT 90,
+  skills_curator_consolidate_enabled INTEGER NOT NULL DEFAULT 0,
+  skills_curator_last_run_at TEXT,
+  archived_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -286,6 +442,90 @@ CREATE TABLE IF NOT EXISTS org_invites (
 
 CREATE UNIQUE INDEX IF NOT EXISTS org_invites_token_hash_unique ON org_invites (token_hash);
 
+CREATE TABLE IF NOT EXISTS org_memory_proposals (
+  id TEXT PRIMARY KEY NOT NULL,
+  org_id TEXT NOT NULL,
+  profile_id TEXT,
+  session_id TEXT,
+  proposed_by_user_id TEXT,
+  bullet TEXT NOT NULL,
+  source_document_ids TEXT,
+  status TEXT NOT NULL,
+  pinned INTEGER NOT NULL DEFAULT 0,
+  reviewer_user_id TEXT,
+  reviewed_at TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS org_memory_proposals_org_status ON org_memory_proposals (org_id, status);
+
+CREATE TABLE IF NOT EXISTS skill_proposals (
+  supporting_files TEXT,
+  id TEXT PRIMARY KEY NOT NULL,
+  org_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  session_id TEXT,
+  proposed_by_user_id TEXT,
+  action TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  content TEXT,
+  patch_old_string TEXT,
+  patch_new_string TEXT,
+  relative_path TEXT,
+  consolidate_loser_skill_names TEXT,
+  status TEXT NOT NULL,
+  reviewer_user_id TEXT,
+  reviewed_at TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS skill_proposals_org_status ON skill_proposals (org_id, status);
+CREATE INDEX IF NOT EXISTS skill_proposals_org_profile_status ON skill_proposals (org_id, profile_id, status);
+
+CREATE TABLE IF NOT EXISTS skill_suggestions (
+  id TEXT PRIMARY KEY NOT NULL,
+  org_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  session_id TEXT,
+  proposed_by_user_id TEXT,
+  action TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  content TEXT,
+  patch_old_string TEXT,
+  patch_new_string TEXT,
+  status TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'post_turn_review',
+  warnings TEXT,
+  created_at TEXT NOT NULL,
+  applied_at TEXT,
+  FOREIGN KEY (org_id) REFERENCES organizations (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS skill_suggestions_org_status ON skill_suggestions (org_id, status);
+CREATE INDEX IF NOT EXISTS skill_suggestions_org_session ON skill_suggestions (org_id, session_id);
+CREATE INDEX IF NOT EXISTS skill_suggestions_org_profile_status ON skill_suggestions (org_id, profile_id, status);
+
+CREATE TABLE IF NOT EXISTS profile_skill_usage (
+  org_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  skill_id TEXT NOT NULL,
+  view_count INTEGER NOT NULL DEFAULT 0,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  patch_count INTEGER NOT NULL DEFAULT 0,
+  last_viewed_at TEXT,
+  last_used_at TEXT,
+  last_patched_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (profile_id, skill_id),
+  FOREIGN KEY (profile_id) REFERENCES profiles (id) ON DELETE CASCADE,
+  FOREIGN KEY (skill_id) REFERENCES skills (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS profile_skill_usage_org_profile ON profile_skill_usage (org_id, profile_id);
+
 CREATE TABLE IF NOT EXISTS channel_org_mappings (
   channel TEXT NOT NULL,
   channel_user_id TEXT NOT NULL,
@@ -313,12 +553,27 @@ CREATE TABLE IF NOT EXISTS browser_sessions (
 CREATE UNIQUE INDEX IF NOT EXISTS browser_sessions_token_hash_unique
   ON browser_sessions (session_token_hash);
 
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  consumed_at TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS password_reset_tokens_token_hash_unique
+  ON password_reset_tokens (token_hash);
+
 CREATE TABLE IF NOT EXISTS workspace_settings (
   id TEXT PRIMARY KEY NOT NULL,
   vision_model TEXT,
   transcription_model TEXT,
+  image_model TEXT,
   coding_agent_harnesses TEXT NOT NULL DEFAULT '[]',
   selected_coding_agent_harness TEXT,
+  coding_agent_provider_passthrough INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL
 );
 
@@ -399,3 +654,159 @@ CREATE UNIQUE INDEX IF NOT EXISTS artifact_shares_token_hash_unique ON artifact_
 CREATE UNIQUE INDEX IF NOT EXISTS artifact_shares_active_path_unique
   ON artifact_shares (org_id, profile_id, source_path)
   WHERE revoked_at IS NULL;
+
+-- Security audit ledger. Deliberately has no foreign keys so account or org
+-- erasure cannot remove the historical record.
+CREATE TABLE IF NOT EXISTS audit_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  actor_user_id TEXT,
+  org_id TEXT,
+  action TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  request_id TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS audit_events_created
+  ON audit_events (created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS audit_events_org_created
+  ON audit_events (org_id, created_at DESC, id DESC);
+
+CREATE TRIGGER IF NOT EXISTS audit_events_no_update
+BEFORE UPDATE ON audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'audit_events are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
+BEFORE DELETE ON audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'audit_events are append-only');
+END;
+
+-- Append-only profile change ledger (no UPDATE/DELETE API; cascade only with org/profile cleanup).
+CREATE TABLE IF NOT EXISTS profile_change_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  org_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  actor_user_id TEXT,
+  source TEXT NOT NULL,
+  field TEXT NOT NULL,
+  before_value TEXT,
+  after_value TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations (id) ON DELETE CASCADE,
+  FOREIGN KEY (profile_id) REFERENCES profiles (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS profile_change_events_profile_created
+  ON profile_change_events (profile_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS plugin_releases (
+  plugin_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  manifest TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'legacy',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (plugin_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS org_plugins (
+  org_id TEXT NOT NULL,
+  plugin_id TEXT NOT NULL,
+  selected_version TEXT,
+  database_generation TEXT,
+  lifecycle_state TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  pending_operation TEXT,
+  last_lifecycle_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (org_id, plugin_id),
+  FOREIGN KEY (org_id) REFERENCES organizations (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS file_pins (
+  org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  PRIMARY KEY (org_id, user_id, profile_id, path)
+);
+
+-- Who made each artifact. The file stays on disk; this row only records its owner.
+CREATE TABLE IF NOT EXISTS artifacts (
+  org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  channel TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (org_id, profile_id, filename)
+);
+
+CREATE INDEX IF NOT EXISTS artifacts_org_user ON artifacts (org_id, user_id);
+
+-- Source links survive publication removal so shared instances remain managed.
+CREATE TABLE IF NOT EXISTS org_shared_resources (
+  id TEXT PRIMARY KEY NOT NULL,
+  org_id TEXT NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
+  resource_kind TEXT NOT NULL CHECK (resource_kind IN ('knowledge', 'skill', 'agent', 'tool', 'model')),
+  resource_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (org_id, resource_kind, resource_id)
+);
+
+CREATE TABLE IF NOT EXISTS shared_agent_instances (
+  profile_id TEXT PRIMARY KEY NOT NULL REFERENCES profiles (id) ON DELETE CASCADE,
+  team_org_id TEXT NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
+  source_org_id TEXT NOT NULL,
+  source_profile_id TEXT NOT NULL,
+  publication_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (team_org_id, source_profile_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS profiles_unpublish_deleted_source
+AFTER DELETE ON profiles
+BEGIN
+  DELETE FROM org_shared_resources WHERE resource_kind = 'agent' AND resource_id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS skills_unpublish_deleted_source
+AFTER DELETE ON skills
+BEGIN
+  DELETE FROM org_shared_resources WHERE resource_kind = 'skill' AND resource_id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS tools_unpublish_deleted_source
+AFTER DELETE ON tools
+BEGIN
+  DELETE FROM org_shared_resources WHERE resource_kind = 'tool' AND resource_id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS profiles_remove_shared_agent_instance
+AFTER DELETE ON profiles
+BEGIN
+  DELETE FROM shared_agent_instances WHERE profile_id = OLD.id;
+END;
+
+-- Completed requests retain their result after team deletion.
+
+CREATE TABLE IF NOT EXISTS org_team_creation_requests (
+  parent_org_id TEXT NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
+  request_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  creator_user_id TEXT NOT NULL,
+  admin_user_id TEXT NOT NULL,
+  team_org_id TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  completed_at TEXT,
+  PRIMARY KEY (parent_org_id, request_id)
+);

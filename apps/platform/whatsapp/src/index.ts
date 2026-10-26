@@ -1,99 +1,198 @@
-import { createClient } from "@nakama/client";
-import { ChannelOrgStore, getChannelOrgSelectionPath } from "@nakama/core/channel-org";
-import { ensureServerRunning, stopSpawnedServer } from "@nakama/core/ensure-server";
+import { join } from "node:path";
+import { NakamaClient } from "@nakama/client";
+import {
+  installErrorHandlers,
+  installErrorTrackingSink,
+  log,
+} from "@nakama/core";
+import { hasActiveStreams } from "@nakama/core/channel-active-stream";
+import {
+  type ChannelOwner,
+  channelOwnerFromEnv,
+} from "@nakama/core/channel-config-shared";
+import { ChannelOrgStore } from "@nakama/core/channel-org";
+import { ChannelSessionStore } from "@nakama/core/channel-session-store";
+import {
+  ensureServerRunning,
+  stopSpawnedServer,
+} from "@nakama/core/ensure-server";
 import { loadLocalAuthToken } from "@nakama/core/local-auth";
 import { resolveWebPublicUrl } from "@nakama/core/runtime";
 import {
-  clearWhatsAppWorkerHeartbeat,
-  writeWhatsAppWorkerHeartbeat,
-  writeWhatsAppQrCode,
+  getWhatsAppConfigDir,
+  syncWhatsAppOwnerPairing,
+} from "@nakama/core/whatsapp-config";
+import {
   clearWhatsAppQrCode,
+  createWhatsAppWorkerHeartbeat,
+  writeWhatsAppQrCode,
 } from "@nakama/core/whatsapp-worker";
-import { syncWhatsAppOwnerPairing } from "@nakama/core/whatsapp-config";
-import { createWhatsAppSocket } from "./socket";
+import { WhatsAppAuthStore } from "./auth-store";
+import { installBaileysConsoleRedaction } from "./baileys-logger";
 import { createChatHandler } from "./chat-handler";
 import { loadConfig } from "./config";
 import { startWhatsAppOutboundServer } from "./outbound-server";
-import { SessionStore } from "./session-store";
-import { WhatsAppAuthStore } from "./auth-store";
+import { registerProcessLifecycleHandlers } from "./process-lifecycle";
+import { createWhatsAppSocket, type WhatsAppSocketHandle } from "./socket";
+
+installErrorHandlers("worker:whatsapp");
+
+void installErrorTrackingSink();
+
+const restoreBaileysConsole = installBaileysConsoleRedaction();
 
 let spawnedChild: Bun.Subprocess | null = null;
-let socketHandle: { stop: () => void; socket: { sendMessage: (jid: string, content: { text: string }) => Promise<unknown> } | null } | null = null;
+
+let socketHandle: WhatsAppSocketHandle | null = null;
+
 let outboundServer: { port: number; stop: () => void } | null = null;
+
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
 let bridgeConnected = false;
 
+let linkError: string | undefined;
+
+let linkOwner: ChannelOwner | undefined;
+
+const orgId = channelOwnerFromEnv();
+
+const heartbeat = createWhatsAppWorkerHeartbeat(orgId);
+
 function persistWorkerHeartbeat(): void {
-  void writeWhatsAppWorkerHeartbeat(process.pid, new Date().toISOString(), bridgeConnected);
+  void heartbeat.write({
+    connected: bridgeConnected,
+    linkError,
+    linkOwner,
+    pid: process.pid,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
-registerProcessLifecycleLogging();
-registerCleanupHandlers(() => {
+registerProcessLifecycleHandlers(async () => {
   outboundServer?.stop();
-  socketHandle?.stop();
+  await socketHandle?.stop();
+
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
   }
-  void clearWhatsAppWorkerHeartbeat();
-  void clearWhatsAppQrCode();
-  stopSpawnedServer(spawnedChild);
+
+  await heartbeat.clear();
+  await clearWhatsAppQrCode(orgId);
+  restoreBaileysConsole();
+
+  if (hasActiveStreams()) {
+    console.warn(
+      "Leaving the spawned Nakama server running so in-flight agent turns can finish; the next worker start will reuse it."
+    );
+  } else {
+    stopSpawnedServer(spawnedChild);
+  }
 });
 
 try {
   const config = await loadConfig();
-  const { serverUrl, spawnedChild: child } = await ensureServerRunning();
+  const existingHeartbeat = await heartbeat.read();
+
+  if (
+    existingHeartbeat &&
+    existingHeartbeat.pid !== process.pid &&
+    heartbeat.isAlive(existingHeartbeat)
+  ) {
+    console.error(
+      "A WhatsApp bridge is already running for this organization."
+    );
+    process.exit(1);
+  }
+
+  await heartbeat.acquire();
+  // Publish ownership before server startup can migrate legacy credentials.
+  await heartbeat.write({
+    connected: false,
+    pid: process.pid,
+    updatedAt: new Date().toISOString(),
+  });
+
+  const { serverUrl, spawnedChild: child } = await ensureServerRunning({
+    spawn: false,
+  });
+
   spawnedChild = child;
 
-  const client = createClient({
+  const client = new NakamaClient({
+    authToken:
+      (await loadLocalAuthToken("whatsapp@nakama.internal")) ?? undefined,
     baseUrl: serverUrl,
-    authToken: (await loadLocalAuthToken("whatsapp@nakama.internal")) ?? undefined,
     clientOrigin: resolveWebPublicUrl(),
+    orgId: orgId.orgId,
   });
+
   const health = await client.health();
 
   if (!health.providerConfigured) {
     console.warn(
-      "Server has no provider configured. Chat runs in offline mode until an API key is set.",
+      "Server has no provider configured. Chat runs in offline mode until an API key is set."
     );
   }
 
-  const sessionStore = new SessionStore();
+  const sessionStore = new ChannelSessionStore(
+    join(getWhatsAppConfigDir(orgId), "chat-sessions.json")
+  );
+
   await sessionStore.load();
 
-  const orgStore = new ChannelOrgStore(getChannelOrgSelectionPath("whatsapp"));
+  const orgStore = new ChannelOrgStore(
+    join(getWhatsAppConfigDir(orgId), "org-selection.json")
+  );
+
   await orgStore.load();
 
-  const authStore = new WhatsAppAuthStore();
+  const authStore = new WhatsAppAuthStore(orgId);
   await authStore.reload();
 
   const handleMessage = createChatHandler({
+    authStore,
     client,
     config,
-    authStore,
-    sessionStore,
+    getSocket: () => socketHandle?.socket ?? null,
     orgStore,
-    getSocket: () => socketHandle ? (socketHandle as any).socket ?? null : null,
+    sessionStore,
+    whatsappContextToken: process.env.NAKAMA_WHATSAPP_CONTEXT_TOKEN,
   });
 
   const socket = await createWhatsAppSocket({
-    onMessage: handleMessage,
     onConnected: (me) => {
       bridgeConnected = true;
+      linkError = undefined;
+      linkOwner = undefined;
       persistWorkerHeartbeat();
-      console.log("WhatsApp connected.");
-      void clearWhatsAppQrCode();
-      void syncWhatsAppOwnerPairing({
-        ownerJid: me.id,
-        ownerLid: me.lid,
-      }).then(() => authStore.reload());
+      log("info", "worker.connected", { worker: "whatsapp" });
+      void clearWhatsAppQrCode(orgId);
+      void syncWhatsAppOwnerPairing(
+        {
+          ownerJid: me.id,
+          ownerLid: me.lid,
+        },
+        orgId
+      ).then(() => authStore.reload());
     },
     onDisconnected: () => {
       bridgeConnected = false;
       persistWorkerHeartbeat();
+      // A closed socket's QR code can no longer be scanned.
+      void clearWhatsAppQrCode(orgId);
     },
+    onLinkRejected: (message, owner) => {
+      linkError = message;
+      linkOwner = owner ?? undefined;
+      persistWorkerHeartbeat();
+      void clearWhatsAppQrCode(orgId);
+    },
+    onMessage: handleMessage,
     onQr: (qr) => {
-      void writeWhatsAppQrCode(qr);
+      void writeWhatsAppQrCode(qr, orgId);
     },
+    orgId,
   });
 
   socketHandle = socket;
@@ -102,7 +201,7 @@ try {
     getSendHandle: () => {
       const activeSocket = socketHandle?.socket;
 
-      if (!activeSocket) {
+      if (!(activeSocket && bridgeConnected)) {
         return null;
       }
 
@@ -110,50 +209,52 @@ try {
         sendMessage: (jid, content) => activeSocket.sendMessage(jid, content),
       };
     },
+    orgId,
   });
 
-  console.log(`WhatsApp outbound server listening on 127.0.0.1:${outboundServer.port}`);
+  console.log(
+    `WhatsApp outbound server listening on 127.0.0.1:${outboundServer.port}`
+  );
 
   const authConfig = authStore.getConfig();
   const paired = authConfig?.pairedJid ? "yes" : "no";
   const pendingCode = authConfig?.pairingCode ? "yes" : "no";
   console.log(
-    `Nakama WhatsApp bridge · ${serverUrl} · profile ${config.profileId} · paired ${paired} · pairing code ${pendingCode}`,
+    `Nakama WhatsApp bridge · ${serverUrl} · profile ${config.profileId} · paired ${paired} · pairing code ${pendingCode}`
   );
 
   await socket.start();
 
-  await writeWhatsAppWorkerHeartbeat(process.pid, new Date().toISOString(), bridgeConnected);
+  await heartbeat.write({
+    connected: bridgeConnected,
+    linkError,
+    linkOwner,
+    pid: process.pid,
+    updatedAt: new Date().toISOString(),
+  });
   heartbeatTimer = setInterval(() => {
     persistWorkerHeartbeat();
   }, 15_000);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
+
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+
+  outboundServer?.stop();
+
+  try {
+    await socketHandle?.stop();
+  } catch {
+    // Socket stop best-effort on fatal path.
+  }
+
+  // Await before exit — void + process.exit can leave a stale heartbeat/QR file.
+  await heartbeat.clear();
+  await clearWhatsAppQrCode(orgId);
   stopSpawnedServer(spawnedChild);
   process.exit(1);
-}
-
-function registerCleanupHandlers(cleanup: () => void): void {
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    process.on(signal, () => {
-      console.log(`WhatsApp worker received ${signal}. Shutting down.`);
-      cleanup();
-      process.exit(0);
-    });
-  }
-}
-
-function registerProcessLifecycleLogging(): void {
-  process.on("exit", (code) => {
-    console.log(`WhatsApp worker exiting with code ${code}.`);
-  });
-
-  process.on("uncaughtException", (error) => {
-    console.error("WhatsApp worker uncaught exception.", error);
-  });
-
-  process.on("unhandledRejection", (reason) => {
-    console.error("WhatsApp worker unhandled rejection.", reason);
-  });
 }

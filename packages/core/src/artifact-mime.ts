@@ -3,10 +3,15 @@
  * serves artifact bytes) and the web app (which decides how to preview them).
  */
 
+import { NakamaApiError } from "./api-error";
+
+export const MAX_HTML_ARTIFACT_BYTES = 16_000_000;
+
 const UNKNOWN_MIME_TYPE = "application/octet-stream";
 
 export const DOCX_MEDIA_TYPE =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 export const LEGACY_DOC_MEDIA_TYPE = "application/msword";
 
 /**
@@ -16,53 +21,58 @@ export const LEGACY_DOC_MEDIA_TYPE = "application/msword";
 export const LEGACY_DOC_UNSUPPORTED_MESSAGE =
   "Legacy .doc files (Word 97-2003) are not supported. Convert the file to .docx and try again.";
 
-const MIME_TYPE_BY_EXTENSION: Record<string, string> = {
-  docx: DOCX_MEDIA_TYPE,
+const MIME_TYPE_BY_EXTENSION = {
+  bash: "text/plain",
+  cjs: "application/javascript",
+  conf: "text/plain",
+  css: "text/css",
+  csv: "text/csv",
   doc: LEGACY_DOC_MEDIA_TYPE,
-  md: "text/markdown",
-  markdown: "text/markdown",
-  mdx: "text/markdown",
-  html: "text/html",
+  docx: DOCX_MEDIA_TYPE,
+  env: "text/plain",
+  gif: "image/gif",
+  go: "text/plain",
   htm: "text/html",
-  xhtml: "application/xhtml+xml",
+  html: "text/html",
+  ini: "text/plain",
+  java: "text/plain",
+  jpeg: "image/jpeg",
+  jpg: "image/jpeg",
+  js: "application/javascript",
   json: "application/json",
   jsonl: "application/json",
-  js: "application/javascript",
-  mjs: "application/javascript",
-  cjs: "application/javascript",
-  ts: "text/plain",
-  tsx: "text/plain",
   jsx: "text/plain",
+  log: "text/plain",
+  m4v: "video/mp4",
+  markdown: "text/markdown",
+  md: "text/markdown",
+  mdx: "text/markdown",
+  mjs: "application/javascript",
+  mov: "video/quicktime",
+  mp4: "video/mp4",
+  ogv: "video/ogg",
+  pdf: "application/pdf",
+  php: "text/plain",
+  png: "image/png",
   py: "text/plain",
   rb: "text/plain",
-  go: "text/plain",
   rs: "text/plain",
-  java: "text/plain",
-  php: "text/plain",
-  sql: "text/plain",
   sh: "text/plain",
-  bash: "text/plain",
-  zsh: "text/plain",
-  env: "text/plain",
-  ini: "text/plain",
-  conf: "text/plain",
+  sql: "text/plain",
+  svg: "image/svg+xml",
+  toml: "text/plain",
+  ts: "text/plain",
+  tsv: "text/tab-separated-values",
+  tsx: "text/plain",
+  txt: "text/plain",
+  webm: "video/webm",
+  webp: "image/webp",
+  xhtml: "application/xhtml+xml",
+  xml: "application/xml",
   yaml: "text/plain",
   yml: "text/plain",
-  toml: "text/plain",
-  css: "text/css",
-  xml: "application/xml",
-  svg: "image/svg+xml",
-  csv: "text/csv",
-  tsv: "text/tab-separated-values",
-  txt: "text/plain",
-  log: "text/plain",
-  pdf: "application/pdf",
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-};
+  zsh: "text/plain",
+} satisfies Record<string, string>;
 
 function fileExtension(filename: string): string {
   const basename = filename.split(/[\\/]/).pop() ?? filename;
@@ -77,7 +87,11 @@ function fileExtension(filename: string): string {
 
 /** Best-effort MIME type for an artifact that has no `.nakama-meta.json` sidecar. */
 export function inferArtifactMimeType(filename: string): string {
-  return MIME_TYPE_BY_EXTENSION[fileExtension(filename)] ?? UNKNOWN_MIME_TYPE;
+  return (
+    Object.entries(MIME_TYPE_BY_EXTENSION).find(
+      ([extension]) => extension === fileExtension(filename)
+    )?.[1] ?? UNKNOWN_MIME_TYPE
+  );
 }
 
 /** Strip parameters (`text/markdown; charset=utf-8`) and normalize casing. */
@@ -89,7 +103,10 @@ export function normalizeMimeType(mimeType: string): string {
  * Resolve the type to preview by: a declared type wins, unless it is missing or
  * the generic binary fallback — then trust the filename extension.
  */
-export function resolveArtifactMimeType(declaredMimeType: string, filename: string): string {
+export function resolveArtifactMimeType(
+  declaredMimeType: string,
+  filename: string
+): string {
   const declared = normalizeMimeType(declaredMimeType);
 
   if (!declared || declared === UNKNOWN_MIME_TYPE) {
@@ -101,11 +118,46 @@ export function resolveArtifactMimeType(declaredMimeType: string, filename: stri
 
 export function isHtmlArtifactMimeType(mimeType: string): boolean {
   const normalized = normalizeMimeType(mimeType);
+
   return normalized === "text/html" || normalized === "application/xhtml+xml";
+}
+
+export function assertHtmlArtifactSize(
+  filename: string,
+  sizeBytes: number,
+  mimeType = ""
+): void {
+  if (
+    sizeBytes > MAX_HTML_ARTIFACT_BYTES &&
+    (isHtmlArtifactMimeType(mimeType) ||
+      isHtmlArtifactMimeType(inferArtifactMimeType(filename)))
+  ) {
+    throw new NakamaApiError(
+      `HTML artifacts cannot exceed ${MAX_HTML_ARTIFACT_BYTES} bytes.`,
+      413
+    );
+  }
 }
 
 export function isMarkdownArtifactMimeType(mimeType: string): boolean {
   return normalizeMimeType(mimeType) === "text/markdown";
+}
+
+/** CSV / TSV artifacts render as a spreadsheet table in the preview panel. */
+export function isDelimitedSpreadsheetFile(
+  filename: string,
+  mediaType = ""
+): boolean {
+  const extension = fileExtension(filename);
+  const normalized = normalizeMimeType(mediaType);
+
+  return (
+    extension === "csv" ||
+    extension === "tsv" ||
+    normalized === "text/csv" ||
+    normalized === "text/tab-separated-values" ||
+    normalized === "application/csv"
+  );
 }
 
 export function isTextArtifactMimeType(mimeType: string): boolean {
@@ -131,6 +183,11 @@ export function isImageArtifactMimeType(mimeType: string): boolean {
   return true;
 }
 
+/** Videos previewable with `<video controls>` in the attachment panel. */
+export function isVideoArtifactMimeType(mimeType: string): boolean {
+  return normalizeMimeType(mimeType).startsWith("video/");
+}
+
 /** True when the type carries no information about how to render the bytes. */
 export function isUnknownArtifactMimeType(mimeType: string): boolean {
   return normalizeMimeType(mimeType) === UNKNOWN_MIME_TYPE;
@@ -138,51 +195,59 @@ export function isUnknownArtifactMimeType(mimeType: string): boolean {
 
 /** A `.docx` is a ZIP of OOXML parts: never UTF-8, but convertible to Markdown. */
 export function isDocxFile(filename: string, mediaType = ""): boolean {
-  return fileExtension(filename) === "docx" || normalizeMimeType(mediaType) === DOCX_MEDIA_TYPE;
+  return (
+    fileExtension(filename) === "docx" ||
+    normalizeMimeType(mediaType) === DOCX_MEDIA_TYPE
+  );
 }
 
 export function isLegacyDocFile(filename: string, mediaType = ""): boolean {
   return (
-    fileExtension(filename) === "doc" || normalizeMimeType(mediaType) === LEGACY_DOC_MEDIA_TYPE
+    fileExtension(filename) === "doc" ||
+    normalizeMimeType(mediaType) === LEGACY_DOC_MEDIA_TYPE
   );
 }
 
-const CODE_LANGUAGE_BY_EXTENSION: Record<string, string> = {
+const CODE_LANGUAGE_BY_EXTENSION = {
+  bash: "bash",
+  cjs: "javascript",
+  conf: "ini",
+  css: "css",
+  env: "ini",
+  go: "go",
+  ini: "ini",
+  java: "java",
+  js: "javascript",
   json: "json",
   jsonl: "json",
-  js: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
   jsx: "jsx",
-  ts: "typescript",
-  tsx: "tsx",
+  mjs: "javascript",
+  php: "php",
   py: "python",
   rb: "ruby",
-  go: "go",
   rs: "rust",
-  java: "java",
-  php: "php",
-  sql: "sql",
   sh: "bash",
-  bash: "bash",
-  zsh: "bash",
+  sql: "sql",
+  svg: "xml",
+  toml: "toml",
+  ts: "typescript",
+  tsx: "tsx",
+  xml: "xml",
   yaml: "yaml",
   yml: "yaml",
-  toml: "toml",
-  ini: "ini",
-  conf: "ini",
-  env: "ini",
-  css: "css",
-  xml: "xml",
-  svg: "xml",
-};
+  zsh: "bash",
+} satisfies Record<string, string>;
 
 /**
  * Syntax-highlighting language for an artifact, or `null` for prose-ish text
  * (`.txt`, `.log`, `.csv`) that reads better unhighlighted.
  */
 export function artifactCodeLanguage(filename: string): string | null {
-  return CODE_LANGUAGE_BY_EXTENSION[fileExtension(filename)] ?? null;
+  return (
+    Object.entries(CODE_LANGUAGE_BY_EXTENSION).find(
+      ([extension]) => extension === fileExtension(filename)
+    )?.[1] ?? null
+  );
 }
 
 /**
@@ -200,6 +265,7 @@ export function looksLikeUtf8Text(bytes: Uint8Array): boolean {
     // multi-byte character straddling the sample boundary; `fatal` throws on the
     // first invalid sequence, so binary input bails out early.
     new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+
     return true;
   } catch {
     return false;
@@ -209,6 +275,7 @@ export function looksLikeUtf8Text(bytes: Uint8Array): boolean {
 /** MIME types that must not be served inline on the app origin (public shares). */
 export function isBrowserExecutableArtifactMimeType(mimeType: string): boolean {
   const normalized = mimeType.toLowerCase().split(";")[0]?.trim() ?? "";
+
   return (
     normalized === "text/html" ||
     normalized === "application/xhtml+xml" ||

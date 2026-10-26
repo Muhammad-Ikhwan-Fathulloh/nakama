@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
+import { executeToolCall } from "@nakama/agent";
+import { toLlmToolDefinition } from "@nakama/core";
 import { createInMemoryDatabaseAdapter } from "@nakama/db";
+import { estimateToolToken } from "../providers/usage-tracking";
 import { AgentQuestionnaireState } from "../services/agent-questionnaire-state";
 import { createAskUserQuestionTools } from "./ask-user-question-tool";
 
@@ -8,48 +11,191 @@ async function createTool() {
   const state = new AgentQuestionnaireState(db);
 
   await db.upsertSession({
-    id: "session_test",
-    profileId: "default",
+    agentQuestionnaire: null,
+    agentTodos: [],
     channel: "web",
     createdAt: new Date().toISOString(),
+    id: "session_test",
+    model: null,
+    profileId: "default",
     title: null,
-    agentTodos: [],
-    agentQuestionnaire: null,
   });
 
   const tool = createAskUserQuestionTools(state).find(
-    (entry) => entry.name === "ask_user_question",
+    (entry) => entry.name === "ask_user_question"
   );
-  return { tool: tool!, state };
+
+  return { state, tool: tool! };
 }
 
 test("ask_user_question requires sessionId", async () => {
   const { tool } = await createTool();
 
   await expect(
-    tool.run({ title: "Need input", questions: [] }, {}),
+    tool.run({ questions: [], title: "Need input" }, {})
   ).rejects.toThrow("requires an active chat session");
 });
 
-test("ask_user_question stores the questionnaire", async () => {
+test("ask_user_question stores the questionnaire with generated ids", async () => {
   const { tool, state } = await createTool();
 
   const result = await tool.run(
     {
-      title: "Need input",
       questions: [
         {
-          id: "timezone",
-          prompt: "What timezone?",
           allowCustomAnswer: true,
-          choices: [{ id: "pst", label: "Pacific Time" }],
+          choices: ["Pacific Time", "Eastern Time"],
+          prompt: "What timezone?",
         },
       ],
+      title: "Need input",
     },
-    { sessionId: "session_test" },
+    { sessionId: "session_test" }
   );
 
-  expect(result).toEqual({
-    questionnaire: await state.get("session_test"),
+  const stored = await state.get("session_test");
+  expect(result).toMatchObject({ questionnaire: stored });
+  expect(stored?.questions).toEqual([
+    {
+      allowCustomAnswer: true,
+      choices: [
+        { id: "pacific-time", label: "Pacific Time" },
+        { id: "eastern-time", label: "Eastern Time" },
+      ],
+      id: "what-timezone",
+      prompt: "What timezone?",
+    },
+  ]);
+});
+
+test("ask_user_question succeeds through the tool loop without a placeholder", async () => {
+  const { tool, state } = await createTool();
+
+  const result = await executeToolCall(
+    [tool],
+    {
+      arguments: {
+        questions: [{ choices: ["Yes", "No"], prompt: "Continue?" }],
+        title: "Need input",
+      },
+      id: "call_1",
+      name: "ask_user_question",
+    },
+    { sessionId: "session_test" }
+  );
+
+  expect(result).not.toHaveProperty("error");
+  expect(await state.get("session_test")).not.toBeNull();
+});
+
+test("ask_user_question accepts legacy choice objects", async () => {
+  const { tool, state } = await createTool();
+
+  await tool.run(
+    {
+      questions: [
+        {
+          allowCustomAnswer: true,
+          choices: [{ id: "pst", label: "Pacific Time" }],
+          id: "timezone",
+          prompt: "What timezone?",
+        },
+      ],
+      title: "Need input",
+    },
+    { sessionId: "session_test" }
+  );
+
+  const stored = await state.get("session_test");
+  expect(stored?.questions[0]).toMatchObject({
+    allowCustomAnswer: true,
+    choices: [{ id: "pst", label: "Pacific Time" }],
+    id: "timezone",
+    prompt: "What timezone?",
   });
+});
+
+test("ask_user_question lists one recommended choice first without the marker", async () => {
+  const { tool, state } = await createTool();
+
+  await tool.run(
+    {
+      questions: [
+        {
+          choices: ["Postgres", "SQLite (Recommended)", "MySQL (Recommended)"],
+          prompt: "Which database?",
+        },
+      ],
+      title: "Need input",
+    },
+    { sessionId: "session_test" }
+  );
+
+  const stored = await state.get("session_test");
+  expect(stored?.questions[0]?.choices).toEqual([
+    { id: "sqlite", label: "SQLite", recommended: true },
+    { id: "postgres", label: "Postgres" },
+    { id: "mysql", label: "MySQL" },
+  ]);
+
+  await expect(
+    tool.run(
+      {
+        questions: [{ choices: ["(Recommended)"], prompt: "Which database?" }],
+        title: "Need input",
+      },
+      { sessionId: "session_test" }
+    )
+  ).rejects.toThrow();
+});
+
+test("ask_user_question rejects invalid questions without storing partial data", async () => {
+  const { tool, state } = await createTool();
+
+  for (const input of [
+    null,
+    { questions: [{ choices: ["One"], prompt: 7 }], title: "Need input" },
+    {
+      questions: [
+        { choices: ["One"], prompt: "Valid?" },
+        { choices: [" "], prompt: "Invalid?" },
+      ],
+      title: "Need input",
+    },
+  ]) {
+    await expect(
+      tool.run(input, { sessionId: "session_test" })
+    ).rejects.toThrow();
+    expect(await state.get("session_test")).toBeNull();
+  }
+
+  await tool.run(
+    {
+      questions: [{ choices: ["One"], prompt: "Valid?" }],
+      title: "Need input",
+    },
+    { sessionId: "session_test" }
+  );
+
+  const stored = await state.get("session_test");
+
+  await expect(
+    tool.run(
+      {
+        questions: [{ choices: [" "], prompt: "Invalid?" }],
+        title: "Need input",
+      },
+      { sessionId: "session_test" }
+    )
+  ).rejects.toThrow();
+
+  expect(await state.get("session_test")).toEqual(stored);
+});
+
+test("ask_user_question schema stays compact", async () => {
+  const { tool } = await createTool();
+  const estimate = estimateToolToken(toLlmToolDefinition(tool));
+
+  expect(estimate.tokens).toBeLessThan(140);
+  expect(estimate.parametersChars).toBeLessThan(400);
 });

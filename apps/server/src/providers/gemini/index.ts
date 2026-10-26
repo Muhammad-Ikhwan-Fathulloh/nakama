@@ -1,41 +1,116 @@
-import { ApiError, GoogleGenAI, type GenerateContentResponse, type Part } from "@google/genai";
+import {
+  ApiError,
+  type FunctionCall,
+  type GenerateContentResponse,
+  GoogleGenAI,
+  type Part,
+} from "@google/genai";
 import type {
   ChatCompletionResult,
   GenerateChatInput,
-  GenerateTextResult,
   GenerateTextInput,
+  GenerateTextResult,
   ProviderClient,
   StreamChatHandlers,
 } from "@nakama/core";
+import { NakamaApiError } from "@nakama/core";
+import {
+  buildChatCompletionResult,
+  extractGeminiTokenUsage,
+  notifyToolInputDelta,
+  parseJsonRecord,
+  readProviderString,
+  readRecord,
+} from "../shared";
 import { buildGeminiChatConfig, buildGeminiGenerateConfig } from "./config";
 import {
   extractTextAndThinkingFromParts,
+  localGeminiCallId,
   parseGeminiFunctionCalls,
   toGeminiContents,
 } from "./messages";
-import { buildChatCompletionResult, extractGeminiTokenUsage, notifyToolInputDelta } from "../shared";
 
 const PROVIDER_LABEL = "Gemini";
+
 const DEFAULT_MODEL = "gemini-2.5-flash";
 
 export interface GeminiProviderOptions {
   apiKey: string;
-  model?: string;
   baseUrl?: string;
+  model?: string;
 }
 
 function createGeminiClient(apiKey: string, baseUrl?: string): GoogleGenAI {
   const trimmed = baseUrl?.trim();
-  return new GoogleGenAI({
+
+  const options: ConstructorParameters<typeof GoogleGenAI>[0] = {
     apiKey,
-    ...(trimmed ? { httpOptions: { baseUrl: trimmed } } : {}),
-  });
+  };
+
+  if (trimmed) {
+    options.httpOptions = { baseUrl: trimmed };
+  }
+
+  return new GoogleGenAI(options);
 }
 
-function formatGeminiError(error: unknown): Error {
+/**
+ * Finish reasons where the model decided not to answer. Retrying sends the same
+ * prompt to the same policy, so it is a refusal to report rather than a server
+ * fault to hide behind a 500.
+ */
+const REFUSAL_FINISH_REASONS = new Set([
+  "BLOCKLIST",
+  "IMAGE_SAFETY",
+  "PROHIBITED_CONTENT",
+  "RECITATION",
+  "SAFETY",
+  "SPII",
+]);
+
+/** Marks the one empty-response shape worth a second attempt. */
+const RETRYABLE_EMPTY = Symbol("gemini.retryableEmptyResponse");
+
+function isRetryableEmptyResponse<Value>(
+  error: Value
+): error is Value & { [RETRYABLE_EMPTY]?: true } {
+  return error instanceof Object && RETRYABLE_EMPTY in error;
+}
+
+/**
+ * An empty candidate has several causes that need different handling, and the
+ * old message collapsed them into one string. `MAX_TOKENS` means the budget ran
+ * out before a part was emitted, a refusal means the model declined, and no
+ * reason at all is the transient case that a retry actually fixes.
+ */
+function emptyResponseError<Value>(finishReason: Value): Error {
+  const reason = readProviderString(finishReason) ?? "";
+
+  if (REFUSAL_FINISH_REASONS.has(reason)) {
+    // 422, not 500: the request reached the model and the model said no.
+    return new NakamaApiError(
+      `${PROVIDER_LABEL} declined to answer (finishReason: ${reason}). Rephrasing may help; retrying the same prompt will not.`,
+      422
+    );
+  }
+
+  const error = new Error(
+    reason
+      ? `${PROVIDER_LABEL} returned an empty response (finishReason: ${reason}).`
+      : `${PROVIDER_LABEL} returned an empty response with no finishReason.`
+  );
+
+  if (!reason) {
+    Object.defineProperty(error, RETRYABLE_EMPTY, { value: true });
+  }
+
+  return error;
+}
+
+function formatGeminiError<ProviderError>(error: ProviderError): Error {
   if (error instanceof ApiError) {
     return new Error(
-      `${PROVIDER_LABEL} request failed (${error.status}): ${error.message}`,
+      `${PROVIDER_LABEL} request failed (${error.status}): ${error.message}`
     );
   }
 
@@ -54,40 +129,63 @@ async function withGeminiError<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * One retry, and only for an empty response that carried no finishReason.
+ *
+ * Safe on the streaming path for the same reason it is needed there: the guard
+ * fires only when nothing was emitted, so no chunk has reached the caller and a
+ * second attempt cannot duplicate text. A reason of MAX_TOKENS or a refusal is
+ * deterministic and is left to fail on the first attempt.
+ */
+async function withEmptyResponseRetry<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (!isRetryableEmptyResponse(error)) {
+      throw error;
+    }
+
+    return await run();
+  }
+}
+
 function parseGenerateContentResponse(
-  response: GenerateContentResponse,
+  response: GenerateContentResponse
 ): ChatCompletionResult {
   const parts = response.candidates?.[0]?.content?.parts;
   const { content, thinking } = extractTextAndThinkingFromParts(parts);
   const toolCalls = parseGeminiFunctionCalls(response.functionCalls);
 
   if (!content.trim() && toolCalls.length === 0 && !thinking) {
-    throw new Error(`${PROVIDER_LABEL} returned an empty response.`);
+    throw emptyResponseError(response.candidates?.[0]?.finishReason);
   }
 
   return buildChatCompletionResult({
     content,
-    toolCalls,
+    providerContent: parts?.some((part) => part.thoughtSignature)
+      ? parts
+      : undefined,
     thinking,
-    usage: extractGeminiTokenUsage(
-      (response as unknown as { usageMetadata?: Record<string, unknown> }).usageMetadata,
-    ),
+    toolCalls,
+    usage: extractGeminiTokenUsage(response.usageMetadata),
   });
 }
 
 interface PendingFunctionCall {
+  argsJson: string;
   id: string;
   name: string;
-  argsJson: string;
 }
 
 function mergePendingFunctionCall(
   pending: Map<string, PendingFunctionCall>,
-  call: { id?: string; name?: string; args?: Record<string, unknown> },
-  handlers?: StreamChatHandlers,
+  call: FunctionCall,
+  handlers?: StreamChatHandlers
 ): void {
-  const id = call.id?.trim() || "pending";
-  const current = pending.get(id) ?? { id, name: "", argsJson: "{}" };
+  // Gemini 2.5 sends no call id, so one is minted from the tool name. The old
+  // shared "pending" key merged every unnamed call into a single entry.
+  const id = call.id?.trim() || localGeminiCallId(call.name?.trim() ?? "");
+  const current = pending.get(id) ?? { argsJson: "{}", id, name: "" };
 
   if (call.name) {
     current.name = call.name;
@@ -95,15 +193,17 @@ function mergePendingFunctionCall(
 
   if (call.args) {
     const nextJson = JSON.stringify(call.args);
+
     const delta =
       nextJson.length > current.argsJson.length
         ? nextJson.slice(current.argsJson.length)
         : nextJson;
+
     current.argsJson = nextJson;
     notifyToolInputDelta(
       handlers,
-      { id: current.id, name: current.name, arguments: current.argsJson },
-      delta,
+      { arguments: current.argsJson, id: current.id, name: current.name },
+      delta
     );
   }
 
@@ -111,18 +211,18 @@ function mergePendingFunctionCall(
 }
 
 function finalizePendingFunctionCalls(
-  pending: Map<string, PendingFunctionCall>,
+  pending: Map<string, PendingFunctionCall>
 ): ReturnType<typeof parseGeminiFunctionCalls> {
   return [...pending.values()].flatMap((call) => {
-    if (!call.id || !call.name) {
+    if (!(call.id && call.name)) {
       return [];
     }
 
     return parseGeminiFunctionCalls([
       {
+        args: parseJsonRecord(call.argsJson),
         id: call.id,
         name: call.name,
-        args: JSON.parse(call.argsJson) as Record<string, unknown>,
       },
     ]);
   });
@@ -131,7 +231,7 @@ function finalizePendingFunctionCalls(
 function accumulateStreamParts(
   parts: Part[] | undefined,
   state: { content: string; thinking: string },
-  handlers?: StreamChatHandlers,
+  handlers?: StreamChatHandlers
 ): void {
   if (!parts?.length) {
     return;
@@ -143,9 +243,11 @@ function accumulateStreamParts(
     if (!text) {
       if (part.functionCall) {
         handlers?.onToolStart?.({
-          toolCallId: part.functionCall.id ?? "pending",
+          input: readRecord(part.functionCall.args ?? {}),
           tool: part.functionCall.name ?? "",
-          input: (part.functionCall.args ?? {}) as Record<string, unknown>,
+          toolCallId:
+            part.functionCall.id ??
+            localGeminiCallId(part.functionCall.name ?? ""),
         });
       }
 
@@ -164,18 +266,19 @@ function accumulateStreamParts(
 
 async function readGeminiStream(
   stream: AsyncGenerator<GenerateContentResponse>,
-  handlers: StreamChatHandlers,
+  handlers: StreamChatHandlers
 ): Promise<ChatCompletionResult> {
   const state = { content: "", thinking: "" };
+  const providerContent: Part[] = [];
   const pending = new Map<string, PendingFunctionCall>();
   let usage: ChatCompletionResult["usage"];
+  let finishReason: unknown;
 
   for await (const chunk of stream) {
-    usage =
-      extractGeminiTokenUsage(
-        (chunk as unknown as { usageMetadata?: Record<string, unknown> }).usageMetadata,
-      ) ?? usage;
+    usage = extractGeminiTokenUsage(chunk.usageMetadata) ?? usage;
+    finishReason = chunk.candidates?.[0]?.finishReason ?? finishReason;
     const parts = chunk.candidates?.[0]?.content?.parts;
+    providerContent.push(...(parts ?? []));
     accumulateStreamParts(parts, state, handlers);
 
     for (const call of chunk.functionCalls ?? []) {
@@ -187,78 +290,93 @@ async function readGeminiStream(
   const thinking = state.thinking.trim() || undefined;
 
   if (!state.content.trim() && toolCalls.length === 0 && !thinking) {
-    throw new Error(`${PROVIDER_LABEL} returned an empty response.`);
+    throw emptyResponseError(finishReason);
   }
 
   return buildChatCompletionResult({
     content: state.content,
-    toolCalls,
+    providerContent: providerContent.some((part) => part.thoughtSignature)
+      ? providerContent
+      : undefined,
     thinking,
+    toolCalls,
     usage,
   });
 }
 
 export function createGeminiProvider(
-  options: GeminiProviderOptions,
+  options: GeminiProviderOptions
 ): ProviderClient {
   const model = options.model ?? DEFAULT_MODEL;
   const client = createGeminiClient(options.apiKey, options.baseUrl);
 
   return {
-    name: "gemini",
+    generateChat(input: GenerateChatInput) {
+      return withEmptyResponseRetry(() =>
+        withGeminiError(async () => {
+          const response = await client.models.generateContent({
+            config: {
+              ...buildGeminiChatConfig(input, input.system, model),
+              abortSignal: input.signal,
+            },
+            contents: await toGeminiContents(input.messages),
+            model,
+          });
+
+          return parseGenerateContentResponse(response);
+        })
+      );
+    },
     generateText(input: GenerateTextInput) {
       const useJson = (input.format ?? "json") === "json";
+
       const system = useJson
         ? `${input.system}\n\nRespond with valid JSON only.`
         : `${input.system}\n\nReturn only the requested text. No JSON, labels, or markdown fences.`;
 
       return withGeminiError(async () => {
         const response = await client.models.generateContent({
-          model,
-          contents: input.prompt,
           config: buildGeminiGenerateConfig({
-            system,
             model,
             responseMimeType: useJson ? "application/json" : undefined,
+            system,
           }),
+          contents: input.prompt,
+          model,
         });
 
         const content = response.text?.trim();
-        const usage = extractGeminiTokenUsage(
-          (response as unknown as { usageMetadata?: Record<string, unknown> }).usageMetadata,
-        );
+        const usage = extractGeminiTokenUsage(response.usageMetadata);
 
         if (!content) {
-          throw new Error(`${PROVIDER_LABEL} returned an empty response.`);
+          throw emptyResponseError(response.candidates?.[0]?.finishReason);
         }
 
-        return {
-          content,
-          ...(usage ? { usage } : {}),
-        } satisfies GenerateTextResult;
-      });
-    },
-    generateChat(input: GenerateChatInput) {
-      return withGeminiError(async () => {
-        const response = await client.models.generateContent({
-          model,
-          contents: await toGeminiContents(input.messages),
-          config: buildGeminiChatConfig(input, input.system, model),
-        });
+        const result: GenerateTextResult = { content };
 
-        return parseGenerateContentResponse(response);
+        if (usage) {
+          result.usage = usage;
+        }
+
+        return result;
       });
     },
+    name: "gemini",
     streamChat(input: GenerateChatInput, handlers: StreamChatHandlers) {
-      return withGeminiError(async () => {
-        const stream = await client.models.generateContentStream({
-          model,
-          contents: await toGeminiContents(input.messages),
-          config: buildGeminiChatConfig(input, input.system, model),
-        });
+      return withEmptyResponseRetry(() =>
+        withGeminiError(async () => {
+          const stream = await client.models.generateContentStream({
+            config: {
+              ...buildGeminiChatConfig(input, input.system, model),
+              abortSignal: input.signal,
+            },
+            contents: await toGeminiContents(input.messages),
+            model,
+          });
 
-        return readGeminiStream(stream, handlers);
-      });
+          return readGeminiStream(stream, handlers);
+        })
+      );
     },
   };
 }

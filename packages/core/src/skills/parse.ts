@@ -4,7 +4,7 @@ const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
 export function parseSkillMarkdown(
   content: string,
-  sourcePath: string,
+  sourcePath: string
 ): ParsedSkillFile {
   const trimmed = content.trim();
 
@@ -15,15 +15,17 @@ export function parseSkillMarkdown(
   const match = trimmed.match(FRONTMATTER_PATTERN);
 
   if (!match) {
-    throw new Error(`Skill file must start with YAML frontmatter: ${sourcePath}`);
+    throw new Error(
+      `Skill file must start with YAML frontmatter: ${sourcePath}`
+    );
   }
 
   const frontmatter = parseFrontmatter(match[1]!, sourcePath);
   const body = match[2]!.trim();
 
   return {
-    frontmatter,
     body,
+    frontmatter,
     sourcePath,
   };
 }
@@ -64,11 +66,22 @@ function parseFrontmatter(raw: string, sourcePath: string): SkillFrontmatter {
   const name = validateSkillName(rawName, sourcePath);
 
   return {
-    name,
     description,
-    disableModelInvocation: parseBooleanField(fields.get("disable-model-invocation")),
+    disableModelInvocation: parseBooleanField(
+      fields.get("disable-model-invocation")
+    ),
     includeBodyOnMatch: parseBooleanField(fields.get("include-body-on-match")),
+    name,
+    scripts: parseListField(fields.get("scripts")),
   };
+}
+
+/** Comma separated, because the frontmatter reader is flat key and value. */
+function parseListField(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((entry) => stripQuotes(entry.trim()))
+    .filter((entry) => entry.length > 0);
 }
 
 function stripQuotes(value: string): string {
@@ -84,7 +97,7 @@ function stripQuotes(value: string): string {
 
 function parseBooleanField(value: string | undefined): boolean | undefined {
   if (value === undefined) {
-    return undefined;
+    return;
   }
 
   const normalized = value.trim().toLowerCase();
@@ -96,8 +109,6 @@ function parseBooleanField(value: string | undefined): boolean | undefined {
   if (normalized === "false") {
     return false;
   }
-
-  return undefined;
 }
 
 function validateSkillName(name: string, sourcePath: string): string {
@@ -105,7 +116,7 @@ function validateSkillName(name: string, sourcePath: string): string {
 
   if (!/^[a-z0-9-]{1,64}$/.test(normalized)) {
     throw new Error(
-      `Skill name must be lowercase letters, numbers, or hyphens (max 64 chars): ${sourcePath}`,
+      `Skill name must be lowercase letters, numbers, or hyphens (max 64 chars): ${sourcePath}`
     );
   }
 

@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  isHeartbeatAlive,
-  isProcessAlive,
   parseDiscordWorkerHeartbeat,
   resolveDiscordWorkerStatus,
 } from "./discord-worker";
@@ -11,21 +9,22 @@ describe("resolveDiscordWorkerStatus", () => {
     expect(
       resolveDiscordWorkerStatus(
         {
-          configured: false,
-          botTokenMasked: null,
-          handshakeCode: null,
-          pairedUserIds: [],
           allowedUserIds: [],
+          botTokenMasked: null,
+          configured: false,
+          handshakeCode: null,
+          inviteUrl: null,
+          pairedUserIds: [],
           profileId: "default",
         },
-        false,
-      ),
+        false
+      )
     ).toEqual({
-      ok: true,
       configured: false,
+      connected: false,
+      ok: true,
       paired: false,
       running: false,
-      connected: false,
     });
   });
 
@@ -33,42 +32,44 @@ describe("resolveDiscordWorkerStatus", () => {
     expect(
       resolveDiscordWorkerStatus(
         {
-          configured: true,
-          botTokenMasked: "••••1234",
-          handshakeCode: "ABCD",
-          pairedUserIds: [],
           allowedUserIds: [],
+          botTokenMasked: "••••1234",
+          configured: true,
+          handshakeCode: "ABCD",
+          inviteUrl: null,
+          pairedUserIds: [],
           profileId: "default",
         },
-        false,
-      ),
+        false
+      )
     ).toEqual({
-      ok: false,
       configured: true,
+      connected: false,
+      ok: false,
       paired: false,
       running: false,
-      connected: false,
     });
 
     expect(
       resolveDiscordWorkerStatus(
         {
-          configured: true,
-          botTokenMasked: "••••1234",
-          handshakeCode: null,
-          pairedUserIds: ["123456789012345678"],
           allowedUserIds: [],
+          botTokenMasked: "••••1234",
+          configured: true,
+          handshakeCode: null,
+          inviteUrl: null,
+          pairedUserIds: ["123456789012345678"],
           profileId: "default",
         },
         true,
-        true,
-      ),
+        true
+      )
     ).toEqual({
-      ok: true,
       configured: true,
+      connected: true,
+      ok: true,
       paired: true,
       running: true,
-      connected: true,
     });
   });
 });
@@ -77,30 +78,21 @@ describe("parseDiscordWorkerHeartbeat", () => {
   test("parses valid JSON with connected flag", () => {
     expect(
       parseDiscordWorkerHeartbeat(
-        JSON.stringify({ pid: 12, updatedAt: "2026-01-01T00:00:00.000Z", connected: true }),
-      ),
-    ).toEqual({ pid: 12, updatedAt: "2026-01-01T00:00:00.000Z", connected: true });
+        JSON.stringify({
+          connected: true,
+          pid: 12,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        })
+      )
+    ).toEqual({
+      connected: true,
+      pid: 12,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
   });
 
   test("returns null for invalid payloads", () => {
     expect(parseDiscordWorkerHeartbeat("not json")).toBeNull();
     expect(parseDiscordWorkerHeartbeat("{}")).toBeNull();
-  });
-});
-
-describe("isHeartbeatAlive", () => {
-  test("accepts a fresh heartbeat for the current process", () => {
-    expect(
-      isHeartbeatAlive({
-        pid: process.pid,
-        updatedAt: new Date().toISOString(),
-      }),
-    ).toBe(true);
-  });
-});
-
-describe("isProcessAlive", () => {
-  test("returns true for the current process", () => {
-    expect(isProcessAlive(process.pid)).toBe(true);
   });
 });

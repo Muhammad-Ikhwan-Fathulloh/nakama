@@ -1,83 +1,79 @@
-import { BASH_TOOL_ID, BUILTIN_TOOL_IDS } from "@nakama/core/tools/protected";
-import { Trash2Icon } from "lucide-react";
+import type { ProfileDetail } from "@nakama/core/contract";
+import { BUILTIN_TOOL_IDS } from "@nakama/core/tools/protected";
+import { Button } from "@nakama/ui/button";
+import { cn } from "@nakama/ui/utils";
+import { Delete02Icon } from "hugeicons-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { CodingHarnessSettingsDialog } from "@/components/CodingHarnessSettingsDialog";
 import { EmailSettingsDialog } from "@/components/EmailSettingsDialog";
-import { ToolAssignDialog } from "@/components/ToolAssignDialog";
-import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/use-auth";
+import { groupAssignableTools } from "@/hooks/use-plugins";
 import { canUseToolPlayground, toolPlaygroundPath } from "@/lib/navigation";
-import { cn } from "@/lib/utils";
-import type { ProfileDetail, ToolSummary } from "@nakama/core/contract";
 import type { RemoveAssignmentTarget } from "@/pages/profiles/profiles-page.shared";
 
 export function ProfileToolsSection({
   detail,
   busy,
-  availableTools,
-  onAssign,
   onRemove,
 }: {
   detail: ProfileDetail;
   busy: boolean;
-  availableTools: ToolSummary[];
-  onAssign: (toolId: string) => void;
   onRemove: (target: RemoveAssignmentTarget) => void;
 }) {
   const { user, activeOrg } = useAuth();
-  const isOrgAdmin = activeOrg?.role === "admin";
+  const canConfigureEmail = user?.isPlatformAdmin === true;
+
   const canOpenPlayground = canUseToolPlayground(
     user?.isPlatformAdmin === true,
-    activeOrg?.role,
+    activeOrg?.role
   );
+
   const [emailConfigOpen, setEmailConfigOpen] = useState(false);
-  const [codingHarnessConfigOpen, setCodingHarnessConfigOpen] = useState(false);
+
+  const groups = groupAssignableTools(detail.tools);
 
   return (
     <div className="pt-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className="type-section-title">Tools</h3>
-          <p className="type-body mt-1 text-xs">
-            {detail.tools.length === 0
-              ? "No tools assigned to this profile."
-              : `${detail.tools.length} assigned`}
-          </p>
-        </div>
-        <ToolAssignDialog tools={availableTools} disabled={busy} onAssign={onAssign} />
-      </div>
-
       {detail.tools.length === 0 ? (
-        <p className="type-body text-xs">No tools assigned.</p>
+        <p className="type-body text-pretty text-xs">No tools assigned.</p>
       ) : (
-        <ul className="divide-y divide-border rounded-md border border-border">
-          {detail.tools.map((tool) => {
+        <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+          {groups.map(({ label, tool, tools: members, unit }) => {
             const name = (
-              <p className="truncate text-sm font-medium leading-tight text-foreground">
-                {tool.name}
-              </p>
+              <div className="min-w-0">
+                <p className="truncate font-normal text-foreground text-sm leading-tight">
+                  {label}
+                </p>
+                {unit ? (
+                  <p className="truncate text-muted-foreground text-xs">
+                    {members.length} {unit}
+                  </p>
+                ) : null}
+              </div>
             );
+
             const onConfigure =
-              isOrgAdmin && tool.id === BUILTIN_TOOL_IDS.email
+              canConfigureEmail && tool.id === BUILTIN_TOOL_IDS.email
                 ? () => setEmailConfigOpen(true)
-                : isOrgAdmin && tool.id === BASH_TOOL_ID
-                  ? () => setCodingHarnessConfigOpen(true)
-                  : undefined;
+                : undefined;
 
             return (
               <li
+                className="flex items-center justify-between gap-2 px-4 py-3 transition-colors duration-150 ease-out hover:bg-muted/40"
                 key={tool.id}
-                className="group flex items-center justify-between gap-2 px-3 py-2 first:rounded-t-md last:rounded-b-md hover:bg-muted/40"
               >
-                {canOpenPlayground ? (
+                {canOpenPlayground && !unit ? (
                   <Link
-                    to={toolPlaygroundPath(tool.id, { fromProfileId: detail.id })}
                     aria-label={`Open playground for ${tool.name}`}
                     className={cn(
-                      "min-w-0 flex-1 text-left",
-                      busy && "pointer-events-none opacity-50",
+                      "min-w-0 flex-1 rounded-sm text-left outline-none transition-[text-decoration-color] duration-150 ease-out",
+                      "underline decoration-transparent underline-offset-2 hover:decoration-foreground/40",
+                      "focus-visible:ring-2 focus-visible:ring-ring/50",
+                      busy && "pointer-events-none opacity-50"
                     )}
+                    to={toolPlaygroundPath(tool.id, {
+                      fromProfileId: detail.id,
+                    })}
                   >
                     {name}
                   </Link>
@@ -87,25 +83,32 @@ export function ProfileToolsSection({
                 <div className="flex shrink-0 items-center gap-1">
                   {onConfigure ? (
                     <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
                       disabled={busy}
                       onClick={onConfigure}
+                      size="sm"
+                      type="button"
+                      variant="outline"
                     >
                       Configure
                     </Button>
                   ) : null}
                   <Button
+                    aria-label={`Delete ${label}`}
+                    className="relative text-muted-foreground transition-colors duration-150 ease-out after:absolute after:-inset-x-1.5 after:-inset-y-1 hover:text-destructive"
+                    disabled={busy}
+                    onClick={() =>
+                      onRemove({
+                        id: tool.id,
+                        ids: members.map((entry) => entry.id),
+                        kind: "tool",
+                        name: label,
+                      })
+                    }
+                    size="icon-sm"
                     type="button"
                     variant="ghost"
-                    size="icon-sm"
-                    className="text-muted-foreground/60 hover:text-destructive"
-                    disabled={busy}
-                    aria-label={`Delete ${tool.name}`}
-                    onClick={() => onRemove({ kind: "tool", id: tool.id, name: tool.name })}
                   >
-                    <Trash2Icon className="size-4" aria-hidden />
+                    <Delete02Icon aria-hidden className="size-4" />
                   </Button>
                 </div>
               </li>
@@ -114,11 +117,18 @@ export function ProfileToolsSection({
         </ul>
       )}
 
-      <EmailSettingsDialog open={emailConfigOpen} onOpenChange={setEmailConfigOpen} />
-      <CodingHarnessSettingsDialog
-        open={codingHarnessConfigOpen}
-        onOpenChange={setCodingHarnessConfigOpen}
-      />
+      {detail.tools.length > 0 ? (
+        <p className="type-body mt-3 text-xs tabular-nums">
+          {groups.length} assigned
+        </p>
+      ) : null}
+
+      {canConfigureEmail ? (
+        <EmailSettingsDialog
+          onOpenChange={setEmailConfigOpen}
+          open={emailConfigOpen}
+        />
+      ) : null}
     </div>
   );
 }

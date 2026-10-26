@@ -2,15 +2,45 @@ import { describe, expect, test } from "bun:test";
 import type { ProfileSummary } from "./contract";
 import {
   filterProfilesForChatAccess,
-  resolveProfileInScopes,
   resolveProfileInput,
+  resolveProfileInScopes,
   slugifyProfileName,
 } from "./profiles";
 
+const profileDefaults = {
+  createdAt: "2026-01-01T00:00:00.000Z",
+  hasAvatar: false,
+  mcpServerCount: 0,
+  soulActive: false,
+  toolCount: 0,
+  updatedAt: "2026-01-01T00:00:00.000Z",
+};
+
 const profiles: ProfileSummary[] = [
-  { id: "profile_b", name: "Beta", model: null, isDefault: false, isSuper: false },
-  { id: "profile_a", name: "Alpha", model: null, isDefault: true, isSuper: false },
-  { id: "super_bot", name: "Super Bot", model: null, isDefault: false, isSuper: true },
+  {
+    ...profileDefaults,
+    id: "profile_b",
+    isDefault: false,
+    isSuper: false,
+    model: null,
+    name: "Beta",
+  },
+  {
+    ...profileDefaults,
+    id: "profile_a",
+    isDefault: true,
+    isSuper: false,
+    model: null,
+    name: "Alpha",
+  },
+  {
+    ...profileDefaults,
+    id: "super_nakama",
+    isDefault: false,
+    isSuper: true,
+    model: null,
+    name: "Super Nakama",
+  },
 ];
 
 describe("resolveProfileInput", () => {
@@ -20,9 +50,13 @@ describe("resolveProfileInput", () => {
     expect(resolveProfileInput(profiles, "2")?.id).toBe("profile_b");
   });
 
-  test("matches super bot aliases", () => {
-    expect(resolveProfileInput(profiles, "super_bot")?.id).toBe("super_bot");
-    expect(resolveProfileInput(profiles, "super-bot")?.id).toBe("super_bot");
+  test("matches super nakama aliases", () => {
+    expect(resolveProfileInput(profiles, "super_nakama")?.id).toBe(
+      "super_nakama"
+    );
+    expect(resolveProfileInput(profiles, "super-nakama")?.id).toBe(
+      "super_nakama"
+    );
   });
 
   test("returns undefined for ambiguous input", () => {
@@ -31,7 +65,14 @@ describe("resolveProfileInput", () => {
 
   test("matches slugified profile names and near slug typos", () => {
     const scoped = [
-      { id: "gary", name: "Gary Vee", model: null, isDefault: false, isSuper: false },
+      {
+        ...profileDefaults,
+        id: "gary",
+        isDefault: false,
+        isSuper: false,
+        model: null,
+        name: "Gary Vee",
+      },
     ];
 
     expect(resolveProfileInput(scoped, "gary-vee")?.id).toBe("gary");
@@ -41,21 +82,26 @@ describe("resolveProfileInput", () => {
 });
 
 describe("filterProfilesForChatAccess", () => {
-  test("hides super bot from org members and channel bridges", () => {
+  test("hides super nakama from org members and channel bridges", () => {
     expect(
-      filterProfilesForChatAccess(profiles, { orgRole: "member" }).map((profile) => profile.id),
+      filterProfilesForChatAccess(profiles, { orgRole: "member" }).map(
+        (profile) => profile.id
+      )
     ).toEqual(["profile_b", "profile_a"]);
     expect(
-      filterProfilesForChatAccess(profiles, { orgRole: "admin", excludeSuperBot: true }).map(
-        (profile) => profile.id,
-      ),
+      filterProfilesForChatAccess(profiles, {
+        excludeSuperNakama: true,
+        orgRole: "admin",
+      }).map((profile) => profile.id)
     ).toEqual(["profile_b", "profile_a"]);
   });
 
-  test("keeps super bot for org admins", () => {
+  test("keeps super nakama for org admins", () => {
     expect(
-      filterProfilesForChatAccess(profiles, { orgRole: "admin" }).map((profile) => profile.id),
-    ).toEqual(["profile_b", "profile_a", "super_bot"]);
+      filterProfilesForChatAccess(profiles, { orgRole: "admin" }).map(
+        (profile) => profile.id
+      )
+    ).toEqual(["profile_b", "profile_a", "super_nakama"]);
   });
 });
 
@@ -66,19 +112,39 @@ describe("resolveProfileInScopes", () => {
         {
           orgId: "org_a",
           orgName: "Acme",
-          profiles: [{ id: "default", name: "Default Bot", model: null, isDefault: true, isSuper: false }],
+          profiles: [
+            {
+              ...profileDefaults,
+              id: "default",
+              isDefault: true,
+              isSuper: false,
+              model: null,
+              name: "Default Bot",
+            },
+          ],
         },
         {
           orgId: "org_b",
           orgName: "Beta",
-          profiles: [{ id: "gary", name: "Gary Vee", model: null, isDefault: true, isSuper: false }],
+          profiles: [
+            {
+              ...profileDefaults,
+              id: "gary",
+              isDefault: true,
+              isSuper: false,
+              model: null,
+              name: "Gary Vee",
+            },
+          ],
         },
       ],
-      "gary-vee",
+      "gary-vee"
     );
 
     expect(result).not.toBeNull();
     expect(result && "scope" in result && result.scope.orgId).toBe("org_b");
-    expect(result && "profile" in result && result.profile.name).toBe("Gary Vee");
+    expect(result && "profile" in result && result.profile.name).toBe(
+      "Gary Vee"
+    );
   });
 });

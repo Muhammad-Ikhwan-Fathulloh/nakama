@@ -1,134 +1,91 @@
 import { describe, expect, test } from "bun:test";
-import {
-  isOpenRouterModelFree,
-  mergeOpenRouterModelOptions,
-  normalizeOpenRouterModels,
-  openRouterPricingPerMillion,
-} from "./openrouter-models";
+import { normalizeOpenRouterModels } from "./openrouter-models";
 
 const fixture = {
   data: [
     {
+      architecture: { input_modalities: ["text"] },
+      context_length: 1_000_000,
+      description: "Free variant",
+      expiration_date: null,
       id: "nvidia/nemotron-3-ultra-550b-a55b:free",
       name: "NVIDIA: Nemotron 3 Ultra (free)",
-      description: "Free variant",
-      context_length: 1000000,
-      architecture: { input_modalities: ["text"] },
+      pricing: { completion: "0", prompt: "0" },
       supported_parameters: ["tools", "reasoning"],
-      pricing: { prompt: "0", completion: "0" },
-      expiration_date: null,
     },
     {
+      architecture: { input_modalities: ["text", "image"] },
+      context_length: 1_000_000,
+      description: "Paid variant",
       id: "nvidia/nemotron-3-ultra-550b-a55b",
       name: "NVIDIA: Nemotron 3 Ultra",
-      description: "Paid variant",
-      context_length: 1000000,
-      architecture: { input_modalities: ["text", "image"] },
+      pricing: { completion: "0.0000025", prompt: "0.0000005" },
       supported_parameters: ["tools"],
-      pricing: { prompt: "0.0000005", completion: "0.0000025" },
-      expiration_date: null,
     },
     {
+      architecture: { input_modalities: ["text"] },
+      context_length: 128_000,
+      description: "Free without :free suffix",
+      expiration_date: "2027-01-01",
       id: "openrouter/owl-alpha",
       name: "Owl Alpha",
-      description: "Free without :free suffix",
-      context_length: 128000,
-      architecture: { input_modalities: ["text"] },
+      pricing: { completion: "0", prompt: "0" },
       supported_parameters: [],
-      pricing: { prompt: "0", completion: "0" },
-      expiration_date: "2027-01-01",
+    },
+    {
+      architecture: { input_modalities: ["text", "image", "video"] },
+      context_length: 1_048_576,
+      description: "Stealth preview",
+      expiration_date: "2098-12-31",
+      id: "stealth/ox-alpha",
+      name: "Ox Alpha",
+      pricing: { completion: "0", prompt: "0" },
+      supported_parameters: ["tools", "reasoning"],
     },
   ],
 };
 
-describe("isOpenRouterModelFree", () => {
-  test("returns true when prompt and completion are zero", () => {
-    expect(isOpenRouterModelFree({ prompt: "0", completion: "0" })).toBe(true);
-  });
-
-  test("returns false when completion is non-zero", () => {
-    expect(isOpenRouterModelFree({ prompt: "0", completion: "0.0000025" })).toBe(false);
-  });
-});
-
-describe("openRouterPricingPerMillion", () => {
-  test("converts per-token API pricing to dollars per million tokens", () => {
-    expect(
-      openRouterPricingPerMillion({
-        prompt: "0.0000005",
-        completion: "0.0000025",
-      }),
-    ).toEqual({
-      inputPerMillionUsd: 0.5,
-      outputPerMillionUsd: 2.5,
-    });
-  });
-
-  test("returns zero rates for free models", () => {
-    expect(
-      openRouterPricingPerMillion({
-        prompt: "0",
-        completion: "0",
-      }),
-    ).toEqual({
-      inputPerMillionUsd: 0,
-      outputPerMillionUsd: 0,
-    });
-  });
+test("a non-zero completion price is not free", () => {
+  expect(
+    normalizeOpenRouterModels({
+      data: [
+        {
+          id: "paid",
+          name: "Paid",
+          pricing: { completion: "0.0000025", prompt: "0" },
+        },
+      ],
+    })[0]?.isFree
+  ).toBe(false);
 });
 
 describe("normalizeOpenRouterModels", () => {
   test("marks free models and sorts free first", () => {
     const rows = normalizeOpenRouterModels(fixture);
 
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
     expect(rows[0]?.isFree).toBe(true);
     expect(rows[1]?.isFree).toBe(true);
-    expect(rows[2]?.isFree).toBe(false);
+    expect(rows[2]?.isFree).toBe(true);
+    expect(rows[3]?.isFree).toBe(false);
     expect(rows.find((row) => row.id.endsWith(":free"))?.isFree).toBe(true);
+    expect(rows[0]?.deprecated).toBe(false);
+    expect(rows[0]?.inputPerMillionUsd).toBe(0);
+    expect(rows[0]?.outputPerMillionUsd).toBe(0);
   });
 
   test("detects vision and capability chips", () => {
     const rows = normalizeOpenRouterModels(fixture);
-    const paid = rows.find((row) => row.id === "nvidia/nemotron-3-ultra-550b-a55b");
+
+    const paid = rows.find(
+      (row) => row.id === "nvidia/nemotron-3-ultra-550b-a55b"
+    );
 
     expect(paid?.vision).toBe(true);
+    expect(paid?.deprecated).toBe(false);
     expect(paid?.tools).toBe(true);
     expect(paid?.reasoning).toBe(false);
     expect(paid?.inputPerMillionUsd).toBe(0.5);
     expect(paid?.outputPerMillionUsd).toBe(2.5);
-  });
-
-  test("marks deprecated when expiration_date is set", () => {
-    const rows = normalizeOpenRouterModels(fixture);
-    const owl = rows.find((row) => row.id === "openrouter/owl-alpha");
-
-    expect(owl?.deprecated).toBe(true);
-  });
-});
-
-describe("mergeOpenRouterModelOptions", () => {
-  test("injects current model when missing from catalog", () => {
-    const catalog = [
-      { id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet", provider: "openrouter" as const },
-    ];
-    const merged = mergeOpenRouterModelOptions(
-      catalog,
-      "google/gemini-2.5-pro-preview",
-      "Gemini 2.5 Pro",
-    );
-
-    expect(merged).toHaveLength(2);
-    expect(merged[0]?.id).toBe("google/gemini-2.5-pro-preview");
-    expect(merged[0]?.name).toBe("Gemini 2.5 Pro");
-  });
-
-  test("does not duplicate when model already in catalog", () => {
-    const catalog = [
-      { id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet", provider: "openrouter" as const },
-    ];
-    const merged = mergeOpenRouterModelOptions(catalog, "anthropic/claude-sonnet-4-6");
-
-    expect(merged).toHaveLength(1);
   });
 });

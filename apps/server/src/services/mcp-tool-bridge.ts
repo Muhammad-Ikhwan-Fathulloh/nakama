@@ -1,48 +1,93 @@
-import type { JsonSchema, ToolDefinition } from "@nakama/core";
-import { emptyObjectSchema } from "@nakama/core";
-import type { StoredMcpServerRecord } from "@nakama/db";
-import type { McpClientManager } from "./mcp-client-manager";
+import type { JsonSchema, ToolContext, ToolDefinition } from "@nakama/core";
+import { emptyObjectSchema, validateImageAttachments } from "@nakama/core";
+import type { DatabaseAdapter, StoredMcpServerRecord } from "@nakama/db";
+import type { McpToolArguments } from "./mcp-client-manager";
+import { parseMcpToolArguments } from "./mcp-client-manager";
+import type { McpService } from "./mcp-service";
 
 const LLM_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
+const CURRENT_CHAT_CONTEXT = "x-nakama-context";
+
 export function buildMcpToolDefinitions(
   servers: StoredMcpServerRecord[],
-  manager: McpClientManager,
+  mcpService: Pick<McpService, "callTool">,
+  db: Pick<DatabaseAdapter, "getMcpServer">,
   orgId: string,
   profileId: string,
+  discoveryAccess?: (
+    serverId: string,
+    toolName: string,
+    context: ToolContext
+  ) => Promise<boolean>
 ): ToolDefinition[] {
   const tools: ToolDefinition[] = [];
   const usedNames = new Set<string>();
 
   for (const server of servers) {
+    if (!server.enabled) {
+      continue;
+    }
+
     for (const cachedTool of server.cachedTools) {
       const name = uniqueLlmToolName(
         namespacedMcpToolName(server.name, cachedTool.name),
-        usedNames,
+        usedNames
       );
+
       usedNames.add(name);
+      const inputSchema = toJsonSchema(cachedTool.inputSchema);
+      const hasCurrentChatContext = isCurrentChatContext(inputSchema);
+
+      const canDiscover = discoveryAccess
+        ? async (context: ToolContext) => {
+            const current = await db.getMcpServer(server.id);
+
+            return Boolean(
+              current?.enabled &&
+                current.cachedTools.some(
+                  (tool) => tool.name === cachedTool.name
+                ) &&
+                (await discoveryAccess(server.id, cachedTool.name, context))
+            );
+          }
+        : undefined;
 
       tools.push({
-        name,
+        canDiscover,
         description: cachedTool.description,
-        parameters: toJsonSchema(cachedTool.inputSchema),
-        async run(input) {
+        discoveryGroup: discoveryAccess ? server.name : undefined,
+        discoveryScope: discoveryAccess ? "session" : undefined,
+        name,
+        parameters: hasCurrentChatContext
+          ? withoutNakamaContext(inputSchema)
+          : inputSchema,
+        async run(input, context) {
           try {
-            if (server.transport === "stdio") {
-              await manager.ensureConnected(server, orgId, profileId);
-            } else if (!manager.isConnected(server.id, server.transport)) {
+            if (canDiscover && !(await canDiscover(context))) {
+              return { error: "MCP tool is unavailable." };
+            }
+
+            const currentServer = await db.getMcpServer(server.id);
+
+            if (!currentServer?.enabled) {
               return {
-                error: `MCP server "${server.name}" is not connected.`,
+                error: `MCP server "${server.name}" is disabled.`,
               };
             }
 
-            return await manager.callTool(
-              server.id,
-              server.transport,
+            const parsedInput = parseMcpToolArguments(input);
+
+            const arguments_ = hasCurrentChatContext
+              ? await withCurrentChatContext(parsedInput, context)
+              : parsedInput;
+
+            return await mcpService.callTool(
+              currentServer,
               cachedTool.name,
-              input,
-              server.transport === "stdio" ? profileId : undefined,
-              server.transport === "stdio" ? orgId : undefined,
+              arguments_,
+              orgId,
+              profileId
             );
           } catch (error) {
             return {
@@ -57,6 +102,64 @@ export function buildMcpToolDefinitions(
   return tools;
 }
 
+function isCurrentChatContext(schema: JsonSchema): boolean {
+  const property = schema.properties?.nakamaContext;
+  const metadata = property ? new Map(Object.entries(property)) : undefined;
+
+  return (
+    metadata?.get(CURRENT_CHAT_CONTEXT) === "current-chat" &&
+    !(schema.required ?? []).includes("nakamaContext")
+  );
+}
+
+function withoutNakamaContext(schema: JsonSchema): JsonSchema {
+  const { nakamaContext: _context, ...properties } = schema.properties ?? {};
+
+  return { ...schema, properties };
+}
+
+async function withCurrentChatContext(
+  input: McpToolArguments,
+  context: ToolContext
+): Promise<McpToolArguments> {
+  const args = { ...input };
+
+  delete args.nakamaContext;
+
+  const images: Array<{ data: string; mediaType: string }> = [];
+
+  for (const image of context.currentChatImages ?? []) {
+    const loaded = await context.loadAttachment?.(image.attachmentId);
+
+    if (!loaded) {
+      throw new Error(`Image attachment not found: ${image.attachmentId}`);
+    }
+
+    images.push({
+      data: loaded.bytes.toString("base64"),
+      mediaType: loaded.mediaType,
+    });
+  }
+
+  validateImageAttachments(images);
+
+  if (images.length || context.whatsappMessage) {
+    const currentContext: McpToolArguments = {};
+
+    if (images.length) {
+      currentContext.images = images;
+    }
+
+    if (context.whatsappMessage) {
+      currentContext.whatsapp = context.whatsappMessage;
+    }
+
+    args.nakamaContext = currentContext;
+  }
+
+  return args;
+}
+
 export function sanitizeLlmToolNamePart(name: string): string {
   const sanitized = name
     .replace(/[^a-zA-Z0-9_-]/g, "_")
@@ -66,7 +169,10 @@ export function sanitizeLlmToolNamePart(name: string): string {
   return sanitized || "tool";
 }
 
-export function namespacedMcpToolName(serverName: string, toolName: string): string {
+export function namespacedMcpToolName(
+  serverName: string,
+  toolName: string
+): string {
   return `${sanitizeLlmToolNamePart(serverName)}__${sanitizeLlmToolNamePart(toolName)}`;
 }
 
@@ -88,10 +194,10 @@ function uniqueLlmToolName(base: string, usedNames: Set<string>): string {
   return `${base}_${suffix}`;
 }
 
-function toJsonSchema(inputSchema: unknown): JsonSchema {
-  if (typeof inputSchema === "object" && inputSchema !== null) {
-    return inputSchema as JsonSchema;
-  }
+function toJsonSchema<T>(inputSchema: T): JsonSchema {
+  return isJsonSchema(inputSchema) ? inputSchema : emptyObjectSchema();
+}
 
-  return emptyObjectSchema();
+function isJsonSchema<T>(value: T): value is T & JsonSchema {
+  return value instanceof Object && !Array.isArray(value);
 }

@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
-import type { ChatListItem } from "@/lib/chat-history";
-import { WebSourceCard } from "@/components/chat/WebSearch";
+import { useState } from "react";
 import { useWebSourceSiteStates } from "@/components/chat/use-web-source-site-states";
+import { WebSourceCard } from "@/components/chat/WebSearch";
+import type { ChatListItem } from "@/lib/chat-history";
 import {
   buildWebSearchToolState,
   shouldRenderWebSearchToolRow,
@@ -10,17 +10,15 @@ import {
 export function WebSearchToolRow({ message }: { message: ChatListItem }) {
   const state = buildWebSearchToolState(message);
   const isRunning = state.status === "running";
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(isRunning);
+  const [prevIsRunning, setPrevIsRunning] = useState(isRunning);
+
+  if (isRunning !== prevIsRunning) {
+    setPrevIsRunning(isRunning);
+    setOpen(isRunning);
+  }
+
   const siteStates = useWebSourceSiteStates(state.sources.length, state.status);
-
-  useEffect(() => {
-    if (isRunning) {
-      setOpen(true);
-      return;
-    }
-
-    setOpen(false);
-  }, [isRunning]);
 
   if (!shouldRenderWebSearchToolRow(message)) {
     return null;
@@ -29,13 +27,13 @@ export function WebSearchToolRow({ message }: { message: ChatListItem }) {
   return (
     <div className="w-full max-w-full">
       <WebSourceCard
-        mode="search"
         headerText={state.query ?? "the web"}
-        sources={state.sources}
-        siteStates={siteStates}
         isComplete={!isRunning}
-        open={open}
+        mode="search"
         onOpenChange={setOpen}
+        open={open}
+        siteStates={siteStates}
+        sources={state.sources}
       />
     </div>
   );

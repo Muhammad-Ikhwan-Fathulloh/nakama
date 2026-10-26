@@ -1,14 +1,23 @@
+import {
+  isSecretEnvKey,
+  type ProviderName,
+  type UserConfig,
+} from "@nakama/core";
 import type { StoredCodingAgentHarnessKind } from "@nakama/db";
+import {
+  createHarnessConfigDir,
+  writeCodexConfigToml,
+  writeOpenCodeConfig,
+  writePiModelsJson,
+} from "./coding-agent-harness-config-files";
+import {
+  type CodingAgentProviderRouting,
+  resolveCodingAgentProviderRouting,
+} from "./coding-agent-provider-routing";
 
-export interface CodingAgentSpawnEnvOptions {
-  model?: string | null;
-  gatewayBaseUrl?: string | null;
-  authToken?: string | null;
-  orgId?: string | null;
-  profileId?: string | null;
-}
-
-export function normalizeCodingAgentModel(model: string | null | undefined): string | null {
+export function normalizeCodingAgentModel(
+  model: string | null | undefined
+): string | null {
   if (!model?.trim()) {
     return null;
   }
@@ -18,6 +27,7 @@ export function normalizeCodingAgentModel(model: string | null | undefined): str
 
   if (colonIndex >= 0) {
     const normalized = trimmed.slice(colonIndex + 1).trim();
+
     return normalized || null;
   }
 
@@ -25,136 +35,375 @@ export function normalizeCodingAgentModel(model: string | null | undefined): str
 
   if (slashIndex >= 0) {
     const normalized = trimmed.slice(slashIndex + 1).trim();
+
     return normalized || null;
   }
 
   return trimmed;
 }
 
-export function buildClaudeCodeSpawnEnv(
-  options: CodingAgentSpawnEnvOptions,
-): Record<string, string> {
-  const gatewayBaseUrl = options.gatewayBaseUrl?.trim();
+export function formatModelForHarness(
+  harnessKind: StoredCodingAgentHarnessKind,
+  providerType: ProviderName,
+  model: string
+): string {
+  if (providerType === "openrouter" || providerType === "opencode_go") {
+    return model.trim();
+  }
 
-  if (!gatewayBaseUrl) {
+  // pi sends the model ID directly to the provider's API. For openai_compatible
+  // providers, the model ID may contain slashes (e.g. "cx/gpt-5.4") that are
+  // part of the actual model name — stripping them would break routing.
+  if (harnessKind === "pi") {
+    if (providerType === "openai_compatible") {
+      return model.trim();
+    }
+
+    // For known providers, only strip the "provider:" prefix (e.g. "anthropic:claude-sonnet-4-6"),
+    // not slashes (e.g. "openrouter/anthropic/claude-sonnet-4-6").
+    const colonIndex = model.indexOf(":");
+
+    if (colonIndex >= 0) {
+      return model.slice(colonIndex + 1).trim() || model.trim();
+    }
+
+    return model.trim();
+  }
+
+  if (harnessKind === "claude_code" && providerType === "anthropic") {
+    return normalizeCodingAgentModel(model) ?? model.trim();
+  }
+
+  return normalizeCodingAgentModel(model) ?? model.trim();
+}
+
+export interface CodingAgentSpawnBundle {
+  routing: ReturnType<typeof resolveCodingAgentProviderRouting>;
+  spawn: CodingAgentSpawnEnvResult;
+}
+
+export async function resolveCodingAgentSpawnBundle(options: {
+  userConfig: UserConfig | null | undefined;
+  profileModel: string | null | undefined;
+  harnessKind: StoredCodingAgentHarnessKind;
+  env?: Record<string, string | undefined>;
+}): Promise<CodingAgentSpawnBundle> {
+  const routing = resolveCodingAgentProviderRouting({
+    env: options.env,
+    harnessKind: options.harnessKind,
+    profileModel: options.profileModel,
+    userConfig: options.userConfig,
+  });
+
+  const spawn = await buildSpawnEnvForHarness(
+    options.harnessKind,
+    routing,
+    routing.providerType ?? "openai"
+  );
+
+  return { routing, spawn };
+}
+
+export interface CodingAgentSpawnEnvResult {
+  cleanup?: () => Promise<void>;
+  env: Record<string, string>;
+}
+
+const CODING_AGENT_CREDENTIAL_ENV_KEYS = [
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_CUSTOM_HEADERS",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "CLAUDE_CODE_SUBAGENT_MODEL",
+  "OPENAI_BASE_URL",
+  "OPENAI_API_KEY",
+  "OPENAI_MODEL",
+  "CODEX_HOME",
+  "XDG_CONFIG_HOME",
+  "PI_CODING_AGENT_DIR",
+] as const;
+
+/**
+ * Maps a Nakama provider type to the pi CLI provider name.
+ * pi has its own provider system with named providers (see `pi --list-models`).
+ *
+ * When the base URL is the default for the provider type, we use the built-in
+ * pi provider name (e.g. "anthropic", "openai"). When the base URL is custom
+ * (proxy/gateway), we use "nakama" — matching the custom provider entry in
+ * models.json that uses the OpenAI Chat Completions API.
+ */
+const PI_PROVIDER_NAME: Partial<Record<ProviderName, string>> = {
+  anthropic: "anthropic",
+  cerebras: "cerebras",
+  deepseek: "deepseek",
+  fireworks: "fireworks",
+  ollama: "ollama",
+  openai: "openai",
+  openai_compatible: "nakama",
+  opencode_go: "opencode",
+  openrouter: "openrouter",
+};
+
+const PI_DEFAULT_BASE_URLS: Partial<Record<ProviderName, string>> = {
+  anthropic: "https://api.anthropic.com",
+  cerebras: "https://api.cerebras.ai/v1",
+  deepseek: "https://api.deepseek.com",
+  fireworks: "https://api.fireworks.ai/inference",
+  openai: "https://api.openai.com/v1",
+  openrouter: "https://openrouter.ai/api/v1",
+};
+
+export function mapNakamaProviderToPi(
+  providerType: ProviderName,
+  baseUrl?: string | null
+): string | null {
+  const builtinName = PI_PROVIDER_NAME[providerType];
+
+  if (!builtinName) {
+    return null;
+  }
+
+  // For providers with a non-default base URL (proxy/gateway), use the custom
+  // "nakama" provider entry from models.json instead of the built-in provider.
+  if (baseUrl) {
+    const defaultUrl = PI_DEFAULT_BASE_URLS[providerType];
+
+    if (
+      defaultUrl &&
+      baseUrl.replace(/\/+$/, "") !== defaultUrl.replace(/\/+$/, "")
+    ) {
+      return "nakama";
+    }
+  }
+
+  return builtinName;
+}
+
+export function buildClaudeCodeSpawnEnv(
+  routing: CodingAgentProviderRouting,
+  providerType: ProviderName = "anthropic"
+): CodingAgentSpawnEnvResult["env"] {
+  if (!(routing.active && routing.baseUrl && routing.apiKey)) {
     return {};
   }
 
-  const model = normalizeCodingAgentModel(options.model) ?? "claude-sonnet-4-6";
-  const authToken = options.authToken?.trim();
-
-  if (!authToken) {
-    throw new Error(
-      "Inference gateway is enabled but no local Nakama auth token is available for Claude Code.",
-    );
-  }
-
-  const customHeaders = buildAnthropicCustomHeaders(options.orgId, options.profileId);
+  const model = formatModelForHarness(
+    "claude_code",
+    providerType,
+    routing.model ?? "claude-sonnet-4-6"
+  );
 
   return {
-    ANTHROPIC_BASE_URL: gatewayBaseUrl.replace(/\/$/, ""),
-    ANTHROPIC_API_KEY: "",
-    ANTHROPIC_AUTH_TOKEN: authToken,
-    ...(customHeaders ? { ANTHROPIC_CUSTOM_HEADERS: customHeaders } : {}),
+    ANTHROPIC_API_KEY: routing.apiKey,
+    ANTHROPIC_BASE_URL: routing.baseUrl.replace(/\/$/, ""),
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
     ANTHROPIC_DEFAULT_OPUS_MODEL: model,
     ANTHROPIC_DEFAULT_SONNET_MODEL: model,
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
-    CLAUDE_CODE_SUBAGENT_MODEL: model,
     CLAUDE_CODE_ATTRIBUTION_HEADER: "0",
-    DISABLE_TELEMETRY: "1",
-    DISABLE_ERROR_REPORTING: "1",
-    DISABLE_FEEDBACK_COMMAND: "1",
     CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1",
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    CLAUDE_CODE_SUBAGENT_MODEL: model,
+    DISABLE_ERROR_REPORTING: "1",
+    DISABLE_FEEDBACK_COMMAND: "1",
+    DISABLE_TELEMETRY: "1",
   };
 }
 
-export function buildCodexSpawnEnv(options: CodingAgentSpawnEnvOptions): Record<string, string> {
-  const gatewayBaseUrl = options.gatewayBaseUrl?.trim();
-
-  if (!gatewayBaseUrl) {
+export function buildCodexSpawnEnv(
+  routing: CodingAgentProviderRouting,
+  providerType: ProviderName = "openai"
+): CodingAgentSpawnEnvResult["env"] {
+  if (!(routing.active && routing.baseUrl && routing.apiKey)) {
     return {};
   }
 
-  const model = normalizeCodingAgentModel(options.model) ?? "gpt-4.1";
+  const model = formatModelForHarness(
+    "codex",
+    providerType,
+    routing.model ?? "gpt-4.1"
+  );
 
   return {
-    OPENAI_API_KEY: "",
-    OPENAI_BASE_URL: gatewayBaseUrl.replace(/\/$/, ""),
+    OPENAI_API_KEY: routing.apiKey,
+    OPENAI_BASE_URL: routing.baseUrl.replace(/\/$/, ""),
     OPENAI_MODEL: model,
   };
 }
 
-export function buildOpenCodeSpawnEnv(_options: CodingAgentSpawnEnvOptions): Record<string, string> {
-  return {};
+async function buildOpenCodeSpawnEnv(
+  routing: CodingAgentProviderRouting,
+  providerType: ProviderName = "openai"
+): Promise<CodingAgentSpawnEnvResult> {
+  if (!(routing.active && routing.baseUrl && routing.apiKey)) {
+    return { env: {} };
+  }
+
+  const configDir = await createHarnessConfigDir("nakama-opencode-config-");
+  await writeOpenCodeConfig(configDir.dir, routing, "opencode", providerType);
+
+  return {
+    cleanup: configDir.cleanup,
+    env: {
+      NAKAMA_HARNESS_API_KEY: routing.apiKey,
+      XDG_CONFIG_HOME: configDir.dir,
+    },
+  };
 }
 
-export function buildSpawnEnvForHarness(
+export async function buildPiSpawnEnv(
+  routing: CodingAgentProviderRouting,
+  providerType: ProviderName = "openai"
+): Promise<CodingAgentSpawnEnvResult> {
+  if (!(routing.active && routing.baseUrl && routing.apiKey)) {
+    return { env: {} };
+  }
+
+  // pi does not read OPENAI_BASE_URL / ANTHROPIC_BASE_URL env vars.
+  // The base URL is hardcoded per built-in provider and can only be overridden
+  // via models.json in the pi config directory (PI_CODING_AGENT_DIR).
+  // The temp models.json names an environment variable; it never stores the key.
+  const configDir = await createHarnessConfigDir("nakama-pi-config-");
+  await writePiModelsJson(configDir.dir, routing, providerType);
+
+  return {
+    cleanup: configDir.cleanup,
+    env: {
+      NAKAMA_HARNESS_API_KEY: routing.apiKey,
+      PI_CODING_AGENT_DIR: configDir.dir,
+    },
+  };
+}
+
+export async function buildSpawnEnvForHarness(
   kind: StoredCodingAgentHarnessKind,
-  options: CodingAgentSpawnEnvOptions,
-): Record<string, string> {
+  routing: CodingAgentProviderRouting,
+  providerType: ProviderName = "openai"
+): Promise<CodingAgentSpawnEnvResult> {
+  // Cursor Agent uses host Cursor auth — never merge Nakama provider credentials.
+  if (kind === "cursor_agent") {
+    return { env: {} };
+  }
+
+  if (!routing.active) {
+    return { env: {} };
+  }
+
   if (kind === "claude_code") {
-    return buildClaudeCodeSpawnEnv(options);
+    return { env: buildClaudeCodeSpawnEnv(routing, providerType) };
+  }
+
+  if (kind === "pi") {
+    return buildPiSpawnEnv(routing, providerType);
   }
 
   if (kind === "codex") {
-    return buildCodexSpawnEnv(options);
+    const env = buildCodexSpawnEnv(routing, providerType);
+
+    if (Object.keys(env).length > 0) {
+      return { env };
+    }
+
+    const configDir = await createHarnessConfigDir("nakama-codex-config-");
+    await writeCodexConfigToml(configDir.dir, routing, "codex", providerType);
+
+    const codexEnv: CodingAgentSpawnEnvResult["env"] = {
+      CODEX_HOME: configDir.dir,
+    };
+
+    if (routing.apiKey) {
+      codexEnv.NAKAMA_HARNESS_API_KEY = routing.apiKey;
+    }
+
+    return { cleanup: configDir.cleanup, env: codexEnv };
   }
 
-  return buildOpenCodeSpawnEnv(options);
+  return buildOpenCodeSpawnEnv(routing, providerType);
 }
 
-export function getInferenceGatewayBaseUrl(): string | null {
-  if (process.env.NAKAMA_INFERENCE_GATEWAY_ENABLED !== "1") {
-    return null;
-  }
-
-  const configured = process.env.NAKAMA_INFERENCE_GATEWAY_URL?.trim();
-
-  if (configured) {
-    return configured.replace(/\/$/, "");
-  }
-
-  const port = process.env.NAKAMA_PORT?.trim() || "4310";
-  const publicUrl = process.env.NAKAMA_PUBLIC_URL?.trim();
-
-  if (publicUrl) {
-    return publicUrl.replace(/\/$/, "");
-  }
-
-  return `http://127.0.0.1:${port}`;
-}
-
-function buildAnthropicCustomHeaders(
-  orgId?: string | null,
-  profileId?: string | null,
-): string | null {
-  const headers: string[] = [];
-  const trimmedOrgId = orgId?.trim();
-  const trimmedProfileId = profileId?.trim();
-
-  if (trimmedOrgId) {
-    headers.push(`X-Org-Id: ${trimmedOrgId}`);
-  }
-
-  if (trimmedProfileId) {
-    headers.push(`X-Nakama-Profile-Id: ${trimmedProfileId}`);
-  }
-
-  return headers.length > 0 ? headers.join("\n") : null;
-}
+/**
+ * Env keys that run code before the spawned command does, so a caller that can
+ * name one owns the process: `bash -lc` sources BASH_ENV, the loader reads
+ * the LD_ and DYLD_ preload keys, node reads NODE_OPTIONS (--require), python
+ * reads the PYTHON keys (sitecustomize), and BASH_FUNC_ smuggles in shell
+ * functions. The bash tool
+ * takes this map straight from the model, so the filter is always on rather
+ * than opt-in. Bare `ENV` is left alone: bash only sources it in posix mode,
+ * and it is a common application setting.
+ */
+const HIJACKING_ENV_KEY =
+  /^(BASH_ENV|IFS|PS4|SHELLOPTS|BASHOPTS|NODE_OPTIONS|BASH_FUNC_.*|LD_.*|DYLD_.*|PYTHON.*)$/;
 
 export function mergeCodingAgentSpawnEnv(
   baseEnv: NodeJS.ProcessEnv,
   spawnEnv: Record<string, string>,
-): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...baseEnv, ...spawnEnv };
+  options: {
+    protectCredentialKeys?: boolean;
+    callerEnv?: Record<string, string>;
+  } = {}
+): CodingAgentSpawnEnvResult["env"] {
+  const callerEnv = options.callerEnv ?? {};
+  const merged: Record<string, string> = {};
 
-  for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] as const) {
-    if (key in spawnEnv && spawnEnv[key] === "") {
-      delete env[key];
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (value !== undefined && !isSecretEnvKey(key)) {
+      merged[key] = value;
     }
   }
 
-  return env;
+  for (const [key, value] of Object.entries(spawnEnv)) {
+    if (
+      !(
+        HIJACKING_ENV_KEY.test(key) ||
+        key.startsWith("NAKAMA_PROVIDER_API_KEY_") ||
+        key.startsWith("NAKAMA_TOOL_API_KEY_")
+      ) &&
+      key !== "NAKAMA_SECRETS_KEY" &&
+      key !== "NAKAMA_SECRETS_KEY_NEXT" &&
+      key !== "NAKAMA_EMAIL_PASSWORD"
+    ) {
+      merged[key] = value;
+    }
+  }
+
+  for (const [key, value] of Object.entries(callerEnv)) {
+    if (HIJACKING_ENV_KEY.test(key) || isSecretEnvKey(key)) {
+      continue;
+    }
+
+    if (
+      options.protectCredentialKeys &&
+      CODING_AGENT_CREDENTIAL_ENV_KEYS.some(
+        (credentialKey) => credentialKey === key
+      )
+    ) {
+      continue;
+    }
+
+    merged[key] = value;
+  }
+
+  return merged;
+}
+
+export function redactSpawnEnvForPrompt(env: Record<string, string>) {
+  const redacted: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(env)) {
+    if (/(api[_-]?key|auth[_-]?token|secret)/i.test(key)) {
+      redacted[key] = "***";
+      continue;
+    }
+
+    if (/^sk-[A-Za-z0-9_-]+$/.test(value) || /^tc_local_/.test(value)) {
+      redacted[key] = "***";
+      continue;
+    }
+
+    redacted[key] = value;
+  }
+
+  return redacted;
 }

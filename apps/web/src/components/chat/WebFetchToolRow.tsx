@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
-import type { ChatListItem } from "@/lib/chat-history";
-import { WebSourceCard } from "@/components/chat/WebSearch";
+import { useState } from "react";
 import { useWebSourceSiteStates } from "@/components/chat/use-web-source-site-states";
+import { WebSourceCard } from "@/components/chat/WebSearch";
+import type { ChatListItem } from "@/lib/chat-history";
 import {
   buildWebFetchToolState,
   shouldRenderWebFetchToolRow,
@@ -10,17 +10,15 @@ import {
 export function WebFetchToolRow({ message }: { message: ChatListItem }) {
   const state = buildWebFetchToolState(message);
   const isRunning = state.status === "running";
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(isRunning);
+  const [prevIsRunning, setPrevIsRunning] = useState(isRunning);
+
+  if (isRunning !== prevIsRunning) {
+    setPrevIsRunning(isRunning);
+    setOpen(isRunning);
+  }
+
   const siteStates = useWebSourceSiteStates(state.sources.length, state.status);
-
-  useEffect(() => {
-    if (isRunning) {
-      setOpen(true);
-      return;
-    }
-
-    setOpen(false);
-  }, [isRunning]);
 
   if (!shouldRenderWebFetchToolRow(message)) {
     return null;
@@ -29,13 +27,13 @@ export function WebFetchToolRow({ message }: { message: ChatListItem }) {
   return (
     <div className="w-full max-w-full">
       <WebSourceCard
-        mode="fetch"
         headerText={state.headerText ?? "page"}
-        sources={state.sources}
-        siteStates={siteStates}
         isComplete={!isRunning}
-        open={open}
+        mode="fetch"
         onOpenChange={setOpen}
+        open={open}
+        siteStates={siteStates}
+        sources={state.sources}
       />
     </div>
   );

@@ -1,42 +1,81 @@
-import path from "node:path";
+import { resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { z } from "zod";
 import type { JsonSchema, ToolContext, ToolDefinition } from "../contract";
+import { getPluginsRootDir } from "../plugins";
 import { permissiveObjectSchema } from "../tools/schema";
 import type { DiscoveredSkill } from "./types";
 
 const moduleCache = new Map<string, SkillToolModule>();
 
+const JsonValueSchema = z.json();
+
+const SkillToolModuleSchema = z.object({
+  description: z.string().optional(),
+  name: z.string().optional(),
+  parameters: z.record(z.string(), JsonValueSchema).optional(),
+  run: z
+    .function()
+    .input([JsonValueSchema, z.custom<ToolContext>()])
+    .output(z.promise(z.union([JsonValueSchema, z.undefined()]))),
+});
+
+const ImportedSkillModuleSchema = z
+  .object({ default: z.unknown().optional() })
+  .passthrough();
+
+type JsonValue = z.infer<typeof JsonValueSchema>;
+
 interface SkillToolModule {
-  name?: string;
   description?: string;
+  name?: string;
   parameters?: JsonSchema;
-  run: (input: unknown, context: ToolContext) => Promise<unknown>;
+  run: (
+    input: JsonValue,
+    context: ToolContext
+  ) => Promise<JsonValue | undefined>;
 }
 
 export async function loadSkillTool(
-  skill: DiscoveredSkill,
+  skill: DiscoveredSkill
 ): Promise<ToolDefinition | null> {
   if (!skill.toolPath) {
     return null;
+  }
+
+  if (
+    isPluginSkillToolPath(skill.toolPath) ||
+    isPluginSkillToolPath(skill.directory)
+  ) {
+    return {
+      description: skill.description,
+      name: skill.name,
+      parameters: permissiveObjectSchema(),
+      async run() {
+        return {
+          error: "Plugin skill entrypoints cannot be loaded in-process.",
+        };
+      },
+    };
   }
 
   try {
     const module = await importSkillToolModule(skill.toolPath);
 
     return {
-      name: module.name?.trim() || skill.name,
       description: module.description?.trim() || skill.description,
+      name: module.name?.trim() || skill.name,
       parameters: module.parameters ?? permissiveObjectSchema(),
       async run(input, context) {
-        return module.run(input, context);
+        return module.run(JsonValueSchema.parse(input), context);
       },
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
 
     return {
-      name: skill.name,
       description: skill.description,
+      name: skill.name,
       parameters: permissiveObjectSchema(),
       async run() {
         return { error: `Skill tool failed to load: ${message}` };
@@ -46,7 +85,7 @@ export async function loadSkillTool(
 }
 
 export async function loadSkillTools(
-  skills: DiscoveredSkill[],
+  skills: DiscoveredSkill[]
 ): Promise<ToolDefinition[]> {
   const tools: ToolDefinition[] = [];
 
@@ -65,19 +104,9 @@ export async function loadSkillTools(
   return tools;
 }
 
-function resolveSkillToolPath(toolPath: string, skillDirectory: string): string {
-  const resolved = path.isAbsolute(toolPath)
-    ? path.resolve(toolPath)
-    : path.resolve(skillDirectory, toolPath);
-
-  if (!isPathInsideDirectory(resolved, skillDirectory)) {
-    throw new Error(`Skill tool path must stay inside ${skillDirectory}.`);
-  }
-
-  return resolved;
-}
-
-async function importSkillToolModule(modulePath: string): Promise<SkillToolModule> {
+async function importSkillToolModule(
+  modulePath: string
+): Promise<SkillToolModule> {
   const cached = moduleCache.get(modulePath);
 
   if (cached) {
@@ -87,45 +116,49 @@ async function importSkillToolModule(modulePath: string): Promise<SkillToolModul
   const imported = await import(pathToFileURL(modulePath).href);
   const module = normalizeSkillToolModule(imported);
   moduleCache.set(modulePath, module);
+
   return module;
 }
 
-function normalizeSkillToolModule(imported: unknown): SkillToolModule {
-  if (typeof imported !== "object" || imported === null) {
+function normalizeSkillToolModule<Imported>(
+  imported: Imported
+): SkillToolModule {
+  const record = ImportedSkillModuleSchema.safeParse(imported);
+
+  if (!record.success) {
     throw new Error("Skill tool module must export a run function.");
   }
 
-  const record = imported as Record<string, unknown>;
-  const defaultExport =
-    typeof record.default === "object" && record.default !== null
-      ? (record.default as Record<string, unknown>)
-      : null;
-  const source = defaultExport ?? record;
-  const run = source.run;
+  const defaultModule = SkillToolModuleSchema.safeParse(record.data.default);
 
-  if (typeof run !== "function") {
-    throw new Error("Skill tool module must export a run function.");
+  const module = defaultModule.success
+    ? defaultModule
+    : SkillToolModuleSchema.safeParse(record.data);
+
+  if (!module.success) {
+    throw new Error(
+      "Skill tool module must export a run function with JSON results."
+    );
   }
+
+  const parameters = module.data.parameters;
 
   return {
-    name: typeof source.name === "string" ? source.name : undefined,
-    description: typeof source.description === "string" ? source.description : undefined,
-    parameters: isJsonSchema(source.parameters) ? source.parameters : undefined,
-    run: (input, context) => Promise.resolve(run(input, context)),
+    description: module.data.description,
+    name: module.data.name,
+    // SAFETY: This schema parse confirms parameters are a JSON object before exposing them as JSON Schema.
+    parameters: parameters as JsonSchema | undefined,
+    run: (input, context) => module.data.run(input, context),
   };
 }
 
-function isPathInsideDirectory(targetPath: string, directoryPath: string): boolean {
-  const relative = path.relative(directoryPath, targetPath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
+function isPluginSkillToolPath(filePath: string): boolean {
+  try {
+    const root = resolve(getPluginsRootDir());
+    const resolved = resolve(filePath);
 
-function isJsonSchema(value: unknown): value is JsonSchema {
-  return typeof value === "object" && value !== null;
+    return resolved === root || resolved.startsWith(`${root}${sep}`);
+  } catch {
+    return false;
+  }
 }
-
-export function clearSkillToolModuleCache(): void {
-  moduleCache.clear();
-}
-
-export { resolveSkillToolPath };

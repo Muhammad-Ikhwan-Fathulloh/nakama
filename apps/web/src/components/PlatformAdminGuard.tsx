@@ -1,9 +1,14 @@
+import { Spinner } from "@nakama/ui/spinner";
 import { Navigate, Outlet } from "react-router-dom";
-import { Spinner } from "@/components/ui/spinner";
 import { useAuth } from "@/context/use-auth";
+import { canAccessSystemPage } from "@/lib/navigation";
 
-export function PlatformAdminGuard() {
-  const { user, isLoading } = useAuth();
+export function PlatformAdminGuard({
+  allowOrgAdmin = false,
+}: {
+  allowOrgAdmin?: boolean;
+} = {}) {
+  const { user, activeOrg, isLoading } = useAuth();
 
   if (isLoading) {
     return (
@@ -13,8 +18,12 @@ export function PlatformAdminGuard() {
     );
   }
 
-  if (!user?.isPlatformAdmin) {
-    return <Navigate to="/chat" replace />;
+  const allowed = allowOrgAdmin
+    ? canAccessSystemPage(user?.isPlatformAdmin === true, activeOrg?.role)
+    : user?.isPlatformAdmin === true;
+
+  if (!allowed) {
+    return <Navigate replace to="/chat" />;
   }
 
   return <Outlet />;

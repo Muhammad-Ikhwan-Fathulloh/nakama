@@ -1,21 +1,24 @@
 import type { CustomModelEntry } from "@nakama/core/contract";
-import { PlusIcon, Trash2Icon } from "lucide-react";
+import { Button } from "@nakama/ui/button";
+import { InputGroup, InputGroupInput } from "@nakama/ui/input-group";
+import { Switch } from "@nakama/ui/switch";
+import { Add01Icon, Delete02Icon } from "hugeicons-react";
 import { useRef } from "react";
-import { Button } from "@/components/ui/button";
-import { InputGroup, InputGroupInput } from "@/components/ui/input-group";
-import { Switch } from "@/components/ui/switch";
+import { modelListRowVisionEnabled } from "@/components/model-list-editor.shared";
 import { createClientId, syncRowKeys } from "@/lib/client-id";
 
 export interface ModelListRow extends CustomModelEntry {}
 
 interface ModelListEditorProps {
-  models: ModelListRow[];
-  disabled?: boolean;
-  showPricing?: boolean;
-  showThinkingToggle?: boolean;
-  onBrowse?: () => void;
   browseLabel?: string;
+  disabled?: boolean;
+  models: ModelListRow[];
+  onBrowse?: () => void;
   onChange: (models: ModelListRow[]) => void;
+  showPricing?: boolean;
+  showThinking?: boolean;
+  showVision?: boolean;
+  visionDefaultOn?: boolean;
 }
 
 function emptyRow(): ModelListRow {
@@ -26,7 +29,9 @@ export function ModelListEditor({
   models,
   disabled,
   showPricing = true,
-  showThinkingToggle = false,
+  showThinking = false,
+  showVision = false,
+  visionDefaultOn = false,
   onBrowse,
   browseLabel = "Browse models.dev",
   onChange,
@@ -38,8 +43,8 @@ export function ModelListEditor({
   const updateRow = (index: number, patch: Partial<ModelListRow>) => {
     onChange(
       models.map((row, rowIndex) =>
-        rowIndex === index ? { ...row, ...patch } : row,
-      ),
+        rowIndex === index ? { ...row, ...patch } : row
+      )
     );
   };
 
@@ -49,162 +54,198 @@ export function ModelListEditor({
   };
 
   return (
-    <div className="space-y-2">
-      <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full min-w-[32rem] text-left text-xs">
-          <thead className="border-b border-border bg-muted/30 text-muted-foreground">
-            <tr>
-              <th className="px-2 py-2 font-medium">Model ID</th>
-              <th className="px-2 py-2 font-medium">Display name</th>
-              {showPricing ? (
-                <>
-                  <th className="px-2 py-2 font-medium">$/1M in</th>
-                  <th className="px-2 py-2 font-medium">$/1M out</th>
-                </>
-              ) : null}
-              {showThinkingToggle ? (
-                <th className="px-2 py-2 font-medium">Thinking</th>
-              ) : null}
-              <th className="px-2 py-2 w-10" aria-label="Actions" />
-            </tr>
-          </thead>
-          <tbody>
-            {models.map((row, index) => (
-              <tr
-                key={row.id.trim() || rowKeysRef.current[index]}
-                className="border-b border-border/60 last:border-0"
-              >
-                <td className="px-2 py-1.5">
-                  <InputGroup>
-                    <InputGroupInput
-                      value={row.id}
-                      disabled={disabled}
-                      placeholder="llama3.2"
-                      onChange={(event) =>
-                        updateRow(index, { id: event.target.value })
-                      }
-                    />
-                  </InputGroup>
-                </td>
-                <td className="px-2 py-1.5">
-                  <InputGroup>
-                    <InputGroupInput
-                      value={row.name ?? ""}
-                      disabled={disabled}
-                      placeholder="Optional label"
-                      onChange={(event) =>
-                        updateRow(index, { name: event.target.value })
-                      }
-                    />
-                  </InputGroup>
-                </td>
+    <div className="min-w-0 space-y-2">
+      {models.length > 0 ? (
+        <div className="max-w-full overflow-x-auto rounded-lg border border-border">
+          <table
+            className={`w-full text-left text-xs ${showThinking || showVision ? "min-w-[58rem]" : "min-w-[46rem]"}`}
+          >
+            <thead className="border-border border-b bg-muted/30 text-muted-foreground">
+              <tr>
+                <th className="px-2 py-2 font-medium">Model ID</th>
+                <th className="px-2 py-2 font-medium">Display name</th>
+                {showThinking ? (
+                  <th className="px-2 py-2 font-medium">Reasoning</th>
+                ) : null}
+                {showVision ? (
+                  <th className="px-2 py-2 font-medium">Vision</th>
+                ) : null}
                 {showPricing ? (
                   <>
-                    <td className="px-2 py-1.5">
-                      <InputGroup>
-                        <InputGroupInput
-                          type="number"
-                          min={0}
-                          step="any"
-                          value={row.inputPerMillionUsd ?? ""}
-                          disabled={disabled}
-                          placeholder="—"
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            updateRow(index, {
-                              inputPerMillionUsd:
-                                value === "" ? undefined : Number(value),
-                            });
-                          }}
-                        />
-                      </InputGroup>
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <InputGroup>
-                        <InputGroupInput
-                          type="number"
-                          min={0}
-                          step="any"
-                          value={row.outputPerMillionUsd ?? ""}
-                          disabled={disabled}
-                          placeholder="—"
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            updateRow(index, {
-                              outputPerMillionUsd:
-                                value === "" ? undefined : Number(value),
-                            });
-                          }}
-                        />
-                      </InputGroup>
-                    </td>
+                    <th className="px-2 py-2 font-medium">$/1M in</th>
+                    <th className="px-2 py-2 font-medium">$/1M cached</th>
+                    <th className="px-2 py-2 font-medium">$/1M out</th>
                   </>
                 ) : null}
-                {showThinkingToggle ? (
+                <th className="px-2 py-2 font-medium">Context</th>
+                <th aria-label="Actions" className="w-10 px-2 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {models.map((row, index) => (
+                <tr
+                  className="border-border/60 border-b last:border-0"
+                  key={rowKeysRef.current[index]}
+                >
                   <td className="px-2 py-1.5">
-                    <div className="flex justify-center">
+                    <InputGroup>
+                      <InputGroupInput
+                        disabled={disabled}
+                        onChange={(event) =>
+                          updateRow(index, { id: event.target.value })
+                        }
+                        placeholder="llama3.2"
+                        value={row.id}
+                      />
+                    </InputGroup>
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <InputGroup>
+                      <InputGroupInput
+                        disabled={disabled}
+                        onChange={(event) =>
+                          updateRow(index, { name: event.target.value })
+                        }
+                        placeholder="Optional label"
+                        value={row.name ?? ""}
+                      />
+                    </InputGroup>
+                  </td>
+                  {showThinking ? (
+                    <td className="px-2 py-1.5">
                       <Switch
+                        aria-label={`Reasoning for ${row.id.trim() || "model"}`}
                         checked={row.supportsThinking === true}
                         disabled={disabled}
-                        aria-label={`Enable thinking for ${row.id || row.name || `model ${index + 1}`}`}
                         onCheckedChange={(checked) =>
                           updateRow(index, { supportsThinking: checked })
                         }
+                        size="sm"
                       />
-                    </div>
+                    </td>
+                  ) : null}
+                  {showVision ? (
+                    <td className="px-2 py-1.5">
+                      <Switch
+                        aria-label={`Vision for ${row.id.trim() || "model"}`}
+                        checked={modelListRowVisionEnabled(
+                          row,
+                          visionDefaultOn
+                        )}
+                        disabled={disabled}
+                        onCheckedChange={(checked) =>
+                          updateRow(index, { supportsVision: checked })
+                        }
+                        size="sm"
+                      />
+                    </td>
+                  ) : null}
+                  {showPricing
+                    ? (
+                        [
+                          "inputPerMillionUsd",
+                          "cachedInputPerMillionUsd",
+                          "outputPerMillionUsd",
+                        ] as const
+                      ).map((field) => (
+                        <td className="px-2 py-1.5" key={field}>
+                          <InputGroup>
+                            <InputGroupInput
+                              aria-label={
+                                field === "cachedInputPerMillionUsd"
+                                  ? `Cached input rate for ${row.id.trim() || "model"}`
+                                  : undefined
+                              }
+                              disabled={disabled}
+                              min={0}
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                updateRow(index, {
+                                  [field]:
+                                    value === "" ? undefined : Number(value),
+                                });
+                              }}
+                              placeholder="—"
+                              step="any"
+                              type="number"
+                              value={row[field] ?? ""}
+                            />
+                          </InputGroup>
+                        </td>
+                      ))
+                    : null}
+                  <td className="px-2 py-1.5">
+                    <InputGroup>
+                      <InputGroupInput
+                        disabled={disabled}
+                        min={1}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          updateRow(index, {
+                            contextWindow:
+                              value === "" ? undefined : Number(value),
+                          });
+                        }}
+                        placeholder="auto"
+                        step={1}
+                        type="number"
+                        value={row.contextWindow ?? ""}
+                      />
+                    </InputGroup>
                   </td>
-                ) : null}
-                <td className="px-2 py-1.5 text-right">
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    disabled={disabled || models.length <= 1}
-                    aria-label="Remove model"
-                    onClick={() => removeRow(index)}
-                  >
-                    <Trash2Icon className="size-4" />
-                  </Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                  <td className="px-2 py-1.5 text-right">
+                    <Button
+                      aria-label="Remove model"
+                      disabled={disabled}
+                      onClick={() => removeRow(index)}
+                      size="icon-sm"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <Delete02Icon className="size-4" />
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {models.length > 0 ? (
+        <p className="text-muted-foreground text-xs">
+          Context is the total token window the model accepts. Leave it on auto
+          to use the built-in catalog value, or 128k when the model is unknown.
+        </p>
+      ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Button
-          type="button"
-          size="sm"
-          variant="outline"
           disabled={disabled}
           onClick={() => {
             rowKeysRef.current.push(createClientId());
             onChange([...models, emptyRow()]);
           }}
+          size="sm"
+          type="button"
+          variant="outline"
         >
-          <PlusIcon className="mr-1 size-4" />
+          <Add01Icon className="mr-1 size-4" />
           Add model
         </Button>
 
         {onBrowse ? (
           <Button
-            type="button"
-            size="sm"
-            variant="secondary"
             disabled={disabled}
             onClick={onBrowse}
+            size="sm"
+            type="button"
+            variant="secondary"
           >
             {browseLabel}
           </Button>
         ) : null}
       </div>
-
-      {showPricing ? (
-        <p className="text-xs text-muted-foreground">
-          Leave pricing blank to track tokens without estimating cost.
-        </p>
-      ) : null}
     </div>
   );
 }

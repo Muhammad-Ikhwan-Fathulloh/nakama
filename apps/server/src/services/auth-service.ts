@@ -1,27 +1,28 @@
-import bcrypt from "bcryptjs";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 const SALT_ROUNDS = 10;
+
 const SESSION_EXPIRY_DAYS = 7;
 
 export class AuthService {
   async hashPassword(password: string): Promise<string> {
-    return bcrypt.hash(password, SALT_ROUNDS);
+    return Bun.password.hash(password, {
+      algorithm: "bcrypt",
+      cost: SALT_ROUNDS,
+    });
   }
 
   async verifyPassword(password: string, hash: string): Promise<boolean> {
-    return bcrypt.compare(password, hash);
+    return Bun.password.verify(password, hash);
   }
 
-  createBrowserSessionTokens(): {
-    sessionToken: string;
-    csrfToken: string;
-    expiresAt: string;
-  } {
+  createBrowserSessionTokens() {
     return {
-      sessionToken: generateOpaqueToken(),
       csrfToken: generateOpaqueToken(),
-      expiresAt: new Date(Date.now() + SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+      expiresAt: new Date(
+        Date.now() + SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000
+      ).toISOString(),
+      sessionToken: generateOpaqueToken(),
     };
   }
 
@@ -31,5 +32,5 @@ export class AuthService {
 }
 
 function generateOpaqueToken(): string {
-  return `${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
+  return randomBytes(32).toString("hex");
 }

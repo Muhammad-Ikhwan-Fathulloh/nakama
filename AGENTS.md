@@ -1,173 +1,182 @@
 # nakama — Agent Context
 
-A multi-tenant, multi-agent platform (monorepo). Each **organization** is a flat tenant boundary. Within an org, each profile has a **soul** — files that define the agent's identity, style, operating instructions, and continuity memory.
+Agent platform built to work with your team — not replace them. Multi-tenant monorepo; orgs are flat tenants, each profile has a **soul** (identity, style, instructions, memory).
 
-## Dev commands
+## Rules
 
-- **Runtime:** Bun 1.3+. Use `bun install`, `bun run`, `bun test`.
-- **Dev servers:** `bun run dev:server` (HTTP API), `bun run dev:web` (dashboard), `bun run dev:cli` (CLI).
+**Before code**
+- Read [CONTRIBUTING.md, "Before you start building"](./CONTRIBUTING.md#before-you-start-building) first. Four questions, and a closed PR here usually failed one of them. You can produce a working change faster than anyone can decide it was the right one, so check the shape before the diff
+- Read the rest of [CONTRIBUTING.md](./CONTRIBUTING.md) before you pick work or open a PR: how to claim an issue, the checks to run, the PR body format, and [what happens to work that goes quiet](./CONTRIBUTING.md#when-work-goes-quiet). An issue assigned to someone else is not yours to build. A PR labelled `stale` is, with `Co-authored-by` for its author
 
-`apps/` holds `server`, `web`, `cli`, and channel workers under `apps/platform/` (telegram, whatsapp, discord, automation).
+**Code**
+- Prefer edit over extract; no new package/file unless an existing module cannot hold the change. CI fails a new workspace unless the PR carries the `new-package` label
+- No new abstractions for a single call site
+- Tests assert behavior (status, data, side effects), not prompt/description/error copy
+- React UI: one self-explanatory heading/label; no subtitles or helper copy unless the user asks or misunderstanding would cause errors
+
+**Replies**
+- ADHD-shaped: lead with the action; numbered steps; no preamble/recap
+- Use [ASD-STE100 Simplified Technical English](https://www.asd-ste100.org/) in every reply to the user, including progress updates. Keep code names, commands, and paths exact.
+- Human voice — short, concrete, plain words, no corporate filler
+- If ambiguous, give 3 options numbered — the user will reply with a number
+
+**Process**
+- PRs: ready for review by default; drafts only on explicit user request. Overrides skills.
+- Browser checks only when explicitly requested (`agent-browser`); otherwise tests, type checks, builds. Do not add Playwright.
+
+## Dev
+
+- Bun 1.4+: `bun install`, `bun run`, `bun test`
+- Servers: `bun run dev:server` | `dev:web` | `cli`
+- Format / lint: `bun x ultracite fix` | `check` | `doctor`; unused exports: `bun run knip` (CI fails on findings)
+
+## LLM cassette tests (MSW)
+
+For live provider tests: record one real HTTP call, commit the cassette, replay offline thereafter. Helper: `apps/server/src/testing/llm-msw-cassette.ts` (`withMswCassette`). Cassettes live in `apps/server/src/testing/cassettes/`. Name live tests `*.llm.test.ts`.
+
+```bash
+bun test path/to/foo.llm.test.ts                 # replay (default when cassette exists)
+LLM_VCR_MODE=record bun test path/to/foo.llm.test.ts  # re-record (needs provider API key)
+```
+
+## GitHub
+
+Use `gh` for issues, PRs, checks, reviews, releases, and any GitHub URL. Always run outside the sandbox — inside it `gh` returns `Forbidden`.
+
+`gh issue` / `gh pr` / `--json` go through GraphQL and often time out here. Prefer REST: `gh api repos/{owner}/{repo}/issues` or `/pulls`, body in a JSON file, `POST --input`. On GraphQL timeout, retry REST once.
+
+**PR descriptions:** use [`.agents/skills/adhd-pr-description/SKILL.md`](.agents/skills/adhd-pr-description/SKILL.md) (default body shape). GitHub fills the same shape via `.github/PULL_REQUEST_TEMPLATE.md`. Agents composing PR bodies (including `ce-commit-push-pr`) must follow that skill.
+
+Screenshots: `gh pr edit <number> --attach <image-path>` uploads and embeds it in the PR description.
+
+**Releases:** Bump root `package.json` to the next patch after the latest GitHub release, check, commit, push, tag `vX.Y.Z`, and publish with generated notes.
+
+## Browser automation
+
+Prefer role and text locators. Add `data-testid` only when labels collide.
+
+Operator Docker / `dev:web` on `4310` stays valid for humans. For PR motion video, use `.agents/skills/browser-video-proof/SKILL.md`.
+
+## Documentation (`docs/website`)
+
+User-facing docs: `docs/website/content/docs/` (MDX). Audience = org admins, operators, chat users — not contributors.
+
+When writing docs: **Why** → **Value** → **How** (UI paths, roles, screenshots). Prefer **System → Organization** over route paths. Keep schema, services, file paths, and HTTP API tables out of product docs (put them here or in code). Screenshots: `docs/website/public/screenshots/`; capture scripts: `docs/website/scripts/capture-*.sh`.
+
+## Docker
+
+One container: API + web + platform workers. Data at `/nakama/data` (`NAKAMA_CONFIG_DIR`). Dashboard: http://localhost:4310
+
+```bash
+# Prebuilt
+docker pull ghcr.io/ahmadrosid/nakama:latest
+docker run -d -p 4310:4310 -v nakama-data:/nakama/data --name nakama ghcr.io/ahmadrosid/nakama:latest
+
+# Build from source and run (uses buildx; default linux/amd64 -t nakama)
+./scripts/docker-build-run.sh
+
+# Fresh start (removes container, volume, image)
+./scripts/docker-destroy.sh
+./scripts/docker-build-run.sh
+```
+
+Runtime dependencies are baked into the image from committed lockfiles, not resolved
+at build time. To change them, edit the manifest, regenerate the lockfile for both
+image architectures, and commit both files:
+
+```bash
+cd .docker/runtime-deps   # or .docker/meet-deps for the optional Meet build
+bun install --lockfile-only --os=linux --cpu='*'
+```
 
 ## Multi-tenancy
 
-Organizations isolate tenant-owned data: profiles, sessions, automations, tasks, tools, MCP servers, skills, and usage stats. Each row carries an optional `org_id` column (see `packages/db/sql/schema.sql` and `migrateTenantOrgScope` in `packages/db/src/migrate.ts`).
+Orgs isolate profiles, sessions, automations, tools, MCP, skills, usage (`org_id` — see `packages/db/sql/schema.sql`, `migrateTenantOrgScope`).
 
-**Actors and roles**
+**Org context:** every authed call except `/v1/auth/*` and `/v1/platform/*` needs `X-Org-Id` (`@nakama/client`) or the active org stored on the browser session (`active_org_id`, set by `POST /v1/auth/active-org`). Middleware: `org-middleware.ts`; guards: `org-guards.ts`.
 
-| Actor | Scope | Capabilities |
-|---|---|---|
-| Platform admin | Deployment | Create/list orgs (`/v1/platform/orgs`), manage profiles/tools/MCP/skills |
-| Org admin | One org | Invite/remove members, change roles (`/v1/orgs/{orgId}/members`) |
-| Org member | One org | Chat, run agents, manage automations/tasks |
-| Org viewer | One org | Read chat history only — blocked from agent invocation and mutations |
-
-**Org context on requests**
-
-Every authenticated API call (except `/v1/auth/*` and `/v1/platform/*`) requires org context via `X-Org-Id` header (set by `@nakama/client` and tests) or `active_org_id` on the browser session cookie (set via `POST /v1/auth/active-org`). Org middleware (`apps/server/src/http/org-middleware.ts`) verifies membership and attaches `orgRole`; role guards live in `apps/server/src/http/org-guards.ts`.
-
-**Onboarding flow**
-
-- Fresh install: `POST /v1/auth/setup` creates the first org, admin user, and browser session.
-- Additional orgs: platform admin creates via `POST /v1/platform/orgs`.
-- New members: org admin invites via `/v1/orgs/{orgId}/invites`; invitee accepts via `POST /v1/auth/accept-invite`.
-- Multi-org users: web org switcher (`apps/web/src/components/OrgSwitcher.tsx`) or `client.setActiveOrg()`.
-
-**Where to make org-related changes**
-
-| What | File |
+| Change | Where |
 |---|---|
-| Org CRUD, invites, member management | `apps/server/src/services/org-service.ts` |
+| Org CRUD / invites / members | `apps/server/src/services/org-service.ts` |
 | Platform org routes | `apps/server/src/http/routes/platform-orgs.ts` |
-| Org member routes | `apps/server/src/http/routes/org-members.ts` |
-| Auth setup, login, active-org switching | `apps/server/src/http/routes/auth.ts` |
-| Org types and DB adapter methods | `packages/db/src/types.ts`, `packages/db/src/adapters/sqlite.ts` |
-| API contract types | `packages/core/src/contract.ts` |
-| Client org header injection | `packages/client/src/client.ts` (`setOrgId`, `X-Org-Id`) |
-| Web auth state and org switcher | `apps/web/src/context/auth-context.tsx`, `OrgSwitcher.tsx` |
+| Member routes | `…/routes/org-members.ts` |
+| Auth / active-org | `…/routes/auth.ts` |
+| DB types / SQLite | `packages/db/src/{types.ts,adapters/sqlite.ts}` |
+| Contracts | `packages/core/src/contract.ts` |
+| Client `X-Org-Id` | `packages/client/src/client.ts` |
+| Web auth / switcher | `apps/web/src/context/auth-context.tsx`, `OrgSwitcher.tsx` |
 
-## System prompt — where to make changes
+## System prompt
 
-Soul + skills catalog/capability are merged in `agent-service` `resolveProfileSystemPrompt` before `generateReply`:
+Merged in `agent-service` `resolveProfileSystemPrompt` → `generateReply` (`provider.generateChat` / `streamChat`):
 
-| What you want to change | File | Function |
+| Change | File | Fn |
 |---|---|---|
-| Static chat structure (identity, USER.md, tools, timezone, channel rules) | `packages/agent/src/chat-prompt.ts` | `buildChatSystemPrompt` |
-| Soul/identity content (SOUL.md, STYLE.md, INSTRUCTIONS.md, MEMORY.md) | `packages/core/src/soul/compose.ts` | `composeSoulSystemPrompt` |
-| Skills catalog, matched skill bodies, agent-browser capability | `packages/core/src/skills/compose.ts` | `composeSkillsCatalog`, `composeMatchedSkillsPrompt`, `composeAgentBrowserCapabilityPrompt` |
-| Dynamic per-turn context (current date, etc.) | `packages/agent/src/chat.ts` | `generateReply` |
+| Chat structure (USER.md, tools, timezone, channels) | `packages/agent/src/chat-prompt.ts` | `buildChatSystemPrompt` |
+| Soul content | `packages/core/src/soul/compose.ts` | `composeSoulSystemPrompt` |
+| Skills catalog / matched / agent-browser | `packages/core/src/skills/compose.ts` | `composeSkillsCatalog`, `composeMatchedSkillsPrompt`, `composeAgentBrowserCapabilityPrompt` |
+| Per-turn context (date, etc.) | `packages/agent/src/chat.ts` | `generateReply` |
 
-`generateReply` is the final dispatch point — it calls `provider.generateChat()` / `provider.streamChat()` with the assembled system prompt string.
+## Soul (`packages/core/src/soul/`)
 
-## Soul System (`packages/core/src/soul/`)
-
-Each profile's soul lives at `~/.nakama/orgs/{orgId}/profiles/{profileId}/` (`getProfileSoulDir` in `packages/core/src/soul/resolve.ts`):
-
-| File | Purpose |
-|---|---|
-| `SOUL.md` | Identity |
-| `STYLE.md` | Voice and writing style |
-| `INSTRUCTIONS.md` | Operating instructions |
-| `MEMORY.md` | Cross-session continuity (facts/preferences) |
-
-Loaded by `loadSoulStack()` (`load.ts`); injected by `composeSoulSystemPrompt()` (`compose.ts`).
+Profile workspace / soul dir: `~/.nakama/orgs/{orgId}/profiles/{profileId}/` (`getProfileSoulDir`). Override root: `NAKAMA_CONFIG_DIR`. Load: `loadSoulStack()`; inject: `composeSoulSystemPrompt()`.
 
 ## Tools (`packages/core/src/tools/`)
 
-- `update-profile-memory` skill — writes facts to MEMORY.md via file tools
-- `archive-profile-memory` skill — archives bullets from MEMORY.md to memory-archive/ via file tools
-- `save-artifact` skill — saves persistent text outputs under artifacts/ via write_file
-- `knowledge_base_search` — search uploaded documents
-- `web_search` — web search
-- `email` — list, read, search, and send mail via deployment mailbox settings
-- `search_files` / `ripgrep` — file/content search
-- `bash` (Super Bot) — run shell commands in the profile workspace
-- `sub_agent` (opt-in) — run a focused same-profile sub-agent for delegated research, review, or planning; returns a structured result (not for repo coding — use `coding-delegation` + `bash`)
-- `coding-delegation` skill — invoke Codex / Claude Code / OpenCode for repo coding work via `bash` and harness CLI templates
-- `agent-browser` skill (opt-in) — interactive browser automation via `bash` and the [agent-browser](https://github.com/vercel-labs/agent-browser) CLI (login walls, forms, snapshots with `@e` refs); requires host `agent-browser` + Chrome install; fresh session each run — see `docs/website/agent-browser.md`
-- `create-profile` skill (Super Bot only) — confirm-first profile factory; calls `create_profile` only after explicit confirmation (`packages/core/src/skills/bundled/create-profile/`, tool in `apps/server/src/tools/super-bot-tools.ts`)
-- Composio — hybrid org toolkit catalog + per-user OAuth via Integrations (see `docs/website/composio.md`)
+| Tool / skill | Notes |
+|---|---|
+| `update-profile-memory` / `archive-profile-memory` | MEMORY.md ↔ memory-archive/ |
+| `save_artifact` / `artifact-design` | Persist under `artifacts/`; skill holds design rules |
+| `knowledge_base_search` / `web_search` / `email` | KB, web, mailbox |
+| `search_files` / `ripgrep` | File/content search |
+| `bash` | Profile workspace shell — assign per profile; Super Nakama by default |
+| `sub_agent` | Opt-in same-profile delegate (not repo coding) |
+| `coding-agent` | Repo coding via Codex / Claude Code / OpenCode / pi / Cursor Agent (`agent`) through `bash` — use instead of `sub_agent` for coding |
+| `agent-browser` | Opt-in browser CLI; needs host install — `docs/website/agent-browser.md` |
+| `create-profile` | Super Nakama only, confirm-first — `apps/server/src/tools/super-nakama-tools.ts` |
+| `skill_manage` | Web/cli skill CRUD + auto-assign — `apps/server/src/tools/skill-manage-tool.ts` (approval, curator, post-turn review live there) |
+| Composio | Org toolkits + per-user OAuth — `docs/website/composio.md` |
 
-## Channel artifacts (Telegram / Discord)
-
-Attach/share flows for profile artifacts: `packages/core/src/channel-artifacts.ts`, `channel-artifact-delivery.ts`. Per-channel handlers: `apps/platform/{telegram,discord}/src/channel-artifact-flow.ts`.
+**Channel artifacts (Telegram/Discord/WhatsApp):** `packages/core/src/channel-artifacts.ts`, `channel-artifact-delivery.ts`; handlers in `apps/platform/{telegram,discord,whatsapp}/src/channel-artifact-flow.ts`.
 
 ## Tool execution & workspace
 
-**Start here for path/context bugs** (e.g. custom tool resolving files under the repo instead of `~/.nakama`).
+Path bugs (tool resolves under repo instead of `~/.nakama`) → start here.
 
 | Path | Purpose |
 |---|---|
-| `~/.nakama/orgs/{orgId}/profiles/{profileId}/` | Profile workspace (soul files, KB, agent file I/O) — `getProfileSoulDir()` |
-| `~/.nakama/tools/*.js` | Custom JavaScript tool modules — `getCustomToolsDir()` |
+| `~/.nakama/orgs/{orgId}/profiles/{profileId}/` | Profile workspace / soul — `getProfileSoulDir()` |
+| `~/.nakama/tools/*.js`, `*.py` | Custom JS / Python tools — `getCustomToolsDir()` |
 
-Override config root with `NAKAMA_CONFIG_DIR`.
+Always build context with `buildToolExecutionContext()` (`packages/core/src/tools/context.ts`) so `workspaceRoot` = soul dir. Custom JS: `context.workspaceRoot`, **not** `process.cwd()`. Custom Python: `NAKAMA_WORKSPACE_ROOT` env.
 
-### `ToolContext` (passed to every `tool.run(input, context)`)
+| | Built-in | Custom JS | Custom Python |
+|---|---|---|---|
+| Code | `packages/core/src/tools/`, `apps/server/src/tools/` | `~/.nakama/tools/*.js` | `~/.nakama/tools/*.py` |
+| Workspace | `getProfileSoulDir` inside handler | `context.workspaceRoot` | `NAKAMA_WORKSPACE_ROOT` env |
+| Loader | builtins map | `javascript-tool-loader.ts` | `python-tool-loader.ts` |
 
-Type: `packages/core/src/contract.ts` (`ToolContext`). Populated by the server, not by the web UI.
-
-| Field | Set in chat | Set in playground |
-|---|---|---|
-| `orgId`, `profileId`, `sessionId` | Yes | `profileId` resolved server-side |
-| `agentDepth` | When sub-agent nesting | No |
-| `workspaceRoot` | Yes (via helper below) | Yes (via helper below) |
-| `userId` | When known | Yes |
-
-**Always use `buildToolExecutionContext()`** (`packages/core/src/tools/context.ts`) when constructing context. It sets `workspaceRoot` from `getProfileSoulDir(orgId, profileId)` unless already explicit.
-
-Custom JS tools should resolve relative paths against `context.workspaceRoot` — **not** `process.cwd()` (dev server cwd is often the monorepo root).
-
-### Built-in vs custom JavaScript tools
-
-| | Built-in tools | Custom JS tools |
-|---|---|---|
-| Code | `packages/core/src/tools/`, `apps/server/src/tools/` | `~/.nakama/tools/*.js` |
-| Workspace | Resolved inside each handler via `getProfileSoulDir(orgId, profileId)` | Must use `context.workspaceRoot` (or absolute paths) |
-| Loader | Registered in tool resolver / builtins map | `apps/server/src/services/javascript-tool-loader.ts` |
-
-### Execution paths (grep these first)
-
-| Flow | Entry | Context built |
-|---|---|---|
-| Agent chat | `apps/server/src/services/agent-service.ts` → `buildChatSession()` | `buildToolExecutionContext({ orgId, profileId, sessionId, userId })` |
-| Tool loop | `packages/agent/src/tool-loop.ts` → `executeToolCall()` | Passed through unchanged |
-| Tools playground | `POST /v1/tools/:toolId/run` → `apps/server/src/http/routes/tools.ts` → `agent.runToolPlayground()` | Profile: first assignee of tool, else org default — `resolvePlaygroundProfileId()` in `agent-service.ts` |
-| Param suggest | `POST /v1/tools/:toolId/params/suggest` | Same service, no execution |
-
-### Tools playground (web)
-
-| What | Where |
+| Flow | Entry |
 |---|---|
-| Page route | `/system/playground/:toolId` — `apps/web/src/pages/ToolPlaygroundPage.tsx` |
-| Run UI | `apps/web/src/components/tools/ToolPlaygroundPanel.tsx` |
-| Tools list link | `apps/web/src/components/soul-tools/ToolsTab.tsx` |
-| Path helpers | `toolPlaygroundPath()`, `toolsTabPath()` in `apps/web/src/lib/navigation.ts` |
-| Access | Org admin or platform admin — `canUseToolPlayground()` in `navigation.ts` |
+| Chat | `agent-service` → `buildChatSession()` → `buildToolExecutionContext(...)` |
+| Tool loop | `packages/agent/src/tool-loop.ts` → `executeToolCall()`; parallel batching in `packages/agent/src/chat.ts` when every call is `parallelSafe` |
+| Playground | `POST /v1/tools/:toolId/run` → `runToolPlayground()` |
+| Param suggest | `POST /v1/tools/:toolId/params/suggest` |
 
-### Debugging checklist
+**Parallel tool calls:** `parallelSafe: true` on read/search/fetch builtins (`read_file`, `search_files`, `knowledge_base_search`, `web_search`, `web_fetch`). Mutating / shell / delegation stay sequential. Custom JS opts in via `handlerConfig.parallelSafe`; Python always sequential. Mixed turn → whole turn sequential.
 
-1. Read the custom tool module in `~/.nakama/tools/` — check how it resolves paths.
-2. Grep `runToolPlayground` and confirm `buildToolExecutionContext` is used with a real `profileId`.
-3. If the error path is under the monorepo root, the tool likely fell back to `process.cwd()` because `workspaceRoot` was missing.
-4. Put test files under the **assigned profile's** workspace dir, not the repo.
+**Debug:** (1) path under `~/.nakama/tools/`, (2) `buildToolExecutionContext` + real `profileId`, (3) monorepo-root paths ⇒ missing `workspaceRoot`, (4) test files in the assigned profile workspace. Super Nakama rules: `SUPER_NAKAMA_SYSTEM_PROMPT` in `packages/db/src/constants.ts`.
 
-Super Bot tool-authoring rules (write modules to `~/.nakama/tools/`, export `run(input, context)`) live in `packages/db/src/constants.ts` (`SUPER_BOT_SYSTEM_PROMPT`).
+**Playground UI:** `/system/playground/:toolId` — `ToolPlaygroundPage.tsx`, `ToolPlaygroundPanel.tsx`; admin-only via `canUseToolPlayground()`.
 
-## Key packages
+## Packages & server
 
-- `packages/core` — soul system, tools, skills, contracts, types
-- `packages/agent` — chat loop, prompt composition, history compaction
-- `packages/db` — database layer
+- `apps/{server,web,cli}`; channel workers in `apps/platform/{telegram,whatsapp,discord,automation}`
+- `packages/core` — soul, tools, skills, contracts
+- `packages/agent` — chat loop, prompts, compaction
+- `packages/db` — DB
 - `packages/client` — API client
 
-## Server notes
+Server: Hono in `apps/server/src/http/app.ts`. Middleware: auth → org → routes (`routes/*`). OpenAPI: `openapi.ts` (`/openapi.json`). Viewers are blocked by `requireNotViewer` (worker control, agent invoke).
 
-- HTTP runtime lives in `apps/server/src/http/app.ts` and uses Hono.
-- Middleware order: auth (`auth-middleware.ts`) → org context (`org-middleware.ts`) → routes.
-- Routes live in `apps/server/src/http/routes/*`.
-- Auth and CSRF checks live in `apps/server/src/http/auth-middleware.ts` with helpers in `shared.ts`.
-- OpenAPI: `/openapi.json` is served dynamically from the Hono app; route registration (`apps/server/src/http/openapi.ts`) is the source of truth.
-- **Platform-admin-only routes:** profiles, tools, MCP servers, skills (mutations). Org admins cannot create profiles via the API/UI — they use profiles provisioned by the platform admin (or Super Bot via the confirm-first `create-profile` skill + `create_profile` tool).
-- **Org-admin routes:** member list, invite, add, remove, role change under `/v1/orgs/{orgId}/…`.
-- **Viewer restrictions:** `requireNotViewer` on worker control and agent-invocation paths.
+Don't use compound engineering skills!

@@ -1,19 +1,22 @@
 import { hasActiveAgentQuestionnaire } from "@nakama/core/agent-questionnaire";
-import type { AgentQuestionAnswer, AgentQuestionnaire } from "@nakama/core/contract";
+import type {
+  AgentQuestionAnswer,
+  AgentQuestionnaire,
+} from "@nakama/core/contract";
+import { Button } from "@nakama/ui/button";
 import type { KeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type DraftAnswerState,
+  isCustomChoice,
+} from "@/components/chat/agent-questionnaire.shared";
 import { AgentQuestionnaireNav } from "@/components/chat/agent-questionnaire-nav";
 import { AgentQuestionnaireQuestion } from "@/components/chat/agent-questionnaire-question";
-import {
-  isCustomChoice,
-  type DraftAnswerState,
-} from "@/components/chat/agent-questionnaire.shared";
-import { Button } from "@/components/ui/button";
 
 interface AgentQuestionnairePanelProps {
-  questionnaire: AgentQuestionnaire | null;
   disabled?: boolean;
   onSubmit: (answers: AgentQuestionAnswer[]) => void;
+  questionnaire: AgentQuestionnaire | null;
 }
 
 export function AgentQuestionnairePanel({
@@ -24,28 +27,30 @@ export function AgentQuestionnairePanel({
   const [answers, setAnswers] = useState<Record<string, DraftAnswerState>>({});
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const activeQuestionRef = useRef<HTMLDivElement | null>(null);
+  const [syncedQuestionnaire, setSyncedQuestionnaire] = useState(questionnaire);
 
-  useEffect(() => {
-    if (!questionnaire) {
+  if (questionnaire !== syncedQuestionnaire) {
+    setSyncedQuestionnaire(questionnaire);
+
+    if (questionnaire) {
+      setAnswers(
+        Object.fromEntries(
+          questionnaire.questions.map((question) => [
+            question.id,
+            {
+              customAnswer: "",
+              selectedChoiceId: null,
+              selectedChoiceLabel: null,
+            },
+          ])
+        )
+      );
+      setCurrentQuestionIndex(0);
+    } else {
       setAnswers({});
       setCurrentQuestionIndex(0);
-      return;
     }
-
-    setAnswers(
-      Object.fromEntries(
-        questionnaire.questions.map((question) => [
-          question.id,
-          {
-            selectedChoiceId: null,
-            selectedChoiceLabel: null,
-            customAnswer: "",
-          },
-        ]),
-      ),
-    );
-    setCurrentQuestionIndex(0);
-  }, [questionnaire]);
+  }
 
   const resolvedAnswers = useMemo(() => {
     if (!questionnaire) {
@@ -54,17 +59,23 @@ export function AgentQuestionnairePanel({
 
     return questionnaire.questions.map((question) => {
       const state = answers[question.id];
-      const customChoice = question.choices.find((choice) => isCustomChoice(choice));
+
+      const customChoice = question.choices.find((choice) =>
+        isCustomChoice(choice)
+      );
+
       const useCustomAnswer =
         (question.allowCustomAnswer || Boolean(customChoice)) &&
         (state?.customAnswer.trim().length ?? 0) > 0;
+
       const answer = useCustomAnswer
-        ? state?.customAnswer.trim() ?? ""
-        : state?.selectedChoiceLabel ?? "";
+        ? (state?.customAnswer.trim() ?? "")
+        : (state?.selectedChoiceLabel ?? "");
+
       return {
-        questionId: question.id,
-        prompt: question.prompt,
         answer,
+        prompt: question.prompt,
+        questionId: question.id,
       };
     });
   }, [answers, questionnaire]);
@@ -86,16 +97,20 @@ export function AgentQuestionnairePanel({
       }
 
       const input = activeQuestionElement.querySelector<HTMLInputElement>(
-        "input:not(:disabled)",
-      );
-      const selectedOption = activeQuestionElement.querySelector<HTMLButtonElement>(
-        "button[data-question-option='true'][data-selected='true']:not(:disabled)",
-      );
-      const firstOption = activeQuestionElement.querySelector<HTMLButtonElement>(
-        "button[data-question-option='true']:not(:disabled)",
+        "input:not(:disabled)"
       );
 
-      (input ?? selectedOption ?? firstOption)?.focus();
+      const selectedOption =
+        activeQuestionElement.querySelector<HTMLButtonElement>(
+          "button[data-question-option='true'][data-selected='true']:not(:disabled)"
+        );
+
+      const firstOption =
+        activeQuestionElement.querySelector<HTMLButtonElement>(
+          "button[data-question-option='true']:not(:disabled)"
+        );
+
+      (selectedOption ?? firstOption ?? input)?.focus();
     });
 
     return () => window.cancelAnimationFrame(focusTarget);
@@ -107,15 +122,25 @@ export function AgentQuestionnairePanel({
 
   const activeQuestionnaire = questionnaire!;
   const activeQuestion = activeQuestionnaire.questions[currentQuestionIndex]!;
+
   const activeState = answers[activeQuestion.id] ?? {
+    customAnswer: "",
     selectedChoiceId: null,
     selectedChoiceLabel: null,
-    customAnswer: "",
   };
+
   const canGoPrevious = currentQuestionIndex > 0;
-  const canGoNext = currentQuestionIndex < activeQuestionnaire.questions.length - 1;
-  const activeAnswer = resolvedAnswers[currentQuestionIndex]?.answer.trim() ?? "";
-  const canSubmit = resolvedAnswers.some((answer) => answer.answer.trim().length > 0);
+
+  const canGoNext =
+    currentQuestionIndex < activeQuestionnaire.questions.length - 1;
+
+  const activeAnswer =
+    resolvedAnswers[currentQuestionIndex]?.answer.trim() ?? "";
+
+  const canSubmit = resolvedAnswers.some(
+    (answer) => answer.answer.trim().length > 0
+  );
+
   const canContinue = canGoNext ? activeAnswer.length > 0 : canSubmit;
 
   function handleContinue(): void {
@@ -125,6 +150,7 @@ export function AgentQuestionnairePanel({
 
     if (canGoNext) {
       setCurrentQuestionIndex((current) => current + 1);
+
       return;
     }
 
@@ -154,8 +180,9 @@ export function AgentQuestionnairePanel({
     }
 
     const selectedIndex = activeQuestion.choices.findIndex(
-      (choice) => choice.id === activeState.selectedChoiceId,
+      (choice) => choice.id === activeState.selectedChoiceId
     );
+
     const nextIndex =
       selectedIndex === -1
         ? offset > 0
@@ -175,12 +202,26 @@ export function AgentQuestionnairePanel({
     if (event.key === "ArrowDown") {
       event.preventDefault();
       selectChoiceByOffset(1);
+
       return;
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
       selectChoiceByOffset(-1);
+
+      return;
+    }
+
+    const isTyping = event.target instanceof HTMLInputElement;
+
+    if (!isTyping && /^[1-9]$/.test(event.key)) {
+      event.preventDefault();
+
+      if (!disabled) {
+        selectChoice(Number(event.key) - 1);
+      }
+
       return;
     }
 
@@ -193,6 +234,7 @@ export function AgentQuestionnairePanel({
   function handleSkip(): void {
     if (canGoNext) {
       setCurrentQuestionIndex((current) => current + 1);
+
       return;
     }
 
@@ -200,27 +242,20 @@ export function AgentQuestionnairePanel({
   }
 
   return (
-    <div className="px-3">
-      <aside
-        className="w-full overflow-hidden rounded-t-xl rounded-b-none border border-border bg-card shadow-xs"
+    <div className="w-full max-w-xl">
+      <section
         aria-label="Agent questions"
+        className="rounded-xl border border-border bg-background"
       >
         <AgentQuestionnaireNav
+          answered={resolvedAnswers.map(
+            (answer) => answer.answer.trim().length > 0
+          )}
           currentQuestionIndex={currentQuestionIndex}
-          totalQuestions={activeQuestionnaire.questions.length}
-          disabled={disabled}
-          canGoPrevious={canGoPrevious}
-          canGoNext={canGoNext}
-          activeAnswerLength={activeAnswer.length}
-          onPrevious={() => setCurrentQuestionIndex((current) => current - 1)}
-          onNext={() => setCurrentQuestionIndex((current) => current + 1)}
         />
-        <div className="space-y-4 px-3 py-3" onKeyDown={handleKeyDown}>
-          <div ref={activeQuestionRef} key={activeQuestion.id}>
+        <div className="space-y-3 px-3 pt-1 pb-3" onKeyDown={handleKeyDown}>
+          <div key={activeQuestion.id} ref={activeQuestionRef}>
             <AgentQuestionnaireQuestion
-              questionIndex={currentQuestionIndex}
-              question={activeQuestion}
-              state={activeState}
               disabled={disabled}
               onStateChange={(nextState) =>
                 setAnswers((current) => ({
@@ -228,23 +263,70 @@ export function AgentQuestionnairePanel({
                   [activeQuestion.id]: nextState,
                 }))
               }
+              question={activeQuestion}
+              state={activeState}
             />
           </div>
           <div className="flex items-center justify-between pt-1">
             <button
-              type="button"
+              className="text-muted-foreground text-sm transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
               disabled={disabled}
               onClick={handleSkip}
-              className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              type="button"
             >
               Skip
             </button>
-            <Button type="button" disabled={disabled || !canContinue} onClick={handleContinue}>
-              {canGoNext ? "Continue" : "Submit"}
-            </Button>
+            <div className="flex items-center gap-2">
+              {canGoPrevious ? (
+                <Button
+                  disabled={disabled}
+                  onClick={() =>
+                    setCurrentQuestionIndex((current) => current - 1)
+                  }
+                  type="button"
+                  variant="outline"
+                >
+                  Back
+                </Button>
+              ) : null}
+              <Button
+                disabled={disabled || !canContinue}
+                onClick={handleContinue}
+                type="button"
+              >
+                {canGoNext ? "Continue" : "Submit"}
+              </Button>
+            </div>
           </div>
         </div>
-      </aside>
+      </section>
     </div>
+  );
+}
+
+export function AgentQuestionnaireAnswers({
+  answers,
+}: {
+  answers: AgentQuestionAnswer[];
+}) {
+  return (
+    <section
+      aria-label="Agent questions"
+      className="w-full max-w-2xl rounded-xl border border-border bg-background px-3 py-3"
+    >
+      <p className="font-medium text-sm">Questions · Confirmed</p>
+      <div className="mt-3 space-y-3">
+        {answers.map((entry, index) => (
+          <div key={entry.questionId}>
+            <p className="font-medium text-sm">
+              {index + 1}. {entry.prompt}
+            </p>
+            <p className="mt-1 whitespace-pre-wrap text-muted-foreground text-sm">
+              {entry.answer || "Skipped"}
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

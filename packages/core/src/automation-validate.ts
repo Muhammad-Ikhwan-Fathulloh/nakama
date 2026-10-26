@@ -5,6 +5,9 @@ import { DEFAULT_TIMEZONE, validateTimezone } from "./user-config";
 const CRON_FIELD_PATTERN =
   /^(\*|[0-9]+(-[0-9]+)?(\/[0-9]+)?|\*\/[0-9]+|[0-9]+(,[0-9]+)*)$/;
 
+// A short response or reload may cross a one-shot's due time after it was listed.
+export const AUTOMATION_RUN_AT_GRACE_MS = 60_000;
+
 export function isValidCronExpression(cron: string): boolean {
   const fields = cron.trim().split(/\s+/);
 
@@ -17,6 +20,7 @@ export function isValidCronExpression(cron: string): boolean {
 
 export function isValidRunAt(at: string): boolean {
   const trimmed = at.trim();
+
   if (!trimmed) {
     return false;
   }
@@ -24,10 +28,13 @@ export function isValidRunAt(at: string): boolean {
   return Number.isFinite(Date.parse(trimmed));
 }
 
-export function isWorkerSchedulable(automation: {
-  enabled: boolean;
-  trigger: AutomationTrigger;
-}): boolean {
+export function isWorkerSchedulable(
+  automation: {
+    enabled: boolean;
+    trigger: AutomationTrigger;
+  },
+  now = Date.now()
+): boolean {
   if (!automation.enabled) {
     return false;
   }
@@ -37,7 +44,9 @@ export function isWorkerSchedulable(automation: {
   }
 
   if (automation.trigger.type === "runAt") {
-    return Date.parse(automation.trigger.at) > Date.now();
+    return (
+      Date.parse(automation.trigger.at) >= now - AUTOMATION_RUN_AT_GRACE_MS
+    );
   }
 
   return false;
@@ -45,11 +54,14 @@ export function isWorkerSchedulable(automation: {
 
 export function computeAutomationNextRunAt(
   trigger: AutomationTrigger,
-  userTimezone = DEFAULT_TIMEZONE,
+  userTimezone = DEFAULT_TIMEZONE
 ): string | null {
   if (trigger.type === "runAt") {
     const at = Date.parse(trigger.at);
-    return Number.isFinite(at) && at > Date.now() ? new Date(at).toISOString() : null;
+
+    return Number.isFinite(at) && at > Date.now()
+      ? new Date(at).toISOString()
+      : null;
   }
 
   if (trigger.type !== "schedule" || !trigger.cron.trim()) {
@@ -57,21 +69,24 @@ export function computeAutomationNextRunAt(
   }
 
   const timezone = trigger.timezone ?? userTimezone;
+
   const next = new Cron(trigger.cron, {
-    timezone,
     paused: true,
+    timezone,
   }).nextRun();
 
   return next ? next.toISOString() : null;
 }
 
 export function validateAutomationInput(input: {
-  name: string;
-  prompt: string;
+  // Undefined, not just empty: request bodies reach this unvalidated, so an
+  // absent field has to name itself here rather than throw a TypeError.
+  name: string | undefined;
+  prompt: string | undefined;
   trigger: AutomationTrigger;
 }): void {
-  const name = input.name.trim();
-  const prompt = input.prompt.trim();
+  const name = input.name?.trim() ?? "";
+  const prompt = input.prompt?.trim() ?? "";
 
   if (!name) {
     throw new Error("Automation name is required.");
@@ -100,7 +115,7 @@ export function validateAutomationInput(input: {
 
 export function resolveScheduleTimezone(
   trigger: AutomationTrigger,
-  userTimezone: string,
+  userTimezone: string
 ): AutomationTrigger {
   if (trigger.type === "schedule") {
     return {
@@ -120,4 +135,4 @@ export function resolveScheduleTimezone(
   return trigger;
 }
 
-export { validateTimezone, DEFAULT_TIMEZONE };
+export { DEFAULT_TIMEZONE, validateTimezone };

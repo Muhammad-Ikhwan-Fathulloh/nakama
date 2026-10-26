@@ -1,130 +1,144 @@
 import type {
+  CustomModelEntry,
+  OpenRouterRoutingSettings,
   ProviderInstanceSummary,
   ProviderModelOption,
   UpdateProviderRequest,
+  WireApi,
 } from "@nakama/core/contract";
+import {
+  defaultDiscoveryBaseUrl,
+  isDiscoveryModelProvider,
+} from "@nakama/core/discovery-providers";
 import { useMemo, useState } from "react";
 import { isCatalogShortlistProvider } from "@/components/catalog-provider-model-fields.shared";
-import { type ModelListRow } from "@/components/ModelListEditor";
+import type { ModelListRow } from "@/components/ModelListEditor";
 import { normalizeModelListRows } from "@/components/model-list-editor.shared";
-import {
-  seedCerebrasManageModelRows,
-  seedManageModelRows,
-  seedOpenRouterManageModelRows,
-} from "@/components/settings/provider-settings-seed";
+import { isShortlistBrowseProvider } from "@/components/shortlist-browse-providers.shared";
 import { formatError } from "@/lib/client";
 import {
-  formatProviderLabel,
+  defaultOllamaSetupBaseUrl,
   type SelectedProvider,
   validateApiKeyForProvider,
   validateBaseUrlInput,
-  validateCerebrasModelsInput,
   validateCustomModelsInput,
   validateDisplayNameInput,
   validateOpenCodeGoModelsInput,
   validateOpenRouterModelsInput,
+  validateShortlistCapabilityModelsInput,
 } from "@/lib/models";
+
+function seedManageModelRows(
+  customModels: CustomModelEntry[] | undefined,
+  configuredModels: ProviderModelOption[]
+): ModelListRow[] {
+  const models: CustomModelEntry[] = customModels?.length
+    ? customModels
+    : configuredModels;
+
+  return models.map((model) => ({
+    cachedInputPerMillionUsd: model.cachedInputPerMillionUsd,
+    contextWindow: model.contextWindow,
+    default: model.default,
+    id: model.id,
+    inputPerMillionUsd: model.inputPerMillionUsd,
+    maxOutputTokens: model.maxOutputTokens,
+    name: model.name ?? model.id,
+    outputPerMillionUsd: model.outputPerMillionUsd,
+    supportsThinking: model.supportsThinking,
+    supportsVision: model.supportsVision,
+  }));
+}
 
 export function useProviderInstanceCard({
   instance,
   catalog,
   onUpdate,
   onDelete,
+  onManage,
   onError,
 }: {
   instance: ProviderInstanceSummary;
   catalog: ProviderModelOption[];
-  onUpdate: (providerId: string, request: UpdateProviderRequest) => Promise<void>;
+  onUpdate: (
+    providerId: string,
+    request: UpdateProviderRequest
+  ) => Promise<void>;
   onDelete: (providerId: string) => Promise<void>;
+  onManage?: (
+    providerId: string,
+    action: "clear" | "use-stored"
+  ) => Promise<void>;
   onError: (error: string | null) => void;
 }) {
   const [replaceKeyOpen, setReplaceKeyOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [editLabel, setEditLabel] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
+  const [editWireApi, setEditWireApi] = useState<WireApi>("chat");
   const [manageModels, setManageModels] = useState<ModelListRow[]>([]);
 
+  const [openRouterRouting, setOpenRouterRouting] =
+    useState<OpenRouterRoutingSettings>({});
+
+  // SAFETY: Provider instance summaries use the selected-provider contract.
   const providerType = instance.type as SelectedProvider;
-  const isCompatible = providerType === "openai_compatible";
+  const isXaiOAuth = providerType === "xai_oauth";
+  const isChatgpt = providerType === "chatgpt";
+  const isOllama = providerType === "ollama";
+  // Discovery providers (OpenAI-compatible, MiniMax, …) fetch model lists
+  // live from the platform's /models endpoint, so their instances use the
+  // same base-URL + remote-browse editing flow.
+  const isDiscovery = isDiscoveryModelProvider(providerType);
+  const isCompatibleLike = isDiscovery || isOllama;
   const isOpenRouter = providerType === "openrouter";
-  const isCerebras = providerType === "cerebras";
+  const isShortlistBrowse = isShortlistBrowseProvider(providerType);
   const isCatalogShortlist = isCatalogShortlistProvider(providerType);
 
   const catalogModelsForType = useMemo(
     () => catalog.filter((model) => model.provider === providerType),
-    [catalog, providerType],
+    [catalog, providerType]
   );
 
   const instanceModels = useMemo(
     () => catalog.filter((model) => model.providerId === instance.id),
-    [catalog, instance.id],
+    [catalog, instance.id]
   );
-
-  const description = useMemo(() => {
-    const parts: string[] = [];
-    const typeLabel = formatProviderLabel(providerType, instance.label);
-
-    if (typeLabel !== instance.label.trim()) {
-      parts.push(typeLabel);
-    }
-
-    if (instance.hasApiKey) {
-      parts.push("API key saved");
-    }
-
-    parts.push(`${instance.modelCount} models`);
-    return parts.join(" · ");
-  }, [instance.hasApiKey, instance.label, instance.modelCount, providerType]);
 
   const openManage = () => {
     setDialogError(null);
+    setOpenRouterRouting(instance.openRouterRouting ?? {});
 
-    if (isCompatible) {
-      setManageModels(seedManageModelRows(instance.customModels, instanceModels));
-    } else if (isOpenRouter) {
-      setManageModels(
-        seedOpenRouterManageModelRows(
-          instance.customModels,
-          null,
-          instanceModels[0]?.name,
-        ),
-      );
-    } else if (isCerebras) {
-      setManageModels(
-        seedCerebrasManageModelRows(
-          instance.customModels,
-          null,
-          instanceModels[0]?.name,
-        ),
-      );
-    } else if (isCatalogShortlist) {
-      setManageModels(
-        seedManageModelRows(
-          instance.customModels,
-          instance.customModels?.length ? instanceModels : [],
-        ),
-      );
-    }
+    setManageModels(seedManageModelRows(instance.customModels, instanceModels));
 
     setManageOpen(true);
   };
 
   const openEdit = () => {
-    setEditLabel(instance.label);
-    setEditBaseUrl(instance.baseUrl ?? "");
-    setManageModels(seedManageModelRows(instance.customModels, instanceModels));
     setDialogError(null);
+    setEditLabel(instance.label);
+    setEditBaseUrl(
+      instance.baseUrl ??
+        (isOllama
+          ? defaultOllamaSetupBaseUrl(instance.hostMode ?? "local")
+          : isDiscovery
+            ? (defaultDiscoveryBaseUrl(providerType) ?? "")
+            : "")
+    );
+    setEditWireApi(instance.wireApi ?? "chat");
+    setManageModels(seedManageModelRows(instance.customModels, instanceModels));
     setEditOpen(true);
   };
 
   const runUpdate = async (
     request: Parameters<typeof onUpdate>[1],
-    close?: () => void,
+    close?: () => void
   ) => {
     setBusy(true);
     setDialogError(null);
@@ -142,11 +156,20 @@ export function useProviderInstanceCard({
     }
   };
 
+  const reconnect = async (
+    request: Pick<UpdateProviderRequest, "chatgptOAuth" | "xaiOAuth">
+  ) => {
+    await runUpdate(request, () => setReplaceKeyOpen(false));
+  };
+
   const handleReplaceKey = async () => {
-    const nextError = validateApiKeyForProvider(apiKey, providerType);
+    const nextError = validateApiKeyForProvider(apiKey, providerType, {
+      ollamaHostMode: instance.hostMode ?? undefined,
+    });
 
     if (nextError) {
       setDialogError(nextError);
+
       return;
     }
 
@@ -157,12 +180,31 @@ export function useProviderInstanceCard({
     });
   };
 
+  const handleManageKey = async (action: "clear" | "use-stored") => {
+    if (!onManage) {
+      return;
+    }
+
+    setBusy(true);
+    setDialogError(null);
+
+    try {
+      await onManage(instance.id, action);
+      setReplaceKeyOpen(false);
+    } catch (error) {
+      setDialogError(formatError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleDelete = async () => {
     setBusy(true);
     onError(null);
 
     try {
       await onDelete(instance.id);
+      setDeleteOpen(false);
     } catch (error) {
       onError(formatError(error));
     } finally {
@@ -171,131 +213,119 @@ export function useProviderInstanceCard({
   };
 
   const saveCompatible = async () => {
-    const displayNameError = validateDisplayNameInput(editLabel);
-    const baseUrlError = validateBaseUrlInput(editBaseUrl);
+    const displayNameError =
+      providerType === "netra" ? null : validateDisplayNameInput(editLabel);
+
+    const baseUrlError =
+      providerType === "netra" ? null : validateBaseUrlInput(editBaseUrl);
+
     const modelsError = validateCustomModelsInput(manageModels);
 
     if (displayNameError || baseUrlError || modelsError) {
       setDialogError(displayNameError ?? baseUrlError ?? modelsError);
+
       return;
     }
 
-    await runUpdate(
-      {
-        label: editLabel,
-        baseUrl: editBaseUrl,
-        customModels: normalizeModelListRows(manageModels),
-      },
-      () => setEditOpen(false),
-    );
+    const request: UpdateProviderRequest = {
+      customModels: normalizeModelListRows(manageModels),
+    };
+
+    if (providerType !== "netra") {
+      request.baseUrl = editBaseUrl;
+      request.label = editLabel;
+    }
+
+    if (isOllama) {
+      request.hostMode = editBaseUrl.toLowerCase().includes("ollama.com")
+        ? "cloud"
+        : "local";
+    }
+
+    if (!isOllama && providerType !== "netra") {
+      request.wireApi = editWireApi;
+    }
+
+    await runUpdate(request, () => setEditOpen(false));
   };
 
-  const saveCompatibleManage = async () => {
-    const modelsError = validateCustomModelsInput(manageModels);
+  const saveManageModels = async () => {
+    const modelsError = isOpenRouter
+      ? validateOpenRouterModelsInput(manageModels)
+      : isShortlistBrowse
+        ? validateShortlistCapabilityModelsInput(manageModels)
+        : providerType === "opencode_go"
+          ? validateOpenCodeGoModelsInput(manageModels)
+          : validateCustomModelsInput(manageModels);
 
     if (modelsError) {
       setDialogError(modelsError);
+
       return;
     }
 
-    await runUpdate(
-      { customModels: normalizeModelListRows(manageModels) },
-      () => setManageOpen(false),
-    );
-  };
+    const request: UpdateProviderRequest = {
+      customModels: normalizeModelListRows(manageModels),
+    };
 
-  const saveOpenRouter = async () => {
-    const modelsError = validateOpenRouterModelsInput(manageModels);
-
-    if (modelsError) {
-      setDialogError(modelsError);
-      return;
+    if (isOpenRouter) {
+      request.openRouterRouting = openRouterRouting;
     }
 
-    await runUpdate(
-      { customModels: normalizeModelListRows(manageModels) },
-      () => setManageOpen(false),
-    );
-  };
-
-  const saveCerebras = async () => {
-    const modelsError = validateCerebrasModelsInput(manageModels);
-
-    if (modelsError) {
-      setDialogError(modelsError);
-      return;
-    }
-
-    await runUpdate(
-      { customModels: normalizeModelListRows(manageModels) },
-      () => setManageOpen(false),
-    );
-  };
-
-  const saveCatalogShortlist = async () => {
-    const modelsError =
-      providerType === "opencode_go"
-        ? validateOpenCodeGoModelsInput(manageModels)
-        : validateCustomModelsInput(manageModels);
-
-    if (modelsError) {
-      setDialogError(modelsError);
-      return;
-    }
-
-    await runUpdate(
-      { customModels: normalizeModelListRows(manageModels) },
-      () => setManageOpen(false),
-    );
+    await runUpdate(request, () => setManageOpen(false));
   };
 
   const handleManageModelsChange = (rows: ModelListRow[]) => {
     setManageModels(rows);
+
     if (dialogError) {
       setDialogError(null);
     }
   };
 
-  const editManageModels = manageModels.length
-    ? manageModels
-    : seedManageModelRows(instance.customModels, instanceModels);
-
   return {
-    providerType,
-    isCompatible,
-    isOpenRouter,
-    isCerebras,
-    isCatalogShortlist,
-    catalogModelsForType,
-    description,
-    busy,
-    dialogError,
-    replaceKeyOpen,
-    setReplaceKeyOpen,
-    editOpen,
-    setEditOpen,
-    manageOpen,
-    setManageOpen,
     apiKey,
-    setApiKey,
-    showApiKey,
-    setShowApiKey,
-    editLabel,
-    setEditLabel,
+    busy,
+    catalogModelsForType,
+    deleteOpen,
+    dialogError,
     editBaseUrl,
-    setEditBaseUrl,
-    manageModels,
-    setManageModels,
-    editManageModels,
-    openManage,
-    openEdit,
-    handleReplaceKey,
+    editLabel,
+    editManageModels: manageModels,
+    editOpen,
+    editWireApi,
     handleDelete,
-    saveCompatible,
-    saveCompatibleManage,
-    saveOpenRouter,
-    saveCerebras,
-    saveCatalogShortlist,
+    handleManageKey,
     handleManageModelsChange,
+    handleReplaceKey,
+    isCatalogShortlist,
+    isChatgpt,
+    isCompatibleLike,
+    isOllama,
+    isOpenRouter,
+    isShortlistBrowse,
+    isXaiOAuth,
+    manageModels,
+    manageOpen,
+    openEdit,
+    openManage,
+    openRouterRouting,
+    providerType,
+    reconnect,
+    replaceKeyOpen,
+    saveCompatible,
+    saveManageModels,
+    setApiKey,
+    setDeleteOpen,
+    setEditBaseUrl,
+    setEditLabel,
+    setEditOpen,
+    setEditWireApi,
+    setManageModels,
+    setManageOpen,
+    setOpenRouterRouting,
+    setReplaceKeyOpen,
+    setShowApiKey,
+    showApiKey,
   };
 }

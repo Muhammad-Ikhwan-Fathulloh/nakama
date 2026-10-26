@@ -1,5 +1,5 @@
+import { Spinner } from "@nakama/ui/spinner";
 import { Navigate, Outlet } from "react-router-dom";
-import { Spinner } from "@/components/ui/spinner";
 import { useAppContext } from "@/context/use-app-context";
 import { SETUP_PATH } from "@/lib/navigation";
 
@@ -18,8 +18,9 @@ export function SetupGuard() {
     return <Outlet />;
   }
 
-  if (health?.userConfigured !== true || health?.providerConfigured !== true) {
-    return <Navigate to={SETUP_PATH} replace />;
+  // Removing the last provider must not lock existing users out of Settings.
+  if (health?.userConfigured !== true) {
+    return <Navigate replace to={SETUP_PATH} />;
   }
 
   return <Outlet />;

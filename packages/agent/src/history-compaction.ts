@@ -3,6 +3,7 @@ import type {
   CompactionResponse,
   LlmToolDefinition,
   ProviderClient,
+  ProviderName,
 } from "@nakama/core";
 import {
   estimateUserContentTokens,
@@ -10,10 +11,19 @@ import {
 } from "@nakama/core";
 
 const COMPACTION_BUFFER = 20_000;
-const PRUNE_MINIMUM = 20_000;
-const PRUNE_PROTECT = 40_000;
+
+// Pruning thresholds are fractions of the model's usable context so that
+// large-window models keep their history intact when tool output is small
+// relative to the window, while small-window models still reclaim tokens
+// before overflow. See #342.
+const PRUNE_PROTECT_FRACTION = 0.5;
+
+const PRUNE_MINIMUM_FRACTION = 0.1;
+
 const TAIL_TURNS = 2;
+
 const TOKEN_ESTIMATE_RATIO = 4;
+
 const PRUNE_TRUNCATION = "[output truncated by compaction]";
 
 const COMPACTION_SYSTEM =
@@ -61,31 +71,41 @@ export interface CompactionConfig {
   maxOutputTokens: number;
 }
 
+interface CompactionRange {
+  head: ChatMessage[];
+  tailStartIndex: number;
+}
+
+interface PruneToolOutputsResult {
+  prunedTokens: number;
+}
+
 export interface CompactHistoryInput {
+  compaction: CompactionConfig;
+  force?: boolean;
   history: ChatMessage[];
   provider: ProviderClient;
   systemPrompt: string;
   tools?: LlmToolDefinition[];
-  compaction: CompactionConfig;
-  force?: boolean;
 }
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / TOKEN_ESTIMATE_RATIO);
 }
 
-function stripThinkingFromProviderContent(content: unknown[]): unknown[] {
-  return content.filter((item) => {
-    if (typeof item !== "object" || item === null) {
-      return true;
-    }
-
-    const type = (item as { type?: unknown }).type;
-    return type !== "thinking" && type !== "reasoning";
-  });
+// Unsigned Gemini thinking is display-only. Signed parts are replayed and
+// counted through providerContent instead.
+// ACP agents keep their own history, so Nakama never replays thinking to them.
+export function providerReplaysThinking(
+  provider: ProviderName | "acp"
+): boolean {
+  return provider !== "gemini" && provider !== "acp";
 }
 
-function estimateMessageTokens(messages: readonly ChatMessage[]): number {
+function estimateMessageTokens(
+  messages: readonly ChatMessage[],
+  replaysThinking: boolean
+): number {
   let total = 0;
 
   for (const message of messages) {
@@ -95,36 +115,73 @@ function estimateMessageTokens(messages: readonly ChatMessage[]): number {
     }
 
     if (message.role === "assistant") {
-      total += estimateTokens(message.content);
-
-      if (message.toolCalls?.length) {
-        total += estimateTokens(JSON.stringify(message.toolCalls));
-      }
-
+      // When providerContent is present it is what providers replay (#340).
+      // Count it verbatim (thinking/reasoning included) and skip content/
+      // toolCalls, which already live inside it. OpenAI tool turns can
+      // diverge slightly: Responses rebuilds function_call items from
+      // toolCalls and drops id/status; that gap is accepted deliberately
+      // rather than making the estimator provider-aware.
       if (message.providerContent?.length) {
-        total += estimateTokens(
-          JSON.stringify(stripThinkingFromProviderContent(message.providerContent)),
-        );
+        total += estimateTokens(JSON.stringify(message.providerContent));
+      } else {
+        total += estimateTokens(message.content);
+
+        // The chat-completions mapper replays this trace as reasoning_content.
+        // Anthropic and Responses carry it inside providerContent, counted
+        // above, and their parsers set that whenever a trace is present.
+        if (replaysThinking && message.thinking) {
+          total += estimateTokens(message.thinking);
+        }
+
+        if (message.toolCalls?.length) {
+          total += estimateTokens(JSON.stringify(message.toolCalls));
+        }
       }
 
       continue;
     }
 
     total += estimateTokens(message.content);
+    total += estimateUserContentTokens(message.attachments ?? []);
   }
 
   return total;
+}
+
+export interface HistoryTokenBreakdown {
+  conversation: number;
+  systemPrompt: number;
+  toolDefinitions: number;
+}
+
+export function estimateHistoryTokenBreakdown(
+  messages: readonly ChatMessage[],
+  systemPrompt: string,
+  tools?: LlmToolDefinition[],
+  replaysThinking = true
+): HistoryTokenBreakdown {
+  return {
+    conversation: estimateMessageTokens(messages, replaysThinking),
+    systemPrompt: estimateTokens(systemPrompt),
+    toolDefinitions: estimateTokens(JSON.stringify(tools ?? [])),
+  };
 }
 
 export function estimateHistoryTokens(
   messages: readonly ChatMessage[],
   systemPrompt: string,
   tools?: LlmToolDefinition[],
+  replaysThinking = true
 ): number {
+  const breakdown = estimateHistoryTokenBreakdown(
+    messages,
+    systemPrompt,
+    tools,
+    replaysThinking
+  );
+
   return (
-    estimateTokens(systemPrompt) +
-    estimateMessageTokens(messages) +
-    estimateTokens(JSON.stringify(tools ?? []))
+    breakdown.systemPrompt + breakdown.conversation + breakdown.toolDefinitions
   );
 }
 
@@ -138,7 +195,7 @@ export function usableContextTokens(compaction: CompactionConfig): number {
 
 export function isOverflow(
   usedTokens: number,
-  compaction: CompactionConfig,
+  compaction: CompactionConfig
 ): boolean {
   return usedTokens >= usableContextTokens(compaction);
 }
@@ -153,7 +210,7 @@ function getTurns(messages: readonly ChatMessage[]): Turn[] {
 
   for (let index = 0; index < messages.length; index += 1) {
     if (messages[index]?.role === "user") {
-      turns.push({ start: index, end: messages.length });
+      turns.push({ end: messages.length, start: index });
     }
   }
 
@@ -164,16 +221,20 @@ function getTurns(messages: readonly ChatMessage[]): Turn[] {
   return turns;
 }
 
-function findPreviousSummary(messages: readonly ChatMessage[]): string | undefined {
+function findPreviousSummary(
+  messages: readonly ChatMessage[]
+): string | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
 
-    if (message?.role === "assistant" && message.summary && message.content.trim()) {
+    if (
+      message?.role === "assistant" &&
+      message.summary &&
+      message.content.trim()
+    ) {
       return message.content.trim();
     }
   }
-
-  return undefined;
 }
 
 export function buildCompactionPrompt(previousSummary?: string): string {
@@ -192,18 +253,18 @@ export function buildCompactionPrompt(previousSummary?: string): string {
 
 export function selectCompactionRange(
   messages: readonly ChatMessage[],
-  tailTurns = TAIL_TURNS,
-): { head: ChatMessage[]; tailStartIndex: number } {
+  tailTurns = TAIL_TURNS
+): CompactionRange {
   const turns = getTurns(messages);
 
   if (turns.length <= tailTurns) {
-    return { head: [], tailStartIndex: 0 };
+    return { head: messages.slice(0, 0), tailStartIndex: 0 };
   }
 
   const tailStartIndex = turns[turns.length - tailTurns]!.start;
 
   if (tailStartIndex <= 0) {
-    return { head: [], tailStartIndex: 0 };
+    return { head: messages.slice(0, 0), tailStartIndex: 0 };
   }
 
   return {
@@ -212,13 +273,30 @@ export function selectCompactionRange(
   };
 }
 
-export function pruneToolOutputs(messages: ChatMessage[]): { prunedTokens: number } {
+export function pruneToolOutputs(
+  messages: ChatMessage[],
+  compaction: CompactionConfig
+): PruneToolOutputsResult {
+  const usable = usableContextTokens(compaction);
+  const protect = Math.floor(usable * PRUNE_PROTECT_FRACTION);
+  const minimum = Math.floor(usable * PRUNE_MINIMUM_FRACTION);
+
+  // Degenerate configs (small contextWindow vs. maxOutputTokens) yield a
+  // non-positive usable budget; pruning would have nothing to protect.
+  if (usable <= 0) {
+    return { prunedTokens: 0 };
+  }
+
   let total = 0;
   let pruned = 0;
-  const toPrune: Extract<ChatMessage, { role: "tool" }>[] = [];
+  const pruneIndexes: number[] = [];
   let turns = 0;
 
-  loop: for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+  for (
+    let messageIndex = messages.length - 1;
+    messageIndex >= 0;
+    messageIndex -= 1
+  ) {
     const message = messages[messageIndex];
 
     if (!message) {
@@ -234,7 +312,7 @@ export function pruneToolOutputs(messages: ChatMessage[]): { prunedTokens: numbe
     }
 
     if (message.role === "assistant" && message.summary) {
-      break loop;
+      break;
     }
 
     if (message.role !== "tool") {
@@ -242,50 +320,67 @@ export function pruneToolOutputs(messages: ChatMessage[]): { prunedTokens: numbe
     }
 
     if (message.content === PRUNE_TRUNCATION) {
-      break loop;
+      break;
     }
 
-    const estimate = estimateTokens(message.content);
+    const estimate =
+      estimateTokens(message.content) +
+      estimateUserContentTokens(message.attachments ?? []);
+
     total += estimate;
 
-    if (total <= PRUNE_PROTECT) {
+    if (total <= protect) {
       continue;
     }
 
     pruned += estimate;
-    toPrune.push(message);
+    pruneIndexes.push(messageIndex);
   }
 
-  if (pruned <= PRUNE_MINIMUM) {
+  if (pruned <= minimum) {
     return { prunedTokens: 0 };
   }
 
-  for (const message of toPrune) {
-    message.content = PRUNE_TRUNCATION;
+  // Copy-on-write (#589): replace slots so in-flight providers keep originals.
+  for (const index of pruneIndexes) {
+    const message = messages[index];
+
+    if (!message || message.role !== "tool") {
+      continue;
+    }
+
+    messages[index] = {
+      ...message,
+      attachments: undefined,
+      content: PRUNE_TRUNCATION,
+    };
   }
 
   return { prunedTokens: pruned };
 }
 
 export async function compactHistory(
-  input: CompactHistoryInput,
+  input: CompactHistoryInput
 ): Promise<CompactionResponse> {
   const messagesBefore = input.history.length;
-  const { prunedTokens } = pruneToolOutputs(input.history);
+  const { prunedTokens } = pruneToolOutputs(input.history, input.compaction);
+
   const usedTokens = estimateHistoryTokens(
     input.history,
     input.systemPrompt,
     input.tools,
+    providerReplaysThinking(input.provider.name)
   );
+
   const overflow = isOverflow(usedTokens, input.compaction);
   const shouldSummarize = input.force === true || overflow;
 
   if (!shouldSummarize) {
     return {
       action: prunedTokens > 0 ? "pruned" : "none",
-      prunedTokens: prunedTokens > 0 ? prunedTokens : undefined,
-      messagesBefore,
       messagesAfter: input.history.length,
+      messagesBefore,
+      prunedTokens: prunedTokens > 0 ? prunedTokens : undefined,
     };
   }
 
@@ -294,25 +389,26 @@ export async function compactHistory(
   if (head.length === 0) {
     return {
       action: prunedTokens > 0 ? "pruned" : "none",
-      prunedTokens: prunedTokens > 0 ? prunedTokens : undefined,
-      messagesBefore,
       messagesAfter: input.history.length,
+      messagesBefore,
+      prunedTokens: prunedTokens > 0 ? prunedTokens : undefined,
     };
   }
 
   const previousSummary = findPreviousSummary(head);
   const compactionPrompt = buildCompactionPrompt(previousSummary);
+
   const result = await input.provider.generateChat({
-    system: COMPACTION_SYSTEM,
     messages: [
       ...stripImagesForCompaction(head),
-      { role: "user", content: compactionPrompt },
+      { content: compactionPrompt, role: "user" },
     ],
+    system: COMPACTION_SYSTEM,
   });
 
   const summaryMessage: Extract<ChatMessage, { role: "assistant" }> = {
-    role: "assistant",
     content: result.content.trim() || result.assistantMessage.content.trim(),
+    role: "assistant",
     summary: true,
   };
 
@@ -321,8 +417,8 @@ export async function compactHistory(
 
   return {
     action: "summarized",
-    prunedTokens: prunedTokens > 0 ? prunedTokens : undefined,
-    messagesBefore,
     messagesAfter: input.history.length,
+    messagesBefore,
+    prunedTokens: prunedTokens > 0 ? prunedTokens : undefined,
   };
 }

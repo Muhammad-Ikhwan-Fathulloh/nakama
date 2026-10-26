@@ -1,83 +1,158 @@
-import type { ProfileSummary } from "@nakama/core/contract";
-import { getProfileAvatarUrl } from "@nakama/client";
-import { cn } from "@/lib/utils";
+import { cn } from "@nakama/ui/utils";
+import { hashToSeeds, oklchToCss } from "hashvatar";
+import { Hashvatar } from "hashvatar/react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  isPreMoodstone,
+  moodstoneIndexes,
+  moodstoneSvg,
+  type ProfileAvatarProfile,
+  resolveAvatarSrc,
+  SUPER_AGENT_DEFAULT_AVATAR,
+} from "./moodstone";
 
-type ProfileAvatarProfile = Pick<ProfileSummary, "id" | "name" | "hasAvatar" | "updatedAt">;
+const SUPER_AGENT_LIGHT_AVATAR = "/super-agent-light.png";
 
 const sizeClasses = {
-  xs: "size-5 text-[10px]",
-  sm: "size-7 text-xs",
-  md: "size-9 text-sm",
-  ml: "size-11 text-base",
-  lg: "size-16 text-xl",
+  lg: "size-16",
+  md: "size-9",
+  ml: "size-11",
+  sm: "size-7",
+  xs: "size-5",
+  xxs: "size-[18px]",
 } as const;
 
-/** Stable soft fills keyed by profile id so missing images still look distinct. */
-const AVATAR_FALLBACK_COLORS = [
-  "bg-rose-500/20 text-rose-800 dark:text-rose-200",
-  "bg-orange-500/20 text-orange-800 dark:text-orange-200",
-  "bg-amber-500/20 text-amber-900 dark:text-amber-200",
-  "bg-lime-500/20 text-lime-900 dark:text-lime-200",
-  "bg-emerald-500/20 text-emerald-900 dark:text-emerald-200",
-  "bg-teal-500/20 text-teal-900 dark:text-teal-200",
-  "bg-sky-500/20 text-sky-900 dark:text-sky-200",
-  "bg-blue-500/20 text-blue-900 dark:text-blue-200",
-  "bg-indigo-500/20 text-indigo-900 dark:text-indigo-200",
-  "bg-fuchsia-500/20 text-fuchsia-900 dark:text-fuchsia-200",
-] as const;
+const sizePixels = {
+  lg: 64,
+  md: 36,
+  ml: 44,
+  sm: 28,
+  xs: 20,
+  xxs: 18,
+} as const;
 
-function profileInitial(profile: ProfileAvatarProfile): string {
-  return (
-    profile.name?.charAt(0)?.toUpperCase() ??
-    profile.id?.charAt(0)?.toUpperCase() ??
-    "?"
-  );
-}
+/** Two OKLCH tones derived from the profile hash — same hash ⇒ same palette. */
+function tonesFromHash(hash: string): [string, string] {
+  const [h1, h2, l1, l2, c1, c2] = hashToSeeds(hash, 6);
 
-function avatarFallbackColorClass(seed: string): string {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = (hash * 31 + seed.charCodeAt(i)) | 0;
-  }
-  return AVATAR_FALLBACK_COLORS[Math.abs(hash) % AVATAR_FALLBACK_COLORS.length];
+  return [
+    oklchToCss({
+      c: 0.16 + c1 * 0.14,
+      h: h1 * 360,
+      l: 0.55 + l1 * 0.22,
+    }),
+    oklchToCss({
+      c: 0.1 + c2 * 0.12,
+      h: (h1 * 360 + 40 + h2 * 80) % 360,
+      // Offset hue so the pair stays distinct, still seeded by the hash.
+      l: 0.28 + l2 * 0.2,
+    }),
+  ];
 }
 
 export function ProfileAvatar({
   profile,
   size = "md",
+  active = false,
   className,
+  orgId,
+  squareMoodstone = false,
 }: {
   profile: ProfileAvatarProfile;
   size?: keyof typeof sizeClasses;
+  /** Animate the generated avatar when this profile is selected in chat. */
+  active?: boolean;
   className?: string;
+  orgId?: string;
+  /** Draw the generated Moodstone avatar square; images and dithers stay round. */
+  squareMoodstone?: boolean;
 }) {
-  const avatarUrl = getProfileAvatarUrl(profile);
+  const avatarUrl = resolveAvatarSrc(profile, orgId);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  // Start still on the server and before the motion preference is known.
+  const [reducedMotion, setReducedMotion] = useState(true);
 
-  if (avatarUrl) {
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setReducedMotion(media.matches);
+    update();
+    media.addEventListener("change", update);
+
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  const src = useMemo(() => {
+    if (avatarUrl && avatarUrl !== failedUrl) {
+      return avatarUrl;
+    }
+
+    const { avatarIndex, colorIndex } = moodstoneIndexes(
+      profile.id || profile.name || "?"
+    );
+
+    const svg = moodstoneSvg(avatarIndex, colorIndex, active && !reducedMotion);
+
+    // An image document isolates SVG gradient IDs, even for repeated profiles.
+    return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  }, [avatarUrl, failedUrl, profile.id, profile.name, active, reducedMotion]);
+
+  const showUploaded = avatarUrl !== null && avatarUrl !== failedUrl;
+
+  const surfaceClass = cn(
+    "shrink-0 outline outline-1 outline-black/10 -outline-offset-1 dark:outline-white/10",
+    squareMoodstone && !showUploaded && !isPreMoodstone(profile)
+      ? "rounded-none"
+      : "rounded-full",
+    sizeClasses[size],
+    className
+  );
+
+  if (!showUploaded && isPreMoodstone(profile)) {
+    const hash = profile.id || profile.name || "?";
+
     return (
-      <img
-        src={avatarUrl}
-        alt=""
-        className={cn(
-          "shrink-0 rounded-full object-cover",
-          sizeClasses[size],
-          className,
-        )}
+      <Hashvatar
+        animated={active}
+        className={surfaceClass}
+        hash={hash}
+        mode="dither"
+        size={sizePixels[size]}
+        // Let Tailwind className control radius (Hashvatar defaults to 50%).
+        style={{ borderRadius: undefined }}
+        tones={tonesFromHash(hash)}
       />
     );
   }
 
-  return (
-    <span
-      aria-hidden
+  const image = (
+    <img
+      alt=""
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-full font-medium",
-        sizeClasses[size],
-        avatarFallbackColorClass(profile.id || profile.name || "?"),
-        className,
+        surfaceClass,
+        "object-cover",
+        src === SUPER_AGENT_DEFAULT_AVATAR && "hidden dark:block"
       )}
-    >
-      {profileInitial(profile)}
-    </span>
+      height={sizePixels[size]}
+      onError={() => setFailedUrl(avatarUrl)}
+      src={src}
+      width={sizePixels[size]}
+    />
+  );
+
+  if (src !== SUPER_AGENT_DEFAULT_AVATAR) {
+    return image;
+  }
+
+  return (
+    <>
+      {image}
+      <img
+        alt=""
+        className={cn(surfaceClass, "object-cover dark:hidden")}
+        height={sizePixels[size]}
+        src={SUPER_AGENT_LIGHT_AVATAR}
+        width={sizePixels[size]}
+      />
+    </>
   );
 }

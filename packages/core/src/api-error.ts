@@ -1,46 +1,89 @@
-import type { ProfileRef } from "./contract";
+import { z } from "zod";
+import type { ApiErrorResponse, ProfileRef } from "./contract";
+import { LLM_FETCH_TIMEOUT_MS } from "./fetch-idle";
+
+const ApiErrorPayloadSchema = z.object({
+  error: z.json().optional(),
+  message: z.json().optional(),
+  totpEnabled: z.boolean().optional(),
+});
+
+const ErrorMessageSchema = z.object({ message: z.string() });
 
 export class NakamaApiError extends Error {
   readonly status: number;
   readonly path?: string;
   readonly profiles?: ProfileRef[];
+  readonly totpEnabled?: boolean;
 
-  constructor(message: string, status: number, path?: string, profiles?: ProfileRef[]) {
+  constructor(
+    message: string,
+    status: number,
+    path?: string,
+    profiles?: ProfileRef[],
+    options?: Pick<ApiErrorResponse, "totpEnabled">
+  ) {
     super(message);
     this.name = "NakamaApiError";
     this.status = status;
     this.path = path;
     this.profiles = profiles;
+    this.totpEnabled = options?.totpEnabled;
   }
 }
 
-export async function readApiErrorMessage(response: Response): Promise<string> {
+/** 401 after local-token reload did not yield a different token (or file missing). */
+export class NakamaAuthExpiredError extends NakamaApiError {
+  constructor(message: string, path?: string) {
+    super(message, 401, path);
+    this.name = "NakamaAuthExpiredError";
+  }
+}
+
+/** A provider stream broke after it started. One more try can work. */
+export class ProviderStreamInterruptedError extends NakamaApiError {
+  constructor(message: string) {
+    super(message, 502);
+    this.name = "ProviderStreamInterruptedError";
+  }
+}
+
+export async function readApiErrorDetails(response: Response): Promise<{
+  message: string;
+  totpEnabled?: boolean;
+}> {
   const status = response.status;
   let bodyText = "";
 
   try {
     bodyText = await response.text();
   } catch {
-    return fallbackApiErrorMessage(status);
+    return { message: fallbackApiErrorMessage(status) };
   }
 
   const trimmed = bodyText.trim();
 
   if (!trimmed) {
-    return fallbackApiErrorMessage(status);
+    return { message: fallbackApiErrorMessage(status) };
   }
 
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
-      const payload = JSON.parse(trimmed) as {
-        error?: unknown;
-        message?: unknown;
-      };
+      const payload = ApiErrorPayloadSchema.safeParse(JSON.parse(trimmed));
+
+      if (!payload.success) {
+        throw new Error("Invalid API error payload.");
+      }
+
       const message =
-        extractErrorText(payload.error) ?? extractErrorText(payload.message);
+        extractErrorText(payload.data.error) ??
+        extractErrorText(payload.data.message);
 
       if (message) {
-        return message;
+        return {
+          message,
+          totpEnabled: payload.data.totpEnabled,
+        };
       }
     } catch {
       // fall through to plain-text handling
@@ -48,10 +91,14 @@ export async function readApiErrorMessage(response: Response): Promise<string> {
   }
 
   if (trimmed.startsWith("<")) {
-    return fallbackApiErrorMessage(status);
+    return { message: fallbackApiErrorMessage(status) };
   }
 
-  return truncate(trimmed.replace(/\s+/g, " "), 240);
+  return { message: truncate(trimmed.replace(/\s+/g, " "), 240) };
+}
+
+export async function readApiErrorMessage(response: Response): Promise<string> {
+  return (await readApiErrorDetails(response)).message;
 }
 
 export function fallbackApiErrorMessage(status: number): string {
@@ -79,12 +126,12 @@ export function fallbackApiErrorMessage(status: number): string {
   }
 }
 
-export function formatClientError(error: unknown): string {
+export function formatClientError<ErrorValue>(error: ErrorValue): string {
   if (error instanceof NakamaApiError) {
     return error.message;
   }
 
-    if (error instanceof Error) {
+  if (error instanceof Error) {
     if (isNetworkError(error)) {
       return "Could not reach the Nakama server. Make sure it is running.";
     }
@@ -100,16 +147,24 @@ export function formatClientError(error: unknown): string {
     }
   }
 
-  if (typeof error === "string" && error.trim()) {
-    return error.trim();
+  const stringError = z.string().safeParse(error);
+
+  if (stringError.success && stringError.data.trim()) {
+    return stringError.data.trim();
   }
 
   return "Something went wrong.";
 }
 
-export function formatServerError(error: unknown): string {
-  if (error instanceof SyntaxError) {
-    return "Invalid JSON in request body.";
+export function formatAutomationRunError<ErrorValue>(
+  error: ErrorValue
+): string {
+  if (error instanceof Error && isFetchDeadlineError(error)) {
+    return `The model request timed out after ${Math.round(LLM_FETCH_TIMEOUT_MS / 60_000)} minutes.`;
+  }
+
+  if (error instanceof Error && isStreamDisconnectError(error)) {
+    return "The model connection closed before the agent finished. Try again. Long automations can take a minute or more.";
   }
 
   if (error instanceof Error) {
@@ -120,22 +175,44 @@ export function formatServerError(error: unknown): string {
     }
   }
 
-  if (typeof error === "string" && error.trim()) {
-    return error.trim();
+  const stringError = z.string().safeParse(error);
+
+  if (stringError.success && stringError.data.trim()) {
+    return stringError.data.trim();
   }
+
+  return formatServerError(error);
+}
+
+export function formatServerError<ErrorValue>(error: ErrorValue): string {
+  if (error instanceof NakamaApiError) {
+    return error.message;
+  }
+
+  if (error instanceof SyntaxError) {
+    return "Invalid JSON in request body.";
+  }
+
+  console.error(error);
 
   return "An unexpected server error occurred.";
 }
 
-function extractErrorText(value: unknown): string | null {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
+function extractErrorText<Value>(value: Value): string | null {
+  const stringValue = z.string().safeParse(value);
+
+  if (stringValue.success) {
+    const trimmed = stringValue.data.trim();
+
     return trimmed || null;
   }
 
-  if (value && typeof value === "object" && "message" in value) {
-    const message = (value as { message?: unknown }).message;
-    return typeof message === "string" && message.trim() ? message.trim() : null;
+  const objectValue = ErrorMessageSchema.safeParse(value);
+
+  if (objectValue.success) {
+    const message = objectValue.data.message.trim();
+
+    return message || null;
   }
 
   return null;
@@ -148,6 +225,18 @@ function isNetworkError(error: Error): boolean {
     message === "Failed to fetch" ||
     message === "NetworkError when attempting to fetch resource." ||
     message === "Load failed"
+  );
+}
+
+function isFetchDeadlineError(error: Error): boolean {
+  const message = error.message.trim();
+
+  return (
+    error.name === "TimeoutError" ||
+    error.name === "AbortError" ||
+    message.includes("timed out") ||
+    message.includes("Timeout") ||
+    message.includes("aborted")
   );
 }
 

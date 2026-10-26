@@ -5,7 +5,9 @@ import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from "./fs";
 import { getUserConfigDir, readUserWebPublicUrlSync } from "./user-config";
 
 export const DEFAULT_SERVER_HOST = "127.0.0.1";
+
 export const DEFAULT_SERVER_PORT = 4310;
+
 export const DEFAULT_SERVER_URL = `http://${DEFAULT_SERVER_HOST}:${DEFAULT_SERVER_PORT}`;
 
 function serverUrlPath(): string {
@@ -15,6 +17,7 @@ function serverUrlPath(): string {
 export function readRuntimeServerUrl(): string | null {
   try {
     const value = normalizeBaseUrl(readFileSync(serverUrlPath(), "utf8"));
+
     return value || null;
   } catch {
     return null;
@@ -24,13 +27,14 @@ export function readRuntimeServerUrl(): string | null {
 export function writeRuntimeServerUrl(url: string): string {
   const normalized = normalizeBaseUrl(url);
   mkdirSync(join(getUserConfigDir(), "runtime"), {
-    recursive: true,
     mode: PRIVATE_DIR_MODE,
+    recursive: true,
   });
   writeFileSync(serverUrlPath(), `${normalized}\n`, {
     encoding: "utf8",
     mode: PRIVATE_FILE_MODE,
   });
+
   return normalized;
 }
 
@@ -47,21 +51,49 @@ export function clearRuntimeServerUrl(expectedUrl?: string): void {
 }
 
 export function resolveServerUrl(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = process.env
 ): string {
   return normalizeBaseUrl(
-    env.nakama_SERVER_URL?.trim() || readRuntimeServerUrl() || DEFAULT_SERVER_URL,
+    env.NAKAMA_SERVER_URL?.trim() ||
+      readRuntimeServerUrl() ||
+      DEFAULT_SERVER_URL
   );
 }
 
 /** Public web app origin for OAuth callbacks from non-browser clients (Telegram, WhatsApp, CLI). */
 export function resolveWebPublicUrl(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = process.env
 ): string | undefined {
-  const configured = env.NAKAMA_WEB_PUBLIC_URL?.trim() || env.NAKAMA_PUBLIC_URL?.trim();
+  const configured =
+    env.NAKAMA_WEB_PUBLIC_URL?.trim() || env.NAKAMA_PUBLIC_URL?.trim();
+
   if (configured) {
     return normalizeBaseUrl(configured);
   }
 
-  return readUserWebPublicUrlSync() ?? undefined;
+  const saved = readUserWebPublicUrlSync() ?? undefined;
+
+  // The desktop app serves its UI on loopback only, on a new port each launch.
+  // A public URL in its config came from another install's restored backup,
+  // and honouring it would refuse the desktop UI's own origin.
+  if (saved && env.NAKAMA_DESKTOP === "1" && !isLoopbackUrl(saved)) {
+    return;
+  }
+
+  return saved;
+}
+
+function isLoopbackUrl(value: string): boolean {
+  try {
+    const { hostname } = new URL(value);
+
+    return (
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "[::1]" ||
+      hostname.endsWith(".localhost")
+    );
+  } catch {
+    return false;
+  }
 }

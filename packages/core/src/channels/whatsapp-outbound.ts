@@ -3,11 +3,15 @@ import type { ChannelSendResult, WhatsAppOutboundAdapter } from "./types";
 
 const DEFAULT_OUTBOUND_PORT = 4312;
 
+export const WHATSAPP_OUTBOUND_TOKEN_HEADER = "x-nakama-token";
+
 export interface WhatsAppOutboundOptions {
   fetchImpl?: typeof fetch;
 }
 
-export function resolveWhatsAppOutboundPort(config: { outboundPort?: string | null } | null): number {
+export function resolveWhatsAppOutboundPort(
+  config: { outboundPort?: string | null } | null
+): number {
   const raw = config?.outboundPort?.trim();
 
   if (!raw) {
@@ -16,7 +20,7 @@ export function resolveWhatsAppOutboundPort(config: { outboundPort?: string | nu
 
   const parsed = Number(raw);
 
-  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65_535) {
     return DEFAULT_OUTBOUND_PORT;
   }
 
@@ -24,38 +28,58 @@ export function resolveWhatsAppOutboundPort(config: { outboundPort?: string | nu
 }
 
 export function createWhatsAppOutboundAdapter(
-  options: WhatsAppOutboundOptions = {},
+  options: WhatsAppOutboundOptions = {}
 ): WhatsAppOutboundAdapter {
   const fetchImpl = options.fetchImpl ?? fetch;
 
   return {
     async send(input): Promise<ChannelSendResult> {
       try {
-        const config = await loadWhatsAppConfigFile();
+        if (!(input.orgId && input.profileId)) {
+          return {
+            error: "Choose an agent connection before sending.",
+            ok: false,
+          };
+        }
+
+        const owner = { orgId: input.orgId, profileId: input.profileId };
+        const config = await loadWhatsAppConfigFile(owner);
 
         if (!config?.pairedJid) {
-          return { ok: false, error: "WhatsApp is not paired." };
+          return { error: "WhatsApp is not paired.", ok: false };
+        }
+
+        if (!(config.outboundPort && config.outboundToken)) {
+          return { error: "WhatsApp worker is not connected.", ok: false };
         }
 
         const port = resolveWhatsAppOutboundPort(config);
+        const headers = new Headers({ "Content-Type": "application/json" });
+
+        if (config.outboundToken) {
+          headers.set(WHATSAPP_OUTBOUND_TOKEN_HEADER, config.outboundToken);
+        }
+
         const response = await fetchImpl(`http://127.0.0.1:${port}/send`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: input.text }),
+          headers,
+          method: "POST",
         });
 
         if (!response.ok) {
           const body = await response.text();
+
           return {
-            ok: false,
             error: `WhatsApp worker error (${response.status}): ${body.slice(0, 200)}`,
+            ok: false,
           };
         }
 
         return { ok: true };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return { ok: false, error: message };
+
+        return { error: message, ok: false };
       }
     },
   };

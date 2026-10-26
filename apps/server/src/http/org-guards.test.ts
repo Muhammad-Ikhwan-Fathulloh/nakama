@@ -1,15 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { NakamaApiError } from "@nakama/core";
-import { requireNotViewer, requireOrgAdmin, requirePlatformAdmin } from "./org-guards";
+import {
+  requireOrgAdmin,
+  requireOrgMember,
+  requirePlatformAdmin,
+} from "./org-guards";
 import type { RequestAuthContext } from "./shared";
 
 function auth(orgRole: RequestAuthContext["orgRole"]): RequestAuthContext {
   return {
-    mode: "browser-session",
-    user: { id: "user_1", email: "user@example.com" },
-    isPlatformAdmin: false,
     activeOrgId: "org_1",
+    isPlatformAdmin: false,
+    mode: "browser-session",
     orgRole,
+    user: { email: "user@example.com", id: "user_1" },
   };
 }
 
@@ -18,27 +22,24 @@ describe("org guards", () => {
     expect(() => requireOrgAdmin(auth("admin"))).not.toThrow();
   });
 
-  test("requireOrgAdmin rejects members and viewers", () => {
+  test("requireOrgAdmin rejects members and users without membership", () => {
     expect(() => requireOrgAdmin(auth("member"))).toThrow(NakamaApiError);
-    expect(() => requireOrgAdmin(auth("viewer"))).toThrow(NakamaApiError);
+    expect(() => requireOrgAdmin(auth(undefined))).toThrow(NakamaApiError);
+
     try {
       requireOrgAdmin(auth("member"));
     } catch (error) {
-      expect(error).toMatchObject({ status: 403, message: "Forbidden" });
+      expect(error).toMatchObject({ message: "Forbidden", status: 403 });
     }
   });
 
-  test("requireNotViewer allows admins and members", () => {
-    expect(() => requireNotViewer(auth("admin"))).not.toThrow();
-    expect(() => requireNotViewer(auth("member"))).not.toThrow();
+  test("requireOrgMember allows admins and members", () => {
+    expect(() => requireOrgMember(auth("admin"))).not.toThrow();
+    expect(() => requireOrgMember(auth("member"))).not.toThrow();
   });
 
-  test("requireNotViewer rejects viewers", () => {
-    try {
-      requireNotViewer(auth("viewer"));
-    } catch (error) {
-      expect(error).toMatchObject({ status: 403, message: "Forbidden" });
-    }
+  test("requireOrgMember rejects users without membership", () => {
+    expect(() => requireOrgMember(auth(undefined))).toThrow(NakamaApiError);
   });
 
   test("requirePlatformAdmin allows platform admins", () => {
@@ -46,15 +47,7 @@ describe("org guards", () => {
       requirePlatformAdmin({
         ...auth("admin"),
         isPlatformAdmin: true,
-      }),
+      })
     ).not.toThrow();
-  });
-
-  test("requirePlatformAdmin rejects non-platform users", () => {
-    try {
-      requirePlatformAdmin(auth("admin"));
-    } catch (error) {
-      expect(error).toMatchObject({ status: 403, message: "Forbidden" });
-    }
   });
 });

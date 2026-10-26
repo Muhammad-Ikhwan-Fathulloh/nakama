@@ -1,158 +1,80 @@
-import type { AgentBrowserStatusResponse } from "@nakama/core";
-import { ensureBunGlobalInstallDirs, ensureProcessPath, getToolExecutionEnv } from "../lib/ensure-process-path";
+import {
+  type AgentBrowserProvider,
+  type AgentBrowserStatusResponse,
+  getUserConfigPath,
+  maskTrailingSecret,
+  NakamaApiError,
+  parseIniWithSections,
+  REDACTED_SECRET_VALUE,
+  readTextOrNull,
+  resolveManagedSecret,
+  type SessionBrowserResponse,
+  type UpdateAgentBrowserSettingsRequest,
+  writeParsedConfigIni,
+} from "@nakama/core";
+import {
+  ensureBunGlobalInstallDirs,
+  ensureProcessPath,
+} from "../lib/ensure-process-path";
+import {
+  buildPinnedPackageInstallPlan,
+  detectNpmOrBun,
+  downloadPinnedPackageTarball,
+  type PinnedNpmPackage,
+  probeCliVersion,
+  runTimedInstallCommand,
+  summarizeInstallOutput,
+} from "./cli-package-install";
+import {
+  deleteKernelBrowser,
+  getKernelBrowser,
+  userBrowserName,
+} from "./kernel-browser";
+import {
+  KERNEL_API_KEY_ENV,
+  KERNEL_BROWSER_SECRET,
+  type ManagedSecrets,
+} from "./managed-secrets";
 
 const AGENT_BROWSER_PACKAGE = "agent-browser";
+
 const AGENT_BROWSER_COMMAND = "agent-browser";
 
-async function spawnWithExtensions(
-  command: string,
-  args: string[],
-  options: any,
-  timeoutMs: number
-): Promise<{
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-}> {
-  const { spawn } = await import("node:child_process");
-  const isWindows = process.platform === "win32";
-  const extensions = isWindows ? [".cmd", ".bat", ".exe", ""] : [""];
-  
-  for (const ext of extensions) {
-    const tryCommand = command + ext;
-    const result = await new Promise<{
-      exitCode: number | null;
-      stdout: string;
-      stderr: string;
-      timedOut: boolean;
-      enoent: boolean;
-    }>((resolve) => {
-      const child = spawn(tryCommand, args, options);
-      let stdout = "";
-      let stderr = "";
-      let timedOut = false;
+const AGENT_BROWSER_SECTION = "agent_browser";
 
-      const timeoutId = setTimeout(() => {
-        timedOut = true;
-        child.kill("SIGTERM");
-      }, timeoutMs);
-
-      child.stdout?.on("data", (chunk) => {
-        stdout += chunk.toString();
-      });
-      child.stderr?.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-      child.once("error", (error) => {
-        clearTimeout(timeoutId);
-        resolve({
-          exitCode: null,
-          stdout,
-          stderr: `${stderr}\n${String(error)}`.trim(),
-          timedOut,
-          enoent: (error as NodeJS.ErrnoException).code === "ENOENT",
-        });
-      });
-      child.once("close", (exitCode) => {
-        clearTimeout(timeoutId);
-        resolve({
-          exitCode,
-          stdout: stdout.trim(),
-          stderr: stderr.trim(),
-          timedOut,
-          enoent: false,
-        });
-      });
-    });
-    
-    if (!result.enoent) {
-      return result;
-    }
-  }
-  
-  return {
-    exitCode: 1,
-    stdout: "",
-    stderr: "Command not found",
-    timedOut: false,
-  };
+interface AgentBrowserConfig {
+  apiKey: string;
+  provider: AgentBrowserProvider;
 }
 
-interface AgentBrowserInstallPlan {
-  command: string;
-  args: string[];
-  displayCommand: string;
-}
-
-function detectPackageManager(): "npm" | "bun" {
-  if (Bun.which("npm")) {
-    return "npm";
-  }
-
-  if (Bun.which("bun")) {
-    return "bun";
-  }
-
-  return "npm";
-}
-
-function buildAgentBrowserCliInstallPlan(
-  packageManager: "npm" | "bun" = detectPackageManager(),
-): AgentBrowserInstallPlan {
-  if (packageManager === "bun") {
-    return {
-      command: "bun",
-      args: ["install", "-g", "--trust", AGENT_BROWSER_PACKAGE],
-      displayCommand: `bun install -g --trust ${AGENT_BROWSER_PACKAGE}`,
-    };
-  }
-
-  return {
-    command: "npm",
-    args: ["install", "-g", AGENT_BROWSER_PACKAGE],
-    displayCommand: `npm install -g ${AGENT_BROWSER_PACKAGE}`,
-  };
-}
+/**
+ * The reviewed release. Bumping the pin is a code change, and the hash is what
+ * makes the bump checkable: a tampered tarball fails the install instead of
+ * running lifecycle scripts as the server.
+ */
+const AGENT_BROWSER_PINNED_PACKAGE: PinnedNpmPackage = {
+  integrity:
+    "sha512-k58FCz0yUOCANoNkMiqJe+H2y6r6sUZazqXsWF+MYq1iRC42PjtLcBoag6SSTOD/FRQppvPDvE5HDYEhclvnhw==",
+  name: AGENT_BROWSER_PACKAGE,
+  version: "0.38.1",
+};
 
 export function getAgentBrowserInstallCommand(): string {
-  const cliPlan = buildAgentBrowserCliInstallPlan();
-  return `${cliPlan.displayCommand} && ${AGENT_BROWSER_COMMAND} install`;
+  const spec = `${AGENT_BROWSER_PACKAGE}@${AGENT_BROWSER_PINNED_PACKAGE.version}`;
+  const manager = detectNpmOrBun();
+
+  const install =
+    manager === "bun"
+      ? `bun install -g --trust ${spec}`
+      : `npm install -g ${spec}`;
+
+  return `${install} && ${AGENT_BROWSER_COMMAND} install`;
 }
 
-function extractVersion(stdout: string, stderr: string): string | null {
-  const output = `${stdout}\n${stderr}`.trim();
-  if (!output) {
-    return null;
-  }
-
-  return output.split(/\r?\n/, 1)[0]?.trim() || null;
-}
-
-async function probeAgentBrowserVersion(): Promise<{
-  installed: boolean;
-  version: string | null;
-  missing: boolean;
-}> {
-  const result = await spawnWithExtensions(
-    AGENT_BROWSER_COMMAND,
-    ["--version"],
-    {
-      env: getToolExecutionEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-    10_000
-  );
-
-  return {
-    installed: result.exitCode === 0,
-    version: result.exitCode === 0 ? extractVersion(result.stdout, result.stderr) : null,
-    missing: result.stderr.includes("Command not found"),
-  };
-}
-
-async function getAgentBrowserRuntimeStatus(): Promise<Pick<AgentBrowserStatusResponse, "installed" | "version">> {
-  const initial = await probeAgentBrowserVersion();
+async function getAgentBrowserRuntimeStatus(): Promise<
+  Pick<AgentBrowserStatusResponse, "installed" | "version">
+> {
+  const initial = await probeCliVersion(AGENT_BROWSER_COMMAND);
 
   if (initial.installed || !initial.missing) {
     return {
@@ -162,7 +84,7 @@ async function getAgentBrowserRuntimeStatus(): Promise<Pick<AgentBrowserStatusRe
   }
 
   ensureProcessPath();
-  const retried = await probeAgentBrowserVersion();
+  const retried = await probeCliVersion(AGENT_BROWSER_COMMAND);
 
   return {
     installed: retried.installed,
@@ -170,240 +92,286 @@ async function getAgentBrowserRuntimeStatus(): Promise<Pick<AgentBrowserStatusRe
   };
 }
 
+async function loadAgentBrowserConfig(): Promise<AgentBrowserConfig | null> {
+  const raw = await readTextOrNull(getUserConfigPath());
+
+  if (raw === null) {
+    return null;
+  }
+
+  const section = parseIniWithSections(raw).sections[AGENT_BROWSER_SECTION];
+
+  if (section?.provider?.trim() !== "kernel") {
+    return null;
+  }
+
+  // config.ini keeps only the provider; the key is an encrypted Settings secret.
+  return {
+    apiKey: (await resolveManagedSecret("global", KERNEL_BROWSER_SECRET)) ?? "",
+    provider: "kernel",
+  };
+}
+
+/**
+ * Host env wins over the saved settings, so Docker and Kubernetes deployments
+ * can set Kernel up with `NAKAMA_BROWSER_PROVIDER=kernel` and `KERNEL_API_KEY`.
+ * Not `AGENT_BROWSER_PROVIDER`: agent-browser reads that name itself, and a
+ * provider wins over the CDP URL that points it at the user's browser.
+ */
+export async function resolveAgentBrowserConfig(
+  env: Record<string, string | undefined> = process.env
+): Promise<AgentBrowserConfig | null> {
+  const saved = await loadAgentBrowserConfig();
+  const envProvider = env.NAKAMA_BROWSER_PROVIDER?.trim().toLowerCase();
+
+  if (!(saved || envProvider === "kernel")) {
+    return null;
+  }
+
+  return {
+    apiKey: env[KERNEL_API_KEY_ENV]?.trim() || saved?.apiKey || "",
+    provider: "kernel",
+  };
+}
+
+export async function isCloudBrowserRuntime(): Promise<boolean> {
+  return Boolean((await resolveAgentBrowserConfig())?.apiKey);
+}
+
+export async function saveAgentBrowserConfig(
+  input: UpdateAgentBrowserSettingsRequest,
+  secrets: Pick<ManagedSecrets, "delete" | "save">,
+  env: Record<string, string | undefined> = process.env
+): Promise<void> {
+  const raw = await readTextOrNull(getUserConfigPath());
+
+  const parsed =
+    raw === null ? { global: {}, sections: {} } : parseIniWithSections(raw);
+
+  if (input.provider === null) {
+    delete parsed.sections[AGENT_BROWSER_SECTION];
+    await writeParsedConfigIni(parsed.global, parsed.sections);
+    await secrets.delete("global", KERNEL_BROWSER_SECRET);
+
+    return;
+  }
+
+  if (input.provider !== undefined && input.provider !== "kernel") {
+    throw new NakamaApiError(
+      `Unsupported browser provider: ${String(input.provider)}.`,
+      400
+    );
+  }
+
+  const typed = input.apiKey?.trim() ?? "";
+  const newKey = typed && typed !== REDACTED_SECRET_VALUE ? typed : "";
+
+  if (
+    !(
+      newKey ||
+      env[KERNEL_API_KEY_ENV]?.trim() ||
+      (await resolveManagedSecret("global", KERNEL_BROWSER_SECRET))
+    )
+  ) {
+    throw new NakamaApiError("A Kernel API key is required.", 400);
+  }
+
+  if (newKey) {
+    await secrets.save("global", KERNEL_BROWSER_SECRET, newKey);
+  }
+
+  parsed.sections[AGENT_BROWSER_SECTION] = { provider: "kernel" };
+  await writeParsedConfigIni(parsed.global, parsed.sections);
+}
+
 function toAgentBrowserStatusResponse(
   runtime: Pick<AgentBrowserStatusResponse, "installed" | "version">,
+  config: AgentBrowserConfig | null
 ): AgentBrowserStatusResponse {
   const ready = runtime.installed && runtime.version !== null;
 
   return {
-    installed: runtime.installed,
-    version: runtime.version,
-    ready,
+    apiKeyMasked: config ? maskTrailingSecret(config.apiKey) : null,
     installCommand: getAgentBrowserInstallCommand(),
+    installed: runtime.installed,
     nextStep: ready ? null : "install",
+    provider: config?.provider ?? null,
+    ready,
     statusMessage: ready
-      ? "agent-browser is installed and ready."
-      : "Install the agent-browser CLI and Chrome on this machine.",
+      ? null
+      : "agent-browser is not installed. Install it to enable browser automation.",
+    version: runtime.version,
   };
 }
 
 export async function getAgentBrowserStatus(): Promise<AgentBrowserStatusResponse> {
-  const runtime = await getAgentBrowserRuntimeStatus();
-  return toAgentBrowserStatusResponse(runtime);
+  const [runtime, config] = await Promise.all([
+    getAgentBrowserRuntimeStatus(),
+    resolveAgentBrowserConfig(),
+  ]);
+
+  return toAgentBrowserStatusResponse(runtime, config);
+}
+
+async function requireKernelApiKey(): Promise<string> {
+  const config = await resolveAgentBrowserConfig();
+
+  if (!config?.apiKey) {
+    throw new NakamaApiError("Kernel browser runtime is not configured.", 400);
+  }
+
+  return config.apiKey;
+}
+
+function toSessionBrowserResponse(
+  browser: Awaited<ReturnType<typeof getKernelBrowser>>
+): SessionBrowserResponse {
+  return { liveViewUrl: browser?.browser_live_view_url ?? null };
+}
+
+export async function getUserBrowser(
+  orgId: string,
+  userId: string
+): Promise<SessionBrowserResponse> {
+  const config = await resolveAgentBrowserConfig();
+
+  if (!config?.apiKey) {
+    return toSessionBrowserResponse(null);
+  }
+
+  return toSessionBrowserResponse(
+    await getKernelBrowser(config.apiKey, userBrowserName(orgId, userId))
+  );
+}
+
+/** Deleting the Kernel browser is what saves its cookies to the profile. */
+export async function stopUserBrowser(
+  orgId: string,
+  userId: string
+): Promise<void> {
+  await deleteKernelBrowser(
+    await requireKernelApiKey(),
+    userBrowserName(orgId, userId)
+  );
 }
 
 export interface AgentBrowserInstallProgress {
   message: string;
 }
 
-async function runInstallCommand(
-  plan: AgentBrowserInstallPlan,
-  onProgress?: (message: string) => void,
-  tryExtensions: boolean = true,
-): Promise<{
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-}> {
-  const { spawn } = await import("node:child_process");
-  const timeoutMs = 120_000;
-  const isWindows = process.platform === "win32";
-  const extensions = tryExtensions && isWindows ? [".cmd", ".bat", ".exe", ""] : [""];
-
-  for (const ext of extensions) {
-    const tryCommand = plan.command + ext;
-    const result = await new Promise<{
-      exitCode: number | null;
-      stdout: string;
-      stderr: string;
-      timedOut: boolean;
-      enoent: boolean;
-    }>((resolve) => {
-      const child = spawn(tryCommand, plan.args, {
-        env: getToolExecutionEnv(),
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      let timedOut = false;
-      let stdoutBuffer = "";
-      let stderrBuffer = "";
-
-      const timeoutId = setTimeout(() => {
-        timedOut = true;
-        child.kill("SIGTERM");
-      }, timeoutMs);
-
-      const emitLine = (prefix: "stdout" | "stderr", line: string) => {
-        onProgress?.(`${prefix}: ${line}`);
-      };
-
-      const flushBuffer = (buffer: string, prefix: "stdout" | "stderr") => {
-        let nextBuffer = buffer;
-
-        while (true) {
-          const newlineIndex = nextBuffer.search(/\r?\n/);
-
-          if (newlineIndex < 0) {
-            break;
-          }
-
-          const newlineLength = nextBuffer[newlineIndex] === "\r" ? 2 : 1;
-          const line = nextBuffer.slice(0, newlineIndex).trim();
-          nextBuffer = nextBuffer.slice(newlineIndex + newlineLength);
-
-          if (line) {
-            emitLine(prefix, line);
-          }
-        }
-
-        return nextBuffer;
-      };
-
-      child.stdout?.on("data", (chunk) => {
-        const text = chunk.toString();
-        stdout += text;
-        stdoutBuffer += text;
-        stdoutBuffer = flushBuffer(stdoutBuffer, "stdout");
-      });
-      child.stderr?.on("data", (chunk) => {
-        const text = chunk.toString();
-        stderr += text;
-        stderrBuffer += text;
-        stderrBuffer = flushBuffer(stderrBuffer, "stderr");
-      });
-
-      child.once("error", (error) => {
-        clearTimeout(timeoutId);
-
-        if (stdoutBuffer.trim()) {
-          emitLine("stdout", stdoutBuffer.trim());
-        }
-        if (stderrBuffer.trim()) {
-          emitLine("stderr", stderrBuffer.trim());
-        }
-
-        resolve({
-          exitCode: null,
-          stdout,
-          stderr: `${stderr}\n${String(error)}`.trim(),
-          timedOut,
-          enoent: (error as NodeJS.ErrnoException).code === "ENOENT",
-        });
-      });
-
-      child.once("close", (exitCode) => {
-        clearTimeout(timeoutId);
-
-        if (stdoutBuffer.trim()) {
-          emitLine("stdout", stdoutBuffer.trim());
-        }
-        if (stderrBuffer.trim()) {
-          emitLine("stderr", stderrBuffer.trim());
-        }
-
-        resolve({
-          exitCode,
-          stdout: stdout.trim(),
-          stderr: stderr.trim(),
-          timedOut,
-          enoent: false,
-        });
-      });
-    });
-
-    if (!result.enoent) {
-      return result;
-    }
-  }
-
-  return {
-    exitCode: 1,
-    stdout: "",
-    stderr: "Command not found",
-    timedOut: false,
-  };
-}
-
-function summarizeInstallOutput(output: string): string {
-  const lines = output
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const meaningful =
-    lines.find((line) => /^error:/i.test(line)) ??
-    lines.find((line) => /(?:EACCES|ENOENT|EPERM|failed|permission denied)/i.test(line)) ??
-    lines.find((line) => !/^bun (?:add|install) v/i.test(line)) ??
-    lines[0] ??
-    output.trim();
-  return meaningful.length > 180 ? `${meaningful.slice(0, 177)}...` : meaningful;
-}
-
-async function runAgentBrowserCommand(
-  args: string[],
-  onProgress?: (message: string) => void,
-): Promise<{
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-}> {
-  return runInstallCommand(
-    {
-      command: AGENT_BROWSER_COMMAND,
-      args,
-      displayCommand: `${AGENT_BROWSER_COMMAND} ${args.join(" ")}`,
-    },
-    onProgress,
-  );
-}
-
 export async function installAgentBrowser(
   onProgress?: (progress: AgentBrowserInstallProgress) => void,
+  options: { registry?: string; signal?: AbortSignal } = {}
 ): Promise<AgentBrowserStatusResponse> {
   const emitProgress = (message: string) => {
     onProgress?.({ message });
   };
 
-  const cliPlan = buildAgentBrowserCliInstallPlan();
-  if (cliPlan.command === "bun") {
-    ensureBunGlobalInstallDirs();
-  }
-
   emitProgress("Starting agent-browser install.");
-  emitProgress(cliPlan.displayCommand);
 
-  const cliResult = await runInstallCommand(cliPlan, emitProgress);
-  const cliOutput = [cliResult.stdout, cliResult.stderr].filter(Boolean).join("\n").trim();
+  try {
+    // Nothing is installed until the tarball matches the pinned hash, so a
+    // compromised registry or mirror fails here rather than in a
+    // lifecycle script running as the server.
+    const tarball = await downloadPinnedPackageTarball(
+      AGENT_BROWSER_PINNED_PACKAGE,
+      {
+        onProgress: emitProgress,
+        registry: options.registry,
+        signal: options.signal,
+      }
+    );
 
-  if (cliResult.timedOut) {
-    throw new Error("Install timed out while installing the agent-browser CLI.");
+    try {
+      const cliPlan = buildPinnedPackageInstallPlan(tarball.path);
+
+      if (cliPlan.command === "bun") {
+        ensureBunGlobalInstallDirs();
+      }
+
+      emitProgress(cliPlan.displayCommand);
+
+      const cliResult = await runTimedInstallCommand(cliPlan, emitProgress, {
+        signal: options.signal,
+      });
+
+      const cliOutput = [cliResult.stdout, cliResult.stderr]
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+
+      if (cliResult.timedOut) {
+        throw new NakamaApiError(
+          "Install timed out while installing the agent-browser CLI.",
+          502
+        );
+      }
+
+      if (cliResult.exitCode !== 0) {
+        throw new NakamaApiError(
+          cliOutput
+            ? `agent-browser CLI install failed: ${summarizeInstallOutput(cliOutput)}`
+            : "agent-browser CLI install failed.",
+          502
+        );
+      }
+    } finally {
+      await tarball.cleanup();
+    }
+  } catch (error) {
+    if (error instanceof NakamaApiError) {
+      throw error;
+    }
+
+    throw new NakamaApiError(
+      `agent-browser CLI install refused: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      502
+    );
   }
 
-  if (cliResult.exitCode !== 0) {
-    throw new Error(
-      cliOutput
-        ? `agent-browser CLI install failed: ${summarizeInstallOutput(cliOutput)}`
-        : "agent-browser CLI install failed.",
+  // The browser download is the long half, so starting it after the caller has
+  // gone is the case this guards. The abort is checked between the two commands
+  // as well as inside each one.
+  if (options.signal?.aborted) {
+    throw new NakamaApiError(
+      "Install cancelled before the agent-browser download started.",
+      502
     );
   }
 
   ensureProcessPath();
   emitProgress(`${AGENT_BROWSER_COMMAND} install`);
 
-  const browserResult = await runAgentBrowserCommand(["install"], emitProgress);
-  const browserOutput = [browserResult.stdout, browserResult.stderr].filter(Boolean).join("\n").trim();
+  const browserResult = await runTimedInstallCommand(
+    {
+      args: ["install"],
+      command: AGENT_BROWSER_COMMAND,
+      displayCommand: `${AGENT_BROWSER_COMMAND} install`,
+    },
+    emitProgress,
+    { signal: options.signal }
+  );
+
+  const browserOutput = [browserResult.stdout, browserResult.stderr]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
 
   if (browserResult.timedOut) {
-    throw new Error("Install timed out while downloading Chrome for agent-browser.");
+    throw new NakamaApiError(
+      "Install timed out while downloading Chrome for agent-browser.",
+      502
+    );
   }
 
   if (browserResult.exitCode !== 0) {
-    throw new Error(
+    throw new NakamaApiError(
       browserOutput
         ? `agent-browser browser install failed: ${summarizeInstallOutput(browserOutput)}`
         : "agent-browser browser install failed.",
+      502
     );
   }
 

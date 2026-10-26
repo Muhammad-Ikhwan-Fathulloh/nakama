@@ -1,26 +1,27 @@
-import { useEffect, useRef, useState } from "react";
 import { NakamaApiError } from "@nakama/core/api-error";
-import { Button } from "@/components/ui/button";
+import { Button } from "@nakama/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
+} from "@nakama/ui/dialog";
+import { Spinner } from "@nakama/ui/spinner";
+import { useState } from "react";
+import { UserContextForm } from "@/components/UserContextForm";
+import { useAuth } from "@/context/use-auth";
 import {
-  useInitUserContextMutation,
   useUserContextQuery,
   useWriteUserContextMutation,
 } from "@/hooks/use-resource-mutations";
-import { useAuth } from "@/context/use-auth";
+import {
+  clearUserContextDraft,
+  useUserContextEditor,
+} from "@/hooks/use-user-context-editor";
 import { formatError } from "@/lib/client";
-import { cn } from "@/lib/utils";
 
-function formatUserContextError(error: unknown): string {
+function formatUserContextError(error: Error): string {
   if (error instanceof NakamaApiError && error.status === 404) {
     return "This feature needs a newer Nakama server. Restart the server and try again.";
   }
@@ -28,106 +29,72 @@ function formatUserContextError(error: unknown): string {
   return formatError(error);
 }
 
-interface UserContextSettingsProps {
-  onSaveSuccess?: () => void;
-  autoInit?: boolean;
+interface UserContextEditorDialogProps {
+  onOpenChange: (open: boolean) => void;
+  /** Runs after USER.md is written, before the dialog closes. */
+  onSaved?: () => void;
+  open: boolean;
 }
 
-/** USER.md editor row for Settings — render inside a parent card. */
-export function UserContextSettings({ onSaveSuccess, autoInit = false }: UserContextSettingsProps = {}) {
+/** Controlled USER.md editor dialog, used from the account menu and settings row. */
+export function UserContextEditorDialog({
+  open,
+  onOpenChange,
+  onSaved,
+}: UserContextEditorDialogProps) {
   const { activeOrg } = useAuth();
+
+  return open ? (
+    <UserContextDialogSession
+      key={activeOrg?.id}
+      onOpenChange={onOpenChange}
+      onSaved={onSaved}
+      open
+    />
+  ) : null;
+}
+
+function UserContextDialogSession({
+  open,
+  onOpenChange,
+  onSaved,
+}: UserContextEditorDialogProps) {
+  const { activeOrg, user } = useAuth();
+  const orgId = activeOrg?.id ?? null;
+
   const {
     data: status,
     isLoading,
     error: loadError,
     refetch,
-  } = useUserContextQuery({ includeContent: true, orgId: activeOrg?.id ?? null });
-  const initMutation = useInitUserContextMutation();
+  } = useUserContextQuery({
+    includeContent: true,
+    orgId,
+  });
+
   const writeMutation = useWriteUserContextMutation();
 
-  const [content, setContent] = useState("");
-  const [savedContent, setSavedContent] = useState("");
-  const [editorOpen, setEditorOpen] = useState(false);
+  const { content, savedContent, setContent, setSavedContent } =
+    useUserContextEditor({
+      defaultName: user?.name,
+      orgId,
+      status,
+    });
+
   const [hint, setHint] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const autoInitAttemptedRef = useRef(false);
 
-  const busy = initMutation.isPending || writeMutation.isPending;
+  const busy = writeMutation.isPending;
   const isDirty = content !== savedContent;
-  const isActive = status?.active === true;
 
-  useEffect(() => {
-    if (status?.content !== undefined) {
-      setContent(status.content);
-      setSavedContent(status.content);
-    } else if (status && !status.active) {
-      setContent("");
-      setSavedContent("");
-    }
-  }, [status]);
-
-  // Auto-create USER.md in wizard contexts so the user can immediately edit
-  useEffect(() => {
-    if (!autoInit || autoInitAttemptedRef.current || isActive || isLoading || !status) {
-      return;
-    }
-
-    autoInitAttemptedRef.current = true;
-
-    async function autoCreate() {
-      setFormError(null);
-      setHint(null);
-
-      try {
-        const result = await initMutation.mutateAsync();
-        await refetch();
-        if (result.created) {
-          setEditorOpen(true);
-        }
-        setHint(result.created ? "Template created." : "USER.md already exists.");
-      } catch (error) {
-        setFormError(formatUserContextError(error));
-      }
-    }
-
-    void autoCreate();
-  }, [autoInit, isActive, isLoading, status, initMutation, refetch]);
-
-  function handleEditorOpenChange(open: boolean) {
-    setEditorOpen(open);
-    if (!open) {
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) {
       setContent(savedContent);
       setFormError(null);
+      setHint(null);
     }
-  }
 
-  async function handleInit() {
-    setFormError(null);
-    setHint(null);
-
-    try {
-      const result = await initMutation.mutateAsync();
-      await refetch();
-      if (result.created) {
-        setEditorOpen(true);
-      }
-      setHint(result.created ? "Template created." : "USER.md already exists.");
-    } catch (error) {
-      setFormError(formatUserContextError(error));
-    }
-  }
-
-  async function handleInitAndEdit() {
-    setFormError(null);
-    setHint(null);
-
-    try {
-      await initMutation.mutateAsync();
-      await refetch();
-      setEditorOpen(true);
-    } catch (error) {
-      setFormError(formatUserContextError(error));
-    }
+    onOpenChange(nextOpen);
   }
 
   async function handleSave() {
@@ -137,134 +104,155 @@ export function UserContextSettings({ onSaveSuccess, autoInit = false }: UserCon
     try {
       await writeMutation.mutateAsync(content);
       setSavedContent(content);
+      clearUserContextDraft(orgId);
       setHint("Saved. Start a new chat to apply.");
-      setEditorOpen(false);
+      onSaved?.();
+      onOpenChange(false);
       await refetch();
-      onSaveSuccess?.();
     } catch (error) {
-      setFormError(formatUserContextError(error));
+      setFormError(
+        formatUserContextError(
+          error instanceof Error ? error : new Error(formatError(error))
+        )
+      );
     }
   }
 
-  const statusLine =
-    hint ??
-    (formError && !editorOpen ? formError : null) ??
-    (loadError ? formatError(loadError) : null);
+  return (
+    <Dialog onOpenChange={handleOpenChange} open={open}>
+      <DialogContent className="flex max-h-[min(90dvh,44rem)] w-[calc(100%-1.5rem)] flex-col sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>About you</DialogTitle>
+        </DialogHeader>
+
+        {isLoading ? (
+          <div className="flex min-h-[min(50dvh,20rem)] items-center justify-center">
+            <Spinner />
+          </div>
+        ) : (
+          <div className="no-scrollbar -mx-1 min-h-0 flex-1 overflow-y-auto px-1">
+            <UserContextForm
+              disabled={busy}
+              idPrefix="user-context-dialog"
+              onChange={(next) => {
+                setContent(next);
+                setHint(null);
+
+                if (formError) {
+                  setFormError(null);
+                }
+              }}
+              value={content}
+            />
+          </div>
+        )}
+
+        {formError ? (
+          <p className="text-destructive text-sm" role="alert">
+            {formError}
+          </p>
+        ) : hint ? (
+          <p className="text-emerald-200 text-sm" role="status">
+            {hint}
+          </p>
+        ) : loadError ? (
+          <p className="text-destructive text-sm" role="alert">
+            {formatError(loadError)}
+          </p>
+        ) : null}
+
+        <DialogFooter>
+          <Button
+            disabled={busy}
+            onClick={() => handleOpenChange(false)}
+            type="button"
+            variant="outline"
+          >
+            Cancel
+          </Button>
+          <Button
+            disabled={busy || !isDirty || !!loadError}
+            onClick={() => void handleSave()}
+            type="button"
+          >
+            {writeMutation.isPending ? (
+              <>
+                <Spinner className="mr-2" />
+                Saving…
+              </>
+            ) : (
+              "Save"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function UserContextStatusCopy({
+  isActive,
+  loadError,
+}: {
+  isActive: boolean;
+  loadError: unknown;
+}) {
+  if (loadError) {
+    return (
+      <p className="text-destructive text-xs" role="alert">
+        {formatError(loadError)}
+      </p>
+    );
+  }
+
+  return (
+    <p className="text-muted-foreground text-xs">
+      {isActive
+        ? "USER.md is set for this org"
+        : "Answer a few questions so replies fit how you work"}
+    </p>
+  );
+}
+
+/** USER.md row for settings and the setup wizard. Render inside a parent card. */
+export function UserContextSettings() {
+  const { activeOrg } = useAuth();
+
+  const {
+    data: status,
+    isLoading,
+    error: loadError,
+  } = useUserContextQuery({
+    includeContent: true,
+    orgId: activeOrg?.id ?? null,
+  });
+
+  const [editorOpen, setEditorOpen] = useState(false);
+  const isActive = status?.active === true;
 
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
         <div className="min-w-0 space-y-0.5">
-          <p className="text-sm font-medium text-foreground">Personalisation</p>
-          {statusLine ? (
-            <p
-              className={cn(
-                "text-xs",
-                formError || loadError ? "text-destructive" : "text-emerald-200",
-              )}
-              role={formError || loadError ? "alert" : "status"}
-            >
-              {statusLine}
-            </p>
-          ) : (
-            <p className="text-xs text-muted-foreground">USER.md — personalisation for this org</p>
-          )}
+          <p className="font-medium text-foreground text-sm">Personalisation</p>
+          <UserContextStatusCopy isActive={isActive} loadError={loadError} />
         </div>
 
-        {isLoading ? (
-          <Spinner />
-        ) : loadError ? null : isActive ? (
+        {isLoading ? <Spinner /> : null}
+
+        {isLoading || loadError ? null : (
           <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={busy}
             onClick={() => setEditorOpen(true)}
-          >
-            {isDirty ? "Edit · unsaved" : "Edit"}
-          </Button>
-        ) : autoInit ? (
-          <Button
-            type="button"
             size="sm"
+            type="button"
             variant="outline"
-            disabled={busy}
-            onClick={() => void handleInitAndEdit()}
           >
-            {initMutation.isPending ? (
-              <>
-                <Spinner className="mr-2" />
-                Creating…
-              </>
-            ) : (
-              "Edit"
-            )}
-          </Button>
-        ) : (
-          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void handleInit()}>
-            {initMutation.isPending ? (
-              <>
-                <Spinner className="mr-2" />
-                Creating…
-              </>
-            ) : (
-              "Create"
-            )}
+            {isActive ? "Edit" : "Set up"}
           </Button>
         )}
       </div>
 
-      <Dialog open={editorOpen} onOpenChange={handleEditorOpenChange}>
-        <DialogContent className="flex max-h-[min(90dvh,40rem)] w-[calc(100%-1.5rem)] flex-col sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Personalisation (USER.md)</DialogTitle>
-            <DialogDescription>
-              A quick note so the agent knows who you are in this org.
-            </DialogDescription>
-          </DialogHeader>
-
-          <Textarea
-            value={content}
-            disabled={busy}
-            className="min-h-[min(50dvh,20rem)] flex-1 font-mono text-sm"
-            aria-label="USER.md content"
-            onChange={(event) => {
-              setContent(event.target.value);
-              setHint(null);
-              if (formError) {
-                setFormError(null);
-              }
-            }}
-          />
-
-          {formError ? (
-            <p className="text-sm text-destructive" role="alert">
-              {formError}
-            </p>
-          ) : null}
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={busy}
-              onClick={() => handleEditorOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="button" disabled={busy || !isDirty} onClick={() => void handleSave()}>
-              {writeMutation.isPending ? (
-                <>
-                  <Spinner className="mr-2" />
-                  Saving…
-                </>
-              ) : (
-                "Save"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <UserContextEditorDialog onOpenChange={setEditorOpen} open={editorOpen} />
     </>
   );
 }

@@ -7,28 +7,29 @@ import {
 } from "../fs";
 import type { LoadedSoulStack, SoulFileStatus, SoulStatus } from "./types";
 
-const SOUL_FILES = {
-  soul: "SOUL.md",
-  style: "STYLE.md",
+export const SOUL_FILES = {
   instructions: "INSTRUCTIONS.md",
   memory: "MEMORY.md",
+  soul: "SOUL.md",
+  style: "STYLE.md",
 } as const;
 
 async function loadExamples(directory: string): Promise<string | undefined> {
   const examplesDir = join(directory, "examples");
 
   if (!(await pathExists(examplesDir))) {
-    return undefined;
+    return;
   }
 
   const entries = await readDirectoryEntries(examplesDir);
+
   const markdownFiles = entries
     .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
     .map((entry) => entry.name)
     .sort();
 
   if (markdownFiles.length === 0) {
-    return undefined;
+    return;
   }
 
   const sections: string[] = [];
@@ -44,15 +45,43 @@ async function loadExamples(directory: string): Promise<string | undefined> {
   return sections.length > 0 ? sections.join("\n\n") : undefined;
 }
 
-export async function loadSoulStack(directory: string): Promise<LoadedSoulStack> {
+export async function loadSoulStack(
+  directory: string,
+  readMemory?: (content: string) => Promise<string>
+): Promise<LoadedSoulStack> {
   const files: LoadedSoulStack["files"] = {};
   const loaded: string[] = [];
 
-  for (const [key, filename] of Object.entries(SOUL_FILES)) {
-    const content = await readTextIfExists(join(directory, filename));
+  // SAFETY: Every entry comes from the statically declared SOUL_FILES map.
+  for (const [key, filename] of Object.entries(SOUL_FILES) as Array<
+    [keyof typeof SOUL_FILES, string]
+  >) {
+    let content: string | undefined;
+
+    if (key === "memory" && readMemory) {
+      let raw = "";
+
+      try {
+        raw = await readText(join(directory, filename));
+      } catch (error) {
+        if (
+          !(
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "ENOENT"
+          )
+        ) {
+          throw error;
+        }
+      }
+
+      content = (await readMemory(raw)).trim() || undefined;
+    } else {
+      content = await readTextIfExists(join(directory, filename));
+    }
 
     if (content) {
-      files[key as keyof typeof SOUL_FILES] = content;
+      files[key] = content;
       loaded.push(filename);
     }
   }
@@ -69,21 +98,22 @@ export async function loadSoulStack(directory: string): Promise<LoadedSoulStack>
 
 export function toSoulStatus(stack: LoadedSoulStack): SoulStatus {
   const files: SoulFileStatus = {
-    soul: Boolean(stack.files.soul),
-    style: Boolean(stack.files.style),
+    examples: Boolean(stack.files.examples),
     instructions: Boolean(stack.files.instructions),
     memory: Boolean(stack.files.memory),
-    examples: Boolean(stack.files.examples),
+    soul: Boolean(stack.files.soul),
+    style: Boolean(stack.files.style),
   };
 
   return {
-    directory: stack.directory,
     active: stack.loaded.length > 0,
+    directory: stack.directory,
     files,
   };
 }
 
 export async function getSoulStatus(directory: string): Promise<SoulStatus> {
   const stack = await loadSoulStack(directory);
+
   return toSoulStatus(stack);
 }

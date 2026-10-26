@@ -1,33 +1,58 @@
-import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   CreateNotificationDestinationRequest,
   UpdateNotificationDestinationRequest,
 } from "@nakama/core/contract";
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { useAuth } from "@/context/use-auth";
 import { client } from "@/lib/client";
+import { invalidateQueries } from "@/lib/query-client";
 import { queryKeys } from "@/lib/query-keys";
 
-export const notificationDestinationsQueryOptions = queryOptions({
-  queryKey: queryKeys.notificationDestinations.all,
-  queryFn: () => client.listNotificationDestinations(),
-});
+const notificationDestinationsQueryOptions = (orgId: string) =>
+  queryOptions({
+    queryFn: () => client.forOrg(orgId).listNotificationDestinations(),
+    queryKey: queryKeys.notificationDestinations(orgId),
+  });
 
-export function useNotificationDestinations() {
-  return useQuery(notificationDestinationsQueryOptions);
+export function useNotificationDestinations(orgId: string) {
+  return useQuery({
+    ...notificationDestinationsQueryOptions(orgId),
+    enabled: Boolean(orgId),
+  });
 }
 
-export function useCreateNotificationDestination() {
+export function useNotificationWhatsAppSettings(
+  profileId: string,
+  enabled: boolean
+) {
+  const { activeOrg } = useAuth();
+  const orgId = activeOrg?.id ?? null;
+
+  return useQuery({
+    enabled: enabled && !!orgId && !!profileId,
+    queryFn: () => client.forOrg(orgId).getWhatsAppSettings(profileId),
+    queryKey: [...queryKeys.whatsapp.settings, orgId, profileId],
+  });
+}
+
+export function useCreateNotificationDestination(orgId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (request: CreateNotificationDestinationRequest) =>
-      client.createNotificationDestination(request),
+      client.forOrg(orgId).createNotificationDestination(request),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.notificationDestinations.all });
+      invalidateQueries(queryClient, queryKeys.notificationDestinations(orgId));
     },
   });
 }
 
-export function useUpdateNotificationDestination() {
+export function useUpdateNotificationDestination(orgId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -37,32 +62,36 @@ export function useUpdateNotificationDestination() {
     }: {
       destinationId: string;
       request: UpdateNotificationDestinationRequest;
-    }) => client.updateNotificationDestination(destinationId, request),
+    }) =>
+      client
+        .forOrg(orgId)
+        .updateNotificationDestination(destinationId, request),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.notificationDestinations.all });
+      invalidateQueries(queryClient, queryKeys.notificationDestinations(orgId));
     },
   });
 }
 
-export function useRegenerateNotificationDestinationKey() {
+export function useRegenerateNotificationDestinationKey(orgId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (destinationId: string) =>
-      client.regenerateNotificationDestinationKey(destinationId),
+      client.forOrg(orgId).regenerateNotificationDestinationKey(destinationId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.notificationDestinations.all });
+      invalidateQueries(queryClient, queryKeys.notificationDestinations(orgId));
     },
   });
 }
 
-export function useDeleteNotificationDestination() {
+export function useDeleteNotificationDestination(orgId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (destinationId: string) => client.deleteNotificationDestination(destinationId),
+    mutationFn: (destinationId: string) =>
+      client.forOrg(orgId).deleteNotificationDestination(destinationId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.notificationDestinations.all });
+      invalidateQueries(queryClient, queryKeys.notificationDestinations(orgId));
     },
   });
 }

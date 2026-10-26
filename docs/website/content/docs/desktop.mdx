@@ -1,0 +1,45 @@
+---
+title: Desktop
+description: Run Nakama locally in a desktop app.
+---
+
+Nakama Desktop includes its own server and the existing web interface. Open the app to start everything locally; no separate server or Docker installation is needed.
+
+Download the signed macOS app from [desktop releases](https://github.com/ahmadrosid/nakama/releases?q=desktop-v). It requires macOS 15 or later on Apple Silicon.
+
+## Windows installation
+
+Windows installer builds target Windows 10 build 19041+ and Windows 11 x64. In [desktop releases](https://github.com/ahmadrosid/nakama/releases?q=desktop-v), choose the `x64-Setup.exe` installer when available. Run it to install for your Windows account, then open Nakama. Updates and uninstalling preserve your saved data.
+
+Releases through 0.1.8 do not include this installer. Check [Windows availability](https://github.com/ahmadrosid/nakama/blob/main/apps/desktop/README.md#windows-installation) before downloading. Until a verified installer is published, use the [web demo](https://demo.getnakama.cloud/) or [run Nakama with Docker](/docker). Unsigned `.msix` files from older releases are for Microsoft Store submission and cannot be installed by double-clicking.
+
+## Get started
+
+1. Open Nakama Desktop.
+2. Create your account and organization in the setup wizard.
+3. Configure a model provider and start chatting.
+
+Cloud model providers still need an internet connection and credentials. Optional tools may need programs such as Python or a coding CLI installed on your computer.
+
+## Your data
+
+Desktop keeps its own local accounts, conversations, and configuration. Existing web-server data is not imported automatically. Your data remains when you close or update the app.
+
+Desktop saves an encryption key in your operating-system credential store.
+Use **File → Export recovery key** before you move a full backup to another computer.
+Keep that key file separate from the backup. On the new computer, use **File → Import recovery key** before you restore the backup.
+Nakama checks the key against any saved encrypted secrets before it accepts the import, then restarts.
+
+The local server accepts connections only from your computer. Quitting the desktop app stops its server, automations, and channel workers. Keep the app open for background tasks to run.
+
+## Use Nakama
+
+Chat, select agents, upload files, and configure your organization using the same web interface. Links to other websites open in your normal browser. Microphone, camera, and notification permissions are disabled in this preview.
+
+If the local server stops unexpectedly, reopen Nakama to restart it.
+
+## Updates
+
+Signed desktop releases check for updates when opened and every six hours. Updates download in the background. Choose **Restart now** when prompted to install, or **Later** to continue working.
+
+Restarting stops running local tasks and preserves your saved data. Quitting normally does not install the update. If you use an unsigned development preview, install the first signed release manually to enable automatic updates.

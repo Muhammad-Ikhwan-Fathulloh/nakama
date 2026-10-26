@@ -1,184 +1,184 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import type { JsonSchema, ToolContext, ToolDefinition } from "@nakama/core";
-import { getCustomToolsDir, pathExists, permissiveObjectSchema } from "@nakama/core";
-import type { StoredToolRecord } from "@nakama/db";
+import { fileURLToPath } from "node:url";
+import type {
+  DiscoveredSkill,
+  JsonSchema,
+  ToolContext,
+  ToolDefinition,
+} from "@nakama/core";
+import { pathExists } from "@nakama/core";
+import { z } from "zod";
+import {
+  type CustomToolRecord,
+  loadCustomSubprocessTool,
+  readOptionalString,
+  resolveCustomToolModulePath,
+} from "./custom-tool-shared";
+import { spawnJsonTool } from "./custom-tool-subprocess";
 
-const moduleCache = new Map<string, JavascriptToolModule>();
+const BUN_BIN = process.env.NAKAMA_BUN_BIN ?? "bun";
 
-export interface JavascriptToolHandlerConfig {
-  modulePath: string;
-  parameters?: JsonSchema;
-}
+const customToolJsonValueSchema = z.json();
 
-interface JavascriptToolModule {
-  parameters?: JsonSchema;
-  run: (input: unknown, context: ToolContext) => Promise<unknown>;
-}
+type CustomToolJsonValue = z.infer<typeof customToolJsonValueSchema>;
+
+const javascriptSyntaxChecker = new Bun.Transpiler({ loader: "js" });
+
+const syntaxErrorPositionSchema = z.object({
+  position: z.object({ column: z.number(), line: z.number() }),
+});
+
+const RUNNER_PATH = fileURLToPath(
+  new URL("./javascript-tool-runner.js", import.meta.url)
+);
 
 export async function loadJavascriptTool(
-  record: StoredToolRecord,
+  record: CustomToolRecord,
+  sharedContext?: ToolContext
 ): Promise<ToolDefinition | null> {
-  const config = readJavascriptHandlerConfig(record.handlerConfig);
-
-  if (!config?.modulePath) {
-    return createErrorTool(
-      record,
-      `Tool "${record.name}" is missing handlerConfig.modulePath.`,
-    );
-  }
-
-  let modulePath: string;
-
-  try {
-    modulePath = resolveJavascriptModulePath(config.modulePath);
-  } catch (error) {
-    return createErrorTool(
-      record,
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-
-  if (!(await pathExists(modulePath))) {
-    return createErrorTool(
-      record,
-      `Tool module not found: ${config.modulePath}`,
-    );
-  }
-
-  try {
-    const module = await importJavascriptModule(modulePath);
-    const parameters =
-      module.parameters ?? config.parameters ?? permissiveObjectSchema();
-
-    return {
-      name: record.name,
-      description: record.description,
-      parameters,
-      async run(input, context) {
-        return module.run(input, context);
-      },
-    };
-  } catch (error) {
-    return createErrorTool(
-      record,
-      error instanceof Error ? error.message : String(error),
-    );
-  }
+  return loadCustomSubprocessTool({
+    allowParallelSafe: true,
+    record,
+    resolveModulePath: resolveCustomToolModulePath,
+    run: (modulePath, input, context, env) =>
+      runJavascriptTool(
+        modulePath,
+        input,
+        context,
+        env,
+        Boolean(sharedContext)
+      ),
+    validateModule: validateJavascriptToolModule,
+  });
 }
 
-export async function validateJavascriptToolModule(modulePath: string): Promise<void> {
-  const resolvedPath = resolveJavascriptModulePath(modulePath);
-
-  if (!(await pathExists(resolvedPath))) {
-    throw new Error(`Tool module not found: ${modulePath}`);
-  }
-
-  await importJavascriptModule(resolvedPath);
-}
-
-export function resolveJavascriptModulePath(modulePath: string): string {
-  const toolsDir = path.resolve(getCustomToolsDir());
-  const resolved = path.isAbsolute(modulePath)
-    ? path.resolve(modulePath)
-    : path.resolve(toolsDir, modulePath);
-
-  if (!isPathInsideDirectory(resolved, toolsDir)) {
-    throw new Error(`Tool module path must stay inside ${toolsDir}.`);
-  }
-
-  return resolved;
-}
-
-function readJavascriptHandlerConfig(
-  handlerConfig: unknown,
-): JavascriptToolHandlerConfig | null {
-  if (typeof handlerConfig !== "object" || handlerConfig === null) {
-    return null;
-  }
-
-  const record = handlerConfig as Record<string, unknown>;
-  const modulePath =
-    typeof record.modulePath === "string" && record.modulePath.trim()
-      ? record.modulePath.trim()
-      : null;
+/** Caller must verify published code against approved source files before loading. */
+export async function loadJavascriptSkillTool(
+  skill: DiscoveredSkill,
+  context: ToolContext
+): Promise<ToolDefinition | null> {
+  const modulePath = skill.toolPath;
 
   if (!modulePath) {
     return null;
   }
 
-  const parameters =
-    isJsonSchema(record.parameters) ? record.parameters : undefined;
-
-  return { modulePath, parameters };
-}
-
-async function importJavascriptModule(
-  modulePath: string,
-): Promise<JavascriptToolModule> {
-  const cached = moduleCache.get(modulePath);
-
-  if (cached) {
-    return cached;
-  }
-
-  const imported = await import(pathToFileURL(modulePath).href);
-  const module = normalizeJavascriptModule(imported);
-
-  moduleCache.set(modulePath, module);
-  return module;
-}
-
-export function invalidateJavascriptModuleCache(modulePath: string): void {
-  moduleCache.delete(modulePath);
-}
-
-function normalizeJavascriptModule(imported: unknown): JavascriptToolModule {
-  if (typeof imported !== "object" || imported === null) {
-    throw new Error("Tool module must export a run function.");
-  }
-
-  const record = imported as Record<string, unknown>;
-  const defaultExport =
-    typeof record.default === "object" && record.default !== null
-      ? (record.default as Record<string, unknown>)
-      : null;
-  const source = defaultExport ?? record;
-  const run = source.run;
-
-  if (typeof run !== "function") {
-    throw new Error("Tool module must export a run function.");
-  }
-
-  const parameters = isJsonSchema(source.parameters)
-    ? source.parameters
-    : isJsonSchema(record.parameters)
-      ? record.parameters
-      : undefined;
+  const metadata = z
+    .object({
+      description: z.string().optional(),
+      name: z.string().optional(),
+      parameters: z.record(z.string(), z.json()).optional(),
+    })
+    .parse(
+      await spawnJsonTool({
+        args: [RUNNER_PATH, modulePath, "--describe-skill"],
+        bin: BUN_BIN,
+        context,
+        cwd: context.workspaceRoot!,
+        input: {},
+        label: "JavaScript skill tool",
+        transport: { includeConfigDir: false },
+        workspaceRoot: context.workspaceRoot,
+      })
+    );
 
   return {
-    parameters,
-    run: (input, context) => Promise.resolve(run(input, context)),
-  };
-}
-
-function createErrorTool(record: StoredToolRecord, message: string): ToolDefinition {
-  return {
-    name: record.name,
-    description: record.description,
-    parameters: permissiveObjectSchema(),
-    async run() {
-      return { error: message };
+    description: metadata.description?.trim() || skill.description,
+    name: metadata.name?.trim() || skill.name,
+    // SAFETY: The metadata schema confirms a JSON object before exposing it as JSON Schema.
+    parameters: (metadata.parameters as JsonSchema | undefined) ?? {
+      additionalProperties: true,
+      type: "object",
+    },
+    async run(input, executionContext) {
+      return spawnJsonTool({
+        args: [RUNNER_PATH, modulePath, "--run-skill"],
+        bin: BUN_BIN,
+        context: executionContext,
+        cwd: executionContext.workspaceRoot!,
+        input: {
+          context: {
+            orgId: executionContext.orgId,
+            orgRole: executionContext.orgRole,
+            profileId: executionContext.profileId,
+          },
+          input: customToolJsonValueSchema.parse(input),
+        },
+        label: "JavaScript skill tool",
+        transport: { includeConfigDir: false },
+        workspaceRoot: executionContext.workspaceRoot,
+      });
     },
   };
 }
 
-function isPathInsideDirectory(targetPath: string, directoryPath: string): boolean {
-  const relative = path.relative(directoryPath, targetPath);
+export async function validateJavascriptToolModule(
+  modulePath: string,
+  orgId?: string | null
+): Promise<void> {
+  const resolvedPath = resolveCustomToolModulePath(modulePath, orgId);
 
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  if (!(await pathExists(resolvedPath))) {
+    throw new Error(`Tool module not found: ${modulePath}`);
+  }
+
+  // Static checks catch the obvious authoring failures before registration.
+  const source = await readFile(resolvedPath, "utf8");
+
+  // A parse in this process costs far less than an agent turn spent finding a
+  // syntax error some other way: bash cannot reach the tools directory.
+  try {
+    javascriptSyntaxChecker.scan(source);
+  } catch (error) {
+    const position = syntaxErrorPositionSchema.safeParse(error).data?.position;
+
+    const where = position
+      ? ` at line ${position.line}:${position.column}`
+      : "";
+
+    const reason = error instanceof Error ? error.message : String(error);
+
+    throw new Error(`Syntax error in ${modulePath}${where}: ${reason}`);
+  }
+
+  if (
+    !/\bexport\s+(?:async\s+)?function\s+run\s*\(|\bexport\s+(?:const|let|var)\s+run\s*=/.test(
+      source
+    )
+  ) {
+    throw new Error("Tool module must export a run(input, context) function.");
+  }
 }
 
-function isJsonSchema(value: unknown): value is JsonSchema {
-  return typeof value === "object" && value !== null;
+async function runJavascriptTool<T>(
+  modulePath: string,
+  input: T,
+  context: ToolContext,
+  env?: Record<string, string>,
+  shared = false
+): Promise<CustomToolJsonValue> {
+  // No try/catch here on purpose: a failed spawn must reject so the retry
+  // policy in withToolRetries can retry explicitly opt-in transient failures
+  // (RetryableToolError / exit 75). executeToolCall converts the throw into
+  // `{ error: message }`.
+  const cwd = shared ? context.workspaceRoot : path.dirname(modulePath);
+
+  if (!cwd) {
+    throw new Error("Shared tool workspace is unavailable.");
+  }
+
+  const result = await spawnJsonTool({
+    args: [RUNNER_PATH, modulePath],
+    bin: BUN_BIN,
+    context,
+    cwd,
+    env,
+    input: customToolJsonValueSchema.parse(input),
+    label: "JavaScript tool",
+    transport: shared ? { includeConfigDir: false } : undefined,
+    workspaceRoot: readOptionalString(context?.workspaceRoot),
+  });
+
+  return customToolJsonValueSchema.parse(result);
 }

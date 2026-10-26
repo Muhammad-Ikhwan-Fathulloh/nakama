@@ -1,13 +1,18 @@
-import { describe, expect, test, afterEach } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { asTestFetch } from "../test-helpers";
 import { createOpenCodeGoProvider } from "./index";
 
 const ORIGINAL_FETCH = globalThis.fetch;
 
-function mockFetch(handler: (request: Request) => Promise<Response> | Response): void {
-  const mockFn: typeof fetch = (input, init?) => {
+function mockFetch(
+  handler: (request: Request) => Promise<Response> | Response
+): void {
+  const mockFn: typeof fetch = asTestFetch((input, init?) => {
     const request = new Request(input, init);
+
     return Promise.resolve(handler(request));
-  };
+  });
+
   globalThis.fetch = mockFn;
 }
 
@@ -17,15 +22,16 @@ afterEach(() => {
 
 describe("createOpenCodeGoProvider", () => {
   test("routes chat-completions models to the OpenAI-compatible endpoint", async () => {
-    let capturedUrl: string | null = null;
+    let capturedUrl = "";
 
     mockFetch((request) => {
       capturedUrl = request.url;
+
       return new Response(
         JSON.stringify({
           choices: [{ message: { content: "Hello from OpenCode Go" } }],
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
+        { headers: { "Content-Type": "application/json" }, status: 200 }
       );
     });
 
@@ -35,8 +41,8 @@ describe("createOpenCodeGoProvider", () => {
     });
 
     const result = await provider.generateChat({
+      messages: [{ content: "Hi", role: "user" }],
       system: "You are a helpful assistant.",
-      messages: [{ role: "user", content: "Hi" }],
     });
 
     expect(capturedUrl).toBe("https://opencode.ai/zen/go/v1/chat/completions");
@@ -44,20 +50,21 @@ describe("createOpenCodeGoProvider", () => {
   });
 
   test("routes messages models to the Anthropic-style endpoint", async () => {
-    let capturedUrl: string | null = null;
+    let capturedUrl = "";
 
     mockFetch((request) => {
       capturedUrl = request.url;
+
       return new Response(
         JSON.stringify({
+          content: [{ text: "Hello from messages", type: "text" }],
           id: "msg_test",
-          type: "message",
-          role: "assistant",
           model: "opencode-go/qwen3.7-max",
+          role: "assistant",
           stop_reason: "end_turn",
-          content: [{ type: "text", text: "Hello from messages" }],
+          type: "message",
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
+        { headers: { "Content-Type": "application/json" }, status: 200 }
       );
     });
 
@@ -67,8 +74,8 @@ describe("createOpenCodeGoProvider", () => {
     });
 
     const result = await provider.generateChat({
+      messages: [{ content: "Hi", role: "user" }],
       system: "You are a helpful assistant.",
-      messages: [{ role: "user", content: "Hi" }],
     });
 
     expect(capturedUrl).toBe("https://opencode.ai/zen/go/v1/messages");

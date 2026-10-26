@@ -1,142 +1,79 @@
-import { join } from "node:path";
+import type { ChannelConfigScope } from "./channel-config-shared";
 import type { DiscordWorkerStatus } from "./contract";
 import {
+  type DiscordSettingsPublic,
   getDiscordConfigDir,
   loadDiscordSettingsPublic,
-  type DiscordSettingsPublic,
 } from "./discord-config";
-import { pathExists, readTextOrNull, removeFile, writePrivateTextFile } from "./fs";
+import {
+  createWorkerHeartbeatStore,
+  isHeartbeatAlive,
+  type WorkerHeartbeatBase,
+} from "./worker-heartbeat";
 
-export interface DiscordWorkerHeartbeat {
-  pid: number;
-  updatedAt: string;
+export interface DiscordWorkerHeartbeat extends WorkerHeartbeatBase {
   connected?: boolean;
 }
 
-const DEFAULT_HEARTBEAT_MAX_AGE_MS = 45_000;
-const HEARTBEAT_FILENAME = "worker-heartbeat.json";
+export { isHeartbeatAlive };
 
-export function getDiscordWorkerHeartbeatPath(): string {
-  return join(getDiscordConfigDir(), HEARTBEAT_FILENAME);
+export function createDiscordWorkerHeartbeat(scope: ChannelConfigScope = null) {
+  return createWorkerHeartbeatStore<DiscordWorkerHeartbeat>({
+    getDir: () => getDiscordConfigDir(scope),
+    parse: (value, base) => ({
+      connected: value.connected === true,
+      ...base,
+    }),
+  });
 }
+
+const store = createDiscordWorkerHeartbeat();
+
+export const parseDiscordWorkerHeartbeat = store.parse;
+
+export const readDiscordWorkerHeartbeat = store.read;
+
+export const clearDiscordWorkerHeartbeat = store.clear;
 
 export function resolveDiscordWorkerStatus(
   settings: DiscordSettingsPublic,
   running: boolean,
-  connected = false,
+  connected = false
 ): DiscordWorkerStatus {
   const configured = settings.configured;
   const paired = settings.pairedUserIds.length > 0;
   const ok = !configured || running;
 
-  return { configured, paired, running, connected, ok };
-}
-
-export function isProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return false;
-  }
-
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function isHeartbeatAlive(
-  heartbeat: DiscordWorkerHeartbeat | null,
-  maxAgeMs = DEFAULT_HEARTBEAT_MAX_AGE_MS,
-): boolean {
-  if (!heartbeat) {
-    return false;
-  }
-
-  const updatedAt = Date.parse(heartbeat.updatedAt);
-
-  if (!Number.isFinite(updatedAt)) {
-    return false;
-  }
-
-  if (Date.now() - updatedAt > maxAgeMs) {
-    return false;
-  }
-
-  return isProcessAlive(heartbeat.pid);
-}
-
-export function parseDiscordWorkerHeartbeat(raw: string): DiscordWorkerHeartbeat | null {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      typeof (parsed as DiscordWorkerHeartbeat).pid !== "number" ||
-      typeof (parsed as DiscordWorkerHeartbeat).updatedAt !== "string"
-    ) {
-      return null;
-    }
-
-    const heartbeat = parsed as DiscordWorkerHeartbeat;
-
-    return {
-      pid: heartbeat.pid,
-      updatedAt: heartbeat.updatedAt,
-      connected: heartbeat.connected === true,
-    };
-  } catch {
-    return null;
-  }
+  return { configured, connected, ok, paired, running };
 }
 
 export async function writeDiscordWorkerHeartbeat(
   pid = process.pid,
   updatedAt = new Date().toISOString(),
-  connected?: boolean,
+  connected?: boolean
 ): Promise<void> {
-  const payload: DiscordWorkerHeartbeat = {
+  const heartbeat: DiscordWorkerHeartbeat = {
     pid,
     updatedAt,
-    ...(connected === undefined ? {} : { connected }),
   };
 
-  await writePrivateTextFile(
-    getDiscordWorkerHeartbeatPath(),
-    `${JSON.stringify(payload)}\n`,
-    { ensureDir: getDiscordConfigDir() },
-  );
-}
-
-export async function clearDiscordWorkerHeartbeat(): Promise<void> {
-  const path = getDiscordWorkerHeartbeatPath();
-
-  if (await pathExists(path)) {
-    await removeFile(path);
-  }
-}
-
-export async function readDiscordWorkerHeartbeat(): Promise<DiscordWorkerHeartbeat | null> {
-  const raw = await readTextOrNull(getDiscordWorkerHeartbeatPath());
-
-  if (raw === null) {
-    return null;
+  if (connected !== undefined) {
+    heartbeat.connected = connected;
   }
 
-  return parseDiscordWorkerHeartbeat(raw.trim());
+  await store.write(heartbeat);
 }
 
-export async function isDiscordWorkerRunning(
-  maxAgeMs = DEFAULT_HEARTBEAT_MAX_AGE_MS,
-): Promise<boolean> {
-  return isHeartbeatAlive(await readDiscordWorkerHeartbeat(), maxAgeMs);
-}
-
-export async function getDiscordWorkerStatus(): Promise<DiscordWorkerStatus> {
-  const settings = await loadDiscordSettingsPublic();
-  const heartbeat = await readDiscordWorkerHeartbeat();
+export async function getDiscordWorkerStatus(
+  scope: ChannelConfigScope = null
+): Promise<DiscordWorkerStatus> {
+  const settings = await loadDiscordSettingsPublic(scope);
+  const heartbeat = await createDiscordWorkerHeartbeat(scope).read();
   const running = isHeartbeatAlive(heartbeat);
 
-  return resolveDiscordWorkerStatus(settings, running, heartbeat?.connected === true);
+  return resolveDiscordWorkerStatus(
+    settings,
+    running,
+    heartbeat?.connected === true
+  );
 }

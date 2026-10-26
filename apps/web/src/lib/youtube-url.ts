@@ -8,6 +8,7 @@ const YOUTUBE_HOSTS = new Set([
 ]);
 
 function isValidYoutubeId(id: string | null | undefined): id is string {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- This guard validates decoded external data before the caller uses the domain value.
   return typeof id === "string" && YOUTUBE_ID_RE.test(id);
 }
 
@@ -16,10 +17,15 @@ function normalizeHost(hostname: string): string {
 }
 
 /** Extract an 11-char YouTube video id from common watch / share / embed URLs. */
-export function parseYoutubeVideoId(url: string | undefined | null): string | null {
-  if (!url) return null;
+export function parseYoutubeVideoId(
+  url: string | undefined | null
+): string | null {
+  if (!url) {
+    return null;
+  }
 
   let parsed: URL;
+
   try {
     parsed = new URL(url);
   } catch {
@@ -34,6 +40,7 @@ export function parseYoutubeVideoId(url: string | undefined | null): string | nu
 
   if (host === "youtu.be") {
     const id = parsed.pathname.split("/").filter(Boolean)[0]?.split("?")[0];
+
     return isValidYoutubeId(id) ? id : null;
   }
 
@@ -43,10 +50,12 @@ export function parseYoutubeVideoId(url: string | undefined | null): string | nu
 
   if (parsed.pathname === "/watch" || parsed.pathname === "/watch/") {
     const id = parsed.searchParams.get("v");
+
     return isValidYoutubeId(id) ? id : null;
   }
 
   const match = parsed.pathname.match(/^\/(?:embed|shorts|live)\/([^/?#]+)/);
+
   if (match && isValidYoutubeId(match[1])) {
     return match[1];
   }
