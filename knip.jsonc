@@ -12,7 +12,7 @@
       "ignore": ["dist/**"]
     },
     "apps/desktop": {
-      "entry": ["preload.cjs", "tests/smoke.mjs"],
+      "entry": ["preload.cjs"],
       // PowerShell 7 is supplied by the Windows build host.
       "ignoreBinaries": ["pwsh"],
       "project": ["*.mjs", "*.cjs", "tests/*.mjs", "scripts/*.mjs"]
@@ -46,8 +46,7 @@
     "apps/server": {
       "entry": [
         "src/index.ts",
-        "scripts/*.ts",
-        "src/testing/cassettes/serve.ts"
+        "scripts/*.ts"
       ],
       // Bundled ACP agents. The server resolves them by name at run time (acp-agent-presets.ts).
       "ignoreDependencies": [
@@ -63,10 +62,12 @@
       ]
     },
     // Not in package.json#workspaces; Knip would skip it otherwise.
-    "docs/website": {}
+    "docs/website": {
+      "entry": ["source.config.ts"]
+    }
   },
-  // Ships with Windows; desktop quit uses it to confirm a leftover pid is bun.
-  "ignoreBinaries": ["tasklist"],
+  // Ships with Windows; desktop quit uses it to confirm a leftover pid is bun. taskkill is used to kill processes.
+  "ignoreBinaries": ["defaults", "taskkill", "tasklist"],
   // These are intentional until the duplicate access rules and MDX package metadata are resolved.
   "ignoreIssues": {
     "apps/web/src/lib/navigation.ts": ["duplicates"],
