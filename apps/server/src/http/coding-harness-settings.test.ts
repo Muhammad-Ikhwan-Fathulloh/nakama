@@ -25,20 +25,17 @@ describe("coding harness settings routes", () => {
 
   afterEach(async () => {
     process.env.PATH = originalPath;
-
     if (originalDisableFixPath === undefined) {
       delete process.env.NAKAMA_DISABLE_FIX_PATH;
     } else {
       process.env.NAKAMA_DISABLE_FIX_PATH = originalDisableFixPath;
     }
-
     delete process.env.NAKAMA_CONFIG_DIR;
 
     if (tempBinDir) {
       await rm(tempBinDir, { recursive: true, force: true });
       tempBinDir = "";
     }
-
     if (configDir) {
       await rm(configDir, { recursive: true, force: true });
       configDir = "";
@@ -50,15 +47,14 @@ describe("coding harness settings routes", () => {
 
     const databaseAdapter = createInMemoryDatabaseAdapter();
     const authService = new AuthService();
-
     // SAFETY: test fixtures; types are mocked for test isolation
     const app = createHonoApp({
       agent: new AgentService(null, null, databaseAdapter),
-      automationService: {} as any,
-      taskService: {} as any,
-      systemStatus: { getStatus: async () => ({ ok: true }) } as any,
-      workerManager: {} as any,
-      mcpService: {} as any,
+      automationService: {} as any, // SAFETY: mock service for test
+      taskService: {} as any, // SAFETY: mock service for test
+      systemStatus: { getStatus: async () => ({ ok: true }) } as any, // SAFETY: mock service for test
+      workerManager: {} as any, // SAFETY: mock service for test
+      mcpService: {} as any, // SAFETY: mock service for test
       authService,
       orgService: new OrgService(databaseAdapter, authService),
       databaseAdapter,
@@ -72,21 +68,16 @@ describe("coding harness settings routes", () => {
         headers: session.headers(),
       }),
     );
-
     expect(getEmpty.status).toBe(200);
-
     // SAFETY: response from app.fetch is typed by route handler
     const emptyBody = (await getEmpty.json()) as {
       configured: boolean;
       activeHarnessId: string | null;
       harnesses: Array<{ kind: string; installed: boolean }>;
     };
-
     expect(emptyBody.configured).toBe(false);
     expect(emptyBody.activeHarnessId).toBeNull();
-
     const codexHarness = emptyBody.harnesses.find((harness) => harness.kind === "codex");
-
     expect(codexHarness?.installed).toBe(true);
     expect(codexHarness?.ready).toBe(false);
 
@@ -103,16 +94,13 @@ describe("coding harness settings routes", () => {
         }),
       }),
     );
-
     expect(putResponse.status).toBe(200);
-
     // SAFETY: response from app.fetch is typed by route handler
     const saved = (await putResponse.json()) as {
       configured: boolean;
       selectedHarnessId: string | null;
       harnesses: Array<{ id: string; selected: boolean; installed: boolean }>;
     };
-
     expect(saved.configured).toBe(false);
     expect(saved.selectedHarnessId).toBe("coding-harness-codex");
     expect(saved.harnesses.find((harness) => harness.id === "coding-harness-codex")?.selected).toBe(
@@ -131,9 +119,7 @@ describe("coding harness settings routes", () => {
         }),
       }),
     );
-
     expect(verifyResponse.status).toBe(200);
-
     // SAFETY: response from app.fetch is typed by route handler
     const verified = (await verifyResponse.json()) as {
       ok: boolean;
@@ -142,7 +128,6 @@ describe("coding harness settings routes", () => {
       authenticated: boolean | null;
       ready: boolean;
     };
-
     expect(verified.ok).toBe(true);
     expect(verified.harnessId).toBe("coding-harness-codex");
     expect(verified.authenticated).toBe(true);
@@ -153,16 +138,13 @@ describe("coding harness settings routes", () => {
         headers: session.headers(),
       }),
     );
-
     expect(getCached.status).toBe(200);
-
     // SAFETY: response from app.fetch is typed by route handler
     const cachedBody = (await getCached.json()) as {
       configured: boolean;
       activeHarnessId: string | null;
       harnesses: Array<{ id: string; ready: boolean }>;
     };
-
     expect(cachedBody.configured).toBe(true);
     expect(cachedBody.activeHarnessId).toBe("coding-harness-codex");
     expect(
@@ -173,15 +155,14 @@ describe("coding harness settings routes", () => {
   test("install stream uses the database adapter instead of an undefined agent property", async () => {
     const databaseAdapter = createInMemoryDatabaseAdapter();
     const authService = new AuthService();
-
     // SAFETY: test fixtures; types are mocked for test isolation
     const app = createHonoApp({
       agent: new AgentService(null, null, databaseAdapter),
-      automationService: {} as any,
-      taskService: {} as any,
-      systemStatus: { getStatus: async () => ({ ok: true }) } as any,
-      workerManager: {} as any,
-      mcpService: {} as any,
+      automationService: {} as any, // SAFETY: mock service for test
+      taskService: {} as any, // SAFETY: mock service for test
+      systemStatus: { getStatus: async () => ({ ok: true }) } as any, // SAFETY: mock service for test
+      workerManager: {} as any, // SAFETY: mock service for test
+      mcpService: {} as any, // SAFETY: mock service for test
       authService,
       orgService: new OrgService(databaseAdapter, authService),
       databaseAdapter,
@@ -205,9 +186,7 @@ describe("coding harness settings routes", () => {
     );
 
     expect(installResponse.status).toBe(200);
-
     const body = await installResponse.text();
-
     expect(body).not.toContain("db.getWorkspaceSettings");
     expect(body).toContain('"type":"progress"');
 
@@ -219,7 +198,6 @@ describe("coding harness settings routes", () => {
       .filter((event) => event.type === "progress");
 
     expect(progressEvents.length).toBeGreaterThan(0);
-
     for (const event of progressEvents) {
       expect(typeof event.message).toBe("string");
     }
@@ -230,15 +208,14 @@ describe("coding harness settings routes", () => {
 
     const databaseAdapter = createInMemoryDatabaseAdapter();
     const authService = new AuthService();
-
     // SAFETY: test fixtures; types are mocked for test isolation
     const app = createHonoApp({
       agent: new AgentService(null, null, databaseAdapter),
-      automationService: {} as any,
-      taskService: {} as any,
-      systemStatus: { getStatus: async () => ({ ok: true }) } as any,
-      workerManager: {} as any,
-      mcpService: {} as any,
+      automationService: {} as any, // SAFETY: mock service for test
+      taskService: {} as any, // SAFETY: mock service for test
+      systemStatus: { getStatus: async () => ({ ok: true }) } as any, // SAFETY: mock service for test
+      workerManager: {} as any, // SAFETY: mock service for test
+      mcpService: {} as any, // SAFETY: mock service for test
       authService,
       orgService: new OrgService(databaseAdapter, authService),
       databaseAdapter,
@@ -252,15 +229,12 @@ describe("coding harness settings routes", () => {
         headers: session.headers(),
       }),
     );
-
     expect(getResponse.status).toBe(200);
-
     // SAFETY: response from app.fetch is typed by route handler
     const settings = (await getResponse.json()) as {
       configured: boolean;
       activeHarnessId: string | null;
     };
-
     expect(settings.configured).toBe(false);
     expect(settings.activeHarnessId).toBeNull();
 
@@ -276,9 +250,7 @@ describe("coding harness settings routes", () => {
         }),
       }),
     );
-
     expect(verifyResponse.status).toBe(200);
-
     // SAFETY: response from app.fetch is typed by route handler
     const verified = (await verifyResponse.json()) as {
       ok: boolean;
@@ -287,7 +259,6 @@ describe("coding harness settings routes", () => {
       nextStep: string | null;
       error: string | null;
     };
-
     expect(verified.ok).toBe(false);
     expect(verified.authenticated).toBe(false);
     expect(verified.ready).toBe(false);
@@ -302,12 +273,11 @@ async function installFakeBinary(
   mode: "ready" | "login-required",
 ): Promise<void> {
   const isWindows = process.platform === "win32";
-
+  
   // Write both with and without .cmd extension on Windows for compatibility
   if (isWindows) {
     const scriptPathCmd = join(binDir, `${name}.cmd`);
     const scriptPath = join(binDir, name);
-
     const body = mode === "ready"
       ? [
           "@echo off",
@@ -332,7 +302,6 @@ async function installFakeBinary(
     await writeFile(scriptPath, body.join("\n")); // Also write without extension
   } else {
     const scriptPath = join(binDir, name);
-
     const body = mode === "ready"
       ? [
           "#!/bin/sh",
@@ -352,7 +321,6 @@ async function installFakeBinary(
           'echo "Please run codex login" 1>&2',
           "exit 1",
         ];
-
     await writeFile(scriptPath, body.join("\n"));
     await chmod(scriptPath, 0o755);
   }
