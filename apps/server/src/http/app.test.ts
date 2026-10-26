@@ -11,6 +11,7 @@ import {
 import { AuthService } from "../services/auth-service";
 import { OrgService } from "../services/org-service";
 import { setupTestConfigDir } from "../test-config-dir";
+import { NakamaApiError } from "@nakama/core";
 import { createHonoApp } from "./app";
 import { setupFreshInstallSession } from "./test-session-helpers";
 
@@ -529,14 +530,15 @@ describe("createHonoApp", () => {
   });
 
   describe("session org ownership", () => {
-    test("returns error when accessing a session from another org", async () => {
+    test("returns 404 when assertSessionProfileAccess rejects cross-org access", async () => {
       const options = createServerOptions();
       let accessCheckCalled = false;
 
-      // Override assertSessionProfileAccess to simulate org mismatch rejection.
+      // Simulate org mismatch rejection from the agent layer using NakamaApiError
+      // so the Hono error handler maps it to 404, not 500.
       options.agent.assertSessionProfileAccess = async () => {
         accessCheckCalled = true;
-        throw new Error("Session not found");
+        throw new NakamaApiError("Session not found", 404);
       };
 
       const app = createHonoApp(options);
@@ -549,7 +551,6 @@ describe("createHonoApp", () => {
         }),
       );
 
-      // assertSessionProfileAccess should have been called and rejected access.
       expect(accessCheckCalled).toBe(true);
       expect(response.status).toBe(404);
     });
