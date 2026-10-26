@@ -37,7 +37,7 @@ function createServerOptions() {
         active: includeContent,
         ...(includeContent ? { content: "ctx" } : {}),
       }),
-      writeUserContext: async (_orgId: string, _userId: string, _body: unknown) => {},
+      writeUserContext: async (_orgId: string, _userId: string, _body: unknown) => { },
       initUserContext: async (_orgId: string, _userId: string) => ({ created: true }),
       createSession: async (_orgId: string, _channel: string, _profileId?: string) => "session_1",
       listSessions: async (_orgId: string, profileId: string, channel: string) => ({
@@ -54,35 +54,35 @@ function createServerOptions() {
       getSessionTodos: async (_sessionId: string) => [],
       branchSession: async (_sessionId: string, messageIndex: number) => ({ sessionId: `branched-${messageIndex}` }),
       resolveSession: async (_sessionId: string) => ({ send: async (input: { message: string }) => `reply:${input.message}` }),
-      scheduleSessionTitleGeneration: (_sessionId: string) => {},
+      scheduleSessionTitleGeneration: (_sessionId: string) => { },
       listProfiles: async () => ({ profiles: [{ id: "default" }] }),
       createProfile: async (_body: unknown) => ({ id: "profile_1" }),
       getProfileSoulStatus: async (_profileId: string, includeContents: boolean) => ({ hasSoul: true, content: includeContents ? "soul" : null }),
       getProfileSoulStack: async (_profileId: string) => ({ stack: ["SOUL.md"] }),
       initProfileSoul: async (_profileId: string) => ({ ok: true }),
-      writeProfileSoulFile: async (_profileId: string, _fileKey: string, _body: unknown) => {},
+      writeProfileSoulFile: async (_profileId: string, _fileKey: string, _body: unknown) => { },
       listKnowledgeBase: async (_profileId: string) => ({ documents: [], sources: [] }),
       uploadKnowledgeBaseDocument: async (_profileId: string, _doc: unknown) => ({ id: "kb_1" }),
       deleteKnowledgeBaseDocument: async (_profileId: string, _documentId: string) => ({ ok: true }),
       getProfileAvatar: async (_orgId: string, _profileId: string) => ({ bytes: new Uint8Array([1, 2, 3]), mediaType: "image/png" }),
       getProfileAvatarByProfileId: async (_profileId: string) => ({ bytes: new Uint8Array([1, 2, 3]), mediaType: "image/png" }),
       uploadProfileAvatar: async (_profileId: string, _body: unknown) => ({ id: "default" }),
-      deleteProfileAvatar: async (_profileId: string) => {},
+      deleteProfileAvatar: async (_profileId: string) => { },
       getProfile: async (_profileId: string) => ({ id: "default" }),
       updateProfile: async (_profileId: string, _body: unknown) => ({ id: "default" }),
-      deleteProfile: async (_profileId: string) => {},
+      deleteProfile: async (_profileId: string) => { },
       listSkills: async () => ({ skills: [{ id: "skill_1" }] }),
       createSkill: async (_body: unknown) => ({ id: "skill_1" }),
       syncSkills: async () => ({ synced: 1 }),
       getSkill: async (_skillId: string) => ({ id: "skill_1" }),
-      deleteSkill: async (_skillId: string) => {},
+      deleteSkill: async (_skillId: string) => { },
       assignSkill: async (_profileId: string, _body: unknown) => ({ id: "default" }),
       unassignSkill: async (_profileId: string, _skillId: string) => ({ id: "default" }),
       listTools: async () => ({ tools: [{ id: "tool_1" }] }),
       createTool: async (_body: unknown) => ({ id: "tool_1" }),
       getToolSource: async (_toolId: string) => ({ source: "builtin" }),
       getTool: async (_toolId: string) => ({ id: "tool_1" }),
-      deleteTool: async (_toolId: string) => {},
+      deleteTool: async (_toolId: string) => { },
       listProfileTools: async (_profileId: string) => ({ tools: [{ id: "tool_1" }] }),
       assignTool: async (_profileId: string, _body: unknown) => ({ id: "default" }),
       unassignTool: async (_profileId: string, _toolId: string) => ({ id: "default" }),
@@ -153,11 +153,11 @@ function createServerOptions() {
     } as any,
     workerManager: {
       isValidWorker: () => true,
-      startWorker: async () => {},
-      stopWorker: async () => {},
-      restartWorker: async () => {},
+      startWorker: async () => { },
+      stopWorker: async () => { },
+      restartWorker: async () => { },
       getWorkerLogs: async (_name: string, lines: number) => ({ worker: "whatsapp", lines: [`last:${lines}`] }),
-      clearWorkerLogs: async () => {},
+      clearWorkerLogs: async () => { },
     } as any,
     mcpService: {
       listServers: async () => ({ servers: [{ id: "mcp_1" }] }),
@@ -167,7 +167,7 @@ function createServerOptions() {
       syncServer: async (_serverId: string) => ({ id: "mcp_1" }),
       getServer: async (_serverId: string) => ({ id: "mcp_1" }),
       updateServer: async (_serverId: string, _body: unknown) => ({ id: "mcp_1" }),
-      deleteServer: async (_serverId: string) => {},
+      deleteServer: async (_serverId: string) => { },
     } as any,
     authService,
     orgService: new OrgService(databaseAdapter, authService),
@@ -1184,6 +1184,93 @@ describe("createHonoApp", () => {
         new Request("http://localhost:4310/v1/skills", { headers: orgHeaders }),
       );
       expect(skillsResponse.status).toBe(403);
+    });
+  });
+
+  describe("session org ownership", () => {
+    test("returns 404 when deleting a session that belongs to a different org", async () => {
+      const options = createServerOptions();
+      const app = createHonoApp(options);
+      const session = await setupFreshInstallSession(app, options.databaseAdapter);
+      const now = new Date().toISOString();
+
+      // Insert a session record owned by a different org directly into the DB.
+      await options.databaseAdapter.upsertSession({
+        id: "session_other_org",
+        profileId: "default",
+        channel: "web",
+        orgId: "org_other",
+        createdAt: now,
+        title: null,
+        agentTodos: [],
+        agentQuestionnaire: null,
+      });
+
+      const response = await app.fetch(
+        new Request("http://localhost:4310/v1/sessions/session_other_org", {
+          method: "DELETE",
+          headers: session.headers({ "X-CSRF-Token": session.csrfToken }),
+        }),
+      );
+
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: "Session not found" });
+    });
+
+    test("returns 404 when reading messages of a session from another org", async () => {
+      const options = createServerOptions();
+      const app = createHonoApp(options);
+      const session = await setupFreshInstallSession(app, options.databaseAdapter);
+      const now = new Date().toISOString();
+
+      await options.databaseAdapter.upsertSession({
+        id: "session_messages_other",
+        profileId: "default",
+        channel: "web",
+        orgId: "org_other",
+        createdAt: now,
+        title: null,
+        agentTodos: [],
+        agentQuestionnaire: null,
+      });
+
+      const response = await app.fetch(
+        new Request("http://localhost:4310/v1/sessions/session_messages_other/messages", {
+          headers: session.headers(),
+        }),
+      );
+
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: "Session not found" });
+    });
+
+    test("allows access to own-org sessions as before", async () => {
+      const options = createServerOptions();
+      const app = createHonoApp(options);
+      const session = await setupFreshInstallSession(app, options.databaseAdapter);
+      const now = new Date().toISOString();
+
+      // Insert a session owned by the same org.
+      await options.databaseAdapter.upsertSession({
+        id: "session_own_org",
+        profileId: "default",
+        channel: "web",
+        orgId: session.orgId,
+        createdAt: now,
+        title: null,
+        agentTodos: [],
+        agentQuestionnaire: null,
+      });
+
+      const response = await app.fetch(
+        new Request("http://localhost:4310/v1/sessions/session_own_org", {
+          method: "DELETE",
+          headers: session.headers({ "X-CSRF-Token": session.csrfToken }),
+        }),
+      );
+
+      // agent mock returns true for clearSession so this should succeed.
+      expect(response.status).toBe(204);
     });
   });
 });

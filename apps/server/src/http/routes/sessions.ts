@@ -24,7 +24,7 @@ import { resolveRequestClientOrigin } from "../../services/composio-callback-url
 import type { HonoApp } from "../types";
 
 export function registerSessionRoutes(app: HonoApp, options: ServerOptions): void {
-  const { agent } = options;
+  const { agent, databaseAdapter } = options;
   const errorSchema = z.object({ error: z.string() }).openapi("ApiErrorResponse");
   const agentChannelSchema = z.enum(["web", "cli", "telegram", "whatsapp", "discord", "automation", "task", "subagent"]).openapi("AgentChannel");
   const createSessionRequestSchema = z.object({
@@ -191,6 +191,35 @@ export function registerSessionRoutes(app: HonoApp, options: ServerOptions): voi
     },
   }));
 
+  /**
+   * Verify that a session belongs to the given org. Returns true when:
+   * - no DB is configured (local / test mode without DB)
+   * - the session is not in the DB (in-memory-only session, no org assigned yet)
+   * - the session has no orgId (created before multi-tenancy)
+   * - the session's orgId matches the active org
+   *
+   * Returns false (→ 404) only when the session exists in the DB with a
+   * different orgId, preventing cross-org session access.
+   */
+  async function requireSessionOwnership(
+    sessionId: string,
+    activeOrgId: string | undefined,
+  ): Promise<boolean> {
+    if (!databaseAdapter) {
+      return true;
+    }
+    const record = await databaseAdapter.getSession(sessionId);
+    if (!record) {
+      // Session not in DB → in-memory-only or doesn't exist at all.
+      // Let the agent layer return null/false for the not-found case.
+      return true;
+    }
+    if (!record.orgId) {
+      return true;
+    }
+    return record.orgId === activeOrgId;
+  }
+
   app.post("/v1/sessions", async (c) => {
     const auth = getRequestAuth(c);
     const orgId = requireActiveOrgIdFromContext(c);
@@ -223,7 +252,12 @@ export function registerSessionRoutes(app: HonoApp, options: ServerOptions): voi
   });
 
   app.delete("/v1/sessions/:sessionId", async (c) => {
+    const auth = getRequestAuth(c);
     const sessionId = decodeURIComponent(c.req.param("sessionId"));
+    const owned = await requireSessionOwnership(sessionId, auth.activeOrgId);
+    if (!owned) {
+      return errorResponse("Session not found", 404);
+    }
     const purge = c.req.query("purge") === "true";
     const cleared = purge
       ? await agent.purgeSession(sessionId)
@@ -237,7 +271,12 @@ export function registerSessionRoutes(app: HonoApp, options: ServerOptions): voi
   });
 
   app.post("/v1/sessions/:sessionId/compact", async (c) => {
+    const auth = getRequestAuth(c);
     const sessionId = decodeURIComponent(c.req.param("sessionId"));
+    const owned = await requireSessionOwnership(sessionId, auth.activeOrgId);
+    if (!owned) {
+      return errorResponse("Session not found", 404);
+    }
     const body = await readJson<CompactSessionRequest>(c.req.raw).catch(() => ({}));
     const result = await agent.compactSession(sessionId, {
       force: body.force ?? false,
@@ -251,7 +290,12 @@ export function registerSessionRoutes(app: HonoApp, options: ServerOptions): voi
   });
 
   app.get("/v1/sessions/:sessionId/messages", async (c) => {
+    const auth = getRequestAuth(c);
     const sessionId = decodeURIComponent(c.req.param("sessionId"));
+    const owned = await requireSessionOwnership(sessionId, auth.activeOrgId);
+    if (!owned) {
+      return errorResponse("Session not found", 404);
+    }
     const result = await agent.getSessionMessages(sessionId);
 
     if (!result) {
@@ -271,7 +315,12 @@ export function registerSessionRoutes(app: HonoApp, options: ServerOptions): voi
 
   app.post("/v1/sessions/:sessionId/branch", async (c) => {
     try {
+      const auth = getRequestAuth(c);
       const sessionId = decodeURIComponent(c.req.param("sessionId"));
+      const owned = await requireSessionOwnership(sessionId, auth.activeOrgId);
+      if (!owned) {
+        return errorResponse("Session not found", 404);
+      }
       const body = await readJson<BranchSessionRequest>(c.req.raw);
       const result = await agent.branchSession(sessionId, body.messageIndex);
 
@@ -287,8 +336,12 @@ export function registerSessionRoutes(app: HonoApp, options: ServerOptions): voi
   });
 
   app.post("/v1/sessions/:sessionId/messages", async (c) => {
-    requireNotViewerFromContext(c);
+    const auth = requireNotViewerFromContext(c);
     const sessionId = decodeURIComponent(c.req.param("sessionId"));
+    const owned = await requireSessionOwnership(sessionId, auth.activeOrgId);
+    if (!owned) {
+      return errorResponse("Session not found", 404);
+    }
     const session = await agent.resolveSession(sessionId);
 
     if (!session) {
