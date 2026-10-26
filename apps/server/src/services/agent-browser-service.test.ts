@@ -172,8 +172,9 @@ async function installFakeBinary(
   name: string,
   mode: "ready" | "login-required" | "noop" | "installable",
 ): Promise<void> {
-  const scriptPath = join(binDir, name);
+  const isWindows = process.platform === "win32";
   let script = "";
+  let windowsScript = "";
 
   if (mode === "ready") {
     script = `#!/bin/sh
@@ -184,6 +185,14 @@ fi
 echo "unexpected args: $@" >&2
 exit 1
 `;
+    windowsScript = `@echo off
+if "%1" == "--version" (
+  echo agent-browser 1.0.0
+  exit /b 0
+)
+echo unexpected args: %* >&2
+exit /b 1
+`;
   } else if (mode === "login-required") {
     script = `#!/bin/sh
 if [ "$1" = "--version" ]; then
@@ -192,9 +201,19 @@ if [ "$1" = "--version" ]; then
 fi
 exit 1
 `;
+    windowsScript = `@echo off
+if "%1" == "--version" (
+  echo please log in >&2
+  exit /b 1
+)
+exit /b 1
+`;
   } else if (mode === "noop") {
     script = `#!/bin/sh
 exit 0
+`;
+    windowsScript = `@echo off
+exit /b 0
 `;
   } else if (mode === "installable") {
     script = `#!/bin/sh
@@ -208,8 +227,28 @@ if [ "$1" = "install" ]; then
 fi
 exit 0
 `;
+    windowsScript = `@echo off
+if "%1" == "--version" (
+  echo agent-browser 1.0.0
+  exit /b 0
+)
+if "%1" == "install" (
+  echo installed chrome
+  exit /b 0
+)
+exit /b 0
+`;
   }
 
-  await writeFile(scriptPath, script, "utf8");
-  await chmod(scriptPath, 0o755);
+  if (isWindows) {
+    const scriptPathCmd = join(binDir, `${name}.cmd`);
+    await writeFile(scriptPathCmd, windowsScript, "utf8");
+    // Also write without extension for tests that don't try extensions
+    const scriptPath = join(binDir, name);
+    await writeFile(scriptPath, script, "utf8");
+  } else {
+    const scriptPath = join(binDir, name);
+    await writeFile(scriptPath, script, "utf8");
+    await chmod(scriptPath, 0o755);
+  }
 }

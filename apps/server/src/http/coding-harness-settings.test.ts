@@ -262,9 +262,37 @@ async function installFakeBinary(
   name: string,
   mode: "ready" | "login-required",
 ): Promise<void> {
-  const scriptPath = join(binDir, name);
-  const body =
-    mode === "ready"
+  const isWindows = process.platform === "win32";
+  
+  // Write both with and without .cmd extension on Windows for compatibility
+  if (isWindows) {
+    const scriptPathCmd = join(binDir, `${name}.cmd`);
+    const scriptPath = join(binDir, name);
+    const body = mode === "ready"
+      ? [
+          "@echo off",
+          'if "%1" == "--version" (',
+          "  echo codex 0.1.0",
+          "  exit /b 0",
+          ")",
+          "echo OK",
+          "exit /b 0",
+        ]
+      : [
+          "@echo off",
+          'if "%1" == "--version" (',
+          "  echo codex 0.1.0",
+          "  exit /b 0",
+          ")",
+          'echo Please run codex login 1>&2',
+          "exit /b 1",
+        ];
+
+    await writeFile(scriptPathCmd, body.join("\n"));
+    await writeFile(scriptPath, body.join("\n")); // Also write without extension
+  } else {
+    const scriptPath = join(binDir, name);
+    const body = mode === "ready"
       ? [
           "#!/bin/sh",
           'if [ "$1" = "--version" ]; then',
@@ -283,9 +311,7 @@ async function installFakeBinary(
           'echo "Please run codex login" 1>&2',
           "exit 1",
         ];
-  await writeFile(
-    scriptPath,
-    body.join("\n"),
-  );
-  await chmod(scriptPath, 0o755);
+    await writeFile(scriptPath, body.join("\n"));
+    await chmod(scriptPath, 0o755);
+  }
 }

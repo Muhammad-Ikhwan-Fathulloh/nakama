@@ -4,6 +4,81 @@ import { ensureBunGlobalInstallDirs, ensureProcessPath, getToolExecutionEnv } fr
 const AGENT_BROWSER_PACKAGE = "agent-browser";
 const AGENT_BROWSER_COMMAND = "agent-browser";
 
+async function spawnWithExtensions(
+  command: string,
+  args: string[],
+  options: any,
+  timeoutMs: number
+): Promise<{
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}> {
+  const { spawn } = await import("node:child_process");
+  const isWindows = process.platform === "win32";
+  const extensions = isWindows ? [".cmd", ".bat", ".exe", ""] : [""];
+  
+  for (const ext of extensions) {
+    const tryCommand = command + ext;
+    const result = await new Promise<{
+      exitCode: number | null;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+      enoent: boolean;
+    }>((resolve) => {
+      const child = spawn(tryCommand, args, options);
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+      }, timeoutMs);
+
+      child.stdout?.on("data", (chunk) => {
+        stdout += chunk.toString();
+      });
+      child.stderr?.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+      child.once("error", (error) => {
+        clearTimeout(timeoutId);
+        resolve({
+          exitCode: null,
+          stdout,
+          stderr: `${stderr}\n${String(error)}`.trim(),
+          timedOut,
+          enoent: (error as NodeJS.ErrnoException).code === "ENOENT",
+        });
+      });
+      child.once("close", (exitCode) => {
+        clearTimeout(timeoutId);
+        resolve({
+          exitCode,
+          stdout: stdout.trim(),
+          stderr: stderr.trim(),
+          timedOut,
+          enoent: false,
+        });
+      });
+    });
+    
+    if (!result.enoent) {
+      return result;
+    }
+  }
+  
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: "Command not found",
+    timedOut: false,
+  };
+}
+
 interface AgentBrowserInstallPlan {
   command: string;
   args: string[];
@@ -59,37 +134,21 @@ async function probeAgentBrowserVersion(): Promise<{
   version: string | null;
   missing: boolean;
 }> {
-  const { spawn } = await import("node:child_process");
-
-  return new Promise((resolve) => {
-    const child = spawn(AGENT_BROWSER_COMMAND, ["--version"], {
+  const result = await spawnWithExtensions(
+    AGENT_BROWSER_COMMAND,
+    ["--version"],
+    {
       env: getToolExecutionEnv(),
       stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
+    },
+    10_000
+  );
 
-    child.stdout?.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.once("error", (error) =>
-      resolve({
-        installed: false,
-        version: null,
-        missing: (error as NodeJS.ErrnoException).code === "ENOENT",
-      }),
-    );
-    child.once("close", (code) =>
-      resolve({
-        installed: code === 0,
-        version: code === 0 ? extractVersion(stdout, stderr) : null,
-        missing: false,
-      }),
-    );
-  });
+  return {
+    installed: result.exitCode === 0,
+    version: result.exitCode === 0 ? extractVersion(result.stdout, result.stderr) : null,
+    missing: result.stderr.includes("Command not found"),
+  };
 }
 
 async function getAgentBrowserRuntimeStatus(): Promise<Pick<AgentBrowserStatusResponse, "installed" | "version">> {
@@ -140,6 +199,7 @@ export interface AgentBrowserInstallProgress {
 async function runInstallCommand(
   plan: AgentBrowserInstallPlan,
   onProgress?: (message: string) => void,
+  tryExtensions: boolean = true,
 ): Promise<{
   exitCode: number | null;
   stdout: string;
@@ -148,98 +208,122 @@ async function runInstallCommand(
 }> {
   const { spawn } = await import("node:child_process");
   const timeoutMs = 120_000;
+  const isWindows = process.platform === "win32";
+  const extensions = tryExtensions && isWindows ? [".cmd", ".bat", ".exe", ""] : [""];
 
-  return new Promise((resolve) => {
-    const child = spawn(plan.command, plan.args, {
-      env: getToolExecutionEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    let stdoutBuffer = "";
-    let stderrBuffer = "";
+  for (const ext of extensions) {
+    const tryCommand = plan.command + ext;
+    const result = await new Promise<{
+      exitCode: number | null;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+      enoent: boolean;
+    }>((resolve) => {
+      const child = spawn(tryCommand, plan.args, {
+        env: getToolExecutionEnv(),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+      let stdoutBuffer = "";
+      let stderrBuffer = "";
 
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, timeoutMs);
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+      }, timeoutMs);
 
-    const emitLine = (prefix: "stdout" | "stderr", line: string) => {
-      onProgress?.(`${prefix}: ${line}`);
-    };
+      const emitLine = (prefix: "stdout" | "stderr", line: string) => {
+        onProgress?.(`${prefix}: ${line}`);
+      };
 
-    const flushBuffer = (buffer: string, prefix: "stdout" | "stderr") => {
-      let nextBuffer = buffer;
+      const flushBuffer = (buffer: string, prefix: "stdout" | "stderr") => {
+        let nextBuffer = buffer;
 
-      while (true) {
-        const newlineIndex = nextBuffer.search(/\r?\n/);
+        while (true) {
+          const newlineIndex = nextBuffer.search(/\r?\n/);
 
-        if (newlineIndex < 0) {
-          break;
+          if (newlineIndex < 0) {
+            break;
+          }
+
+          const newlineLength = nextBuffer[newlineIndex] === "\r" ? 2 : 1;
+          const line = nextBuffer.slice(0, newlineIndex).trim();
+          nextBuffer = nextBuffer.slice(newlineIndex + newlineLength);
+
+          if (line) {
+            emitLine(prefix, line);
+          }
         }
 
-        const newlineLength = nextBuffer[newlineIndex] === "\r" ? 2 : 1;
-        const line = nextBuffer.slice(0, newlineIndex).trim();
-        nextBuffer = nextBuffer.slice(newlineIndex + newlineLength);
+        return nextBuffer;
+      };
 
-        if (line) {
-          emitLine(prefix, line);
+      child.stdout?.on("data", (chunk) => {
+        const text = chunk.toString();
+        stdout += text;
+        stdoutBuffer += text;
+        stdoutBuffer = flushBuffer(stdoutBuffer, "stdout");
+      });
+      child.stderr?.on("data", (chunk) => {
+        const text = chunk.toString();
+        stderr += text;
+        stderrBuffer += text;
+        stderrBuffer = flushBuffer(stderrBuffer, "stderr");
+      });
+
+      child.once("error", (error) => {
+        clearTimeout(timeoutId);
+
+        if (stdoutBuffer.trim()) {
+          emitLine("stdout", stdoutBuffer.trim());
         }
-      }
+        if (stderrBuffer.trim()) {
+          emitLine("stderr", stderrBuffer.trim());
+        }
 
-      return nextBuffer;
-    };
+        resolve({
+          exitCode: null,
+          stdout,
+          stderr: `${stderr}\n${String(error)}`.trim(),
+          timedOut,
+          enoent: (error as NodeJS.ErrnoException).code === "ENOENT",
+        });
+      });
 
-    child.stdout?.on("data", (chunk) => {
-      const text = chunk.toString();
-      stdout += text;
-      stdoutBuffer += text;
-      stdoutBuffer = flushBuffer(stdoutBuffer, "stdout");
-    });
-    child.stderr?.on("data", (chunk) => {
-      const text = chunk.toString();
-      stderr += text;
-      stderrBuffer += text;
-      stderrBuffer = flushBuffer(stderrBuffer, "stderr");
-    });
+      child.once("close", (exitCode) => {
+        clearTimeout(timeoutId);
 
-    child.once("error", (error) => {
-      clearTimeout(timeoutId);
+        if (stdoutBuffer.trim()) {
+          emitLine("stdout", stdoutBuffer.trim());
+        }
+        if (stderrBuffer.trim()) {
+          emitLine("stderr", stderrBuffer.trim());
+        }
 
-      if (stdoutBuffer.trim()) {
-        emitLine("stdout", stdoutBuffer.trim());
-      }
-      if (stderrBuffer.trim()) {
-        emitLine("stderr", stderrBuffer.trim());
-      }
-
-      resolve({
-        exitCode: null,
-        stdout,
-        stderr: `${stderr}\n${String(error)}`.trim(),
-        timedOut,
+        resolve({
+          exitCode,
+          stdout: stdout.trim(),
+          stderr: stderr.trim(),
+          timedOut,
+          enoent: false,
+        });
       });
     });
 
-    child.once("close", (exitCode) => {
-      clearTimeout(timeoutId);
+    if (!result.enoent) {
+      return result;
+    }
+  }
 
-      if (stdoutBuffer.trim()) {
-        emitLine("stdout", stdoutBuffer.trim());
-      }
-      if (stderrBuffer.trim()) {
-        emitLine("stderr", stderrBuffer.trim());
-      }
-
-      resolve({
-        exitCode,
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-        timedOut,
-      });
-    });
-  });
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: "Command not found",
+    timedOut: false,
+  };
 }
 
 function summarizeInstallOutput(output: string): string {

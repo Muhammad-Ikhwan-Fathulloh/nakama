@@ -574,36 +574,63 @@ async function probeHarnessVersion(command: string): Promise<{
   missing: boolean;
 }> {
   const { spawn } = await import("node:child_process");
+  const isWindows = process.platform === "win32";
+  const extensions = isWindows ? [".cmd", ".bat", ".exe", ""] : [""];
+  
+  for (const ext of extensions) {
+    const tryCommand = command + ext;
+    const result = await new Promise<{
+      installed: boolean;
+      version: string | null;
+      missing: boolean;
+    }>((resolve) => {
+      const child = spawn(tryCommand, ["--version"], {
+        env: getToolExecutionEnv(),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
 
-  return new Promise((resolve) => {
-    const child = spawn(command, ["--version"], {
-      env: getToolExecutionEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
+      child.stdout?.on("data", (chunk) => {
+        stdout += chunk.toString();
+      });
+      child.stderr?.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+      child.once("error", (error) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          resolve({
+            installed: false,
+            version: null,
+            missing: true,
+          });
+        } else {
+          resolve({
+            installed: false,
+            version: null,
+            missing: false,
+          });
+        }
+      });
+      child.once("close", (code) => {
+        resolve({
+          installed: code === 0,
+          version: code === 0 ? extractVersion(stdout, stderr) : null,
+          missing: false,
+        });
+      });
     });
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout?.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.once("error", (error) =>
-      resolve({
-        installed: false,
-        version: null,
-        missing: (error as NodeJS.ErrnoException).code === "ENOENT",
-      }),
-    );
-    child.once("close", (code) =>
-      resolve({
-        installed: code === 0,
-        version: code === 0 ? extractVersion(stdout, stderr) : null,
-        missing: false,
-      }),
-    );
-  });
+    
+    if (result.installed) {
+      return result;
+    }
+  }
+  
+  return {
+    installed: false,
+    version: null,
+    missing: true,
+  };
 }
 
 function extractVersion(stdout: string, stderr: string): string | null {
@@ -745,47 +772,80 @@ async function runProbeCommand(
   const timeoutMs = 15_000;
   const prompt = "Reply with OK and nothing else.";
   const args = buildProbeArgs(harness, prompt, cwd);
+  const isWindows = process.platform === "win32";
+  const extensions = isWindows ? [".cmd", ".bat", ".exe", ""] : [""];
+  
+  for (const ext of extensions) {
+    const tryCommand = harness.command + ext;
+    const result = await new Promise<{
+      exitCode: number | null;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+    }>((resolve) => {
+      const child = spawn(tryCommand, args, {
+        cwd,
+        env: getToolExecutionEnv(),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
 
-  return new Promise((resolve) => {
-    const child = spawn(harness.command, args, {
-      cwd,
-      env: getToolExecutionEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+      }, timeoutMs);
 
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, timeoutMs);
-
-    child.stdout?.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.once("error", (error) => {
-      clearTimeout(timeoutId);
-      resolve({
-        exitCode: null,
-        stdout,
-        stderr: `${stderr}\n${String(error)}`.trim(),
-        timedOut,
+      child.stdout?.on("data", (chunk) => {
+        stdout += chunk.toString();
+      });
+      child.stderr?.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+      child.once("error", (error) => {
+        clearTimeout(timeoutId);
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          // Try next extension
+          resolve({
+            exitCode: -1, // Special code to indicate try next
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+          });
+        } else {
+          resolve({
+            exitCode: null,
+            stdout,
+            stderr: `${stderr}\n${String(error)}`.trim(),
+            timedOut,
+          });
+        }
+      });
+      child.once("close", (exitCode) => {
+        clearTimeout(timeoutId);
+        resolve({
+          exitCode,
+          stdout: stdout.trim(),
+          stderr: stderr.trim(),
+          timedOut,
+        });
       });
     });
-    child.once("close", (exitCode) => {
-      clearTimeout(timeoutId);
-      resolve({
-        exitCode,
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-        timedOut,
-      });
-    });
-  });
+    
+    if (result.exitCode !== -1) {
+      // Not ENOENT, so return result
+      return result;
+    }
+  }
+  
+  // Tried all extensions, return failure
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: "Command not found",
+    timedOut: false,
+  };
 }
 
 function buildProbeArgs(
